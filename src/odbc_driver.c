@@ -145,14 +145,6 @@ static AdbcStatusCode OdbcDatabaseSetOptionInt(struct AdbcDatabase* database, co
 // ---------------------------------------------------------------------------
 // Connection
 
-struct OdbcConnection {
-  struct OdbcDatabase* db;
-  SQLHDBC hdbc;
-  bool connected;
-  bool autocommit;
-  struct OdbcReaderOptions reader_opts;
-};
-
 static AdbcStatusCode OdbcConnectionNew(struct AdbcConnection* connection,
                                         struct AdbcError* error) {
   struct OdbcConnection* conn = calloc(1, sizeof(struct OdbcConnection));
@@ -405,11 +397,8 @@ static AdbcStatusCode OdbcConnectionGetTableSchema(struct AdbcConnection* connec
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
   // Use the driver's identifier quote char to build SELECT * FROM ... WHERE 1=0.
-  SQLCHAR q[8] = "\"";
-  SQLSMALLINT qlen = 0;
-  if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_IDENTIFIER_QUOTE_CHAR, q, sizeof(q), &qlen))) {
-    if (qlen == 0 || q[0] == ' ') q[0] = '\0';
-  }
+  char q[8];
+  OdbcQuoteChar(conn->hdbc, q);
   struct InternalAdbcStringBuilder sb;
   InternalAdbcStringBuilderInit(&sb, 256);
   InternalAdbcStringBuilderAppend(&sb, "SELECT * FROM ");
@@ -462,16 +451,16 @@ static AdbcStatusCode OdbcConnectionGetOption(struct AdbcConnection* connection,
   return ADBC_STATUS_OK;
 }
 
+void OdbcQuoteChar(SQLHDBC hdbc, char* out) {
+  SQLSMALLINT qlen = 0;
+  strcpy(out, "\"");
+  if (SQL_SUCCEEDED(SQLGetInfo(hdbc, SQL_IDENTIFIER_QUOTE_CHAR, out, 8, &qlen))) {
+    if (qlen == 0 || out[0] == ' ') out[0] = '\0';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Statement
-
-struct OdbcStatement {
-  struct OdbcConnection* conn;
-  struct OdbcHandleRef* ref;
-  char* query;
-  bool prepared;
-  struct OdbcReaderOptions reader_opts;
-};
 
 static AdbcStatusCode OdbcStatementNew(struct AdbcConnection* connection,
                                        struct AdbcStatement* statement, struct AdbcError* error) {
@@ -496,7 +485,12 @@ static AdbcStatusCode OdbcStatementRelease(struct AdbcStatement* statement,
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
   OdbcHandleRefRelease(stmt->ref);
+  if (stmt->bind_stream.release) stmt->bind_stream.release(&stmt->bind_stream);
   free(stmt->query);
+  free(stmt->ingest_table);
+  free(stmt->ingest_catalog);
+  free(stmt->ingest_schema);
+  free(stmt->ingest_mode);
   free(stmt);
   statement->private_data = NULL;
   return ADBC_STATUS_OK;
@@ -509,6 +503,8 @@ static AdbcStatusCode OdbcStatementSetSqlQuery(struct AdbcStatement* statement, 
   free(stmt->query);
   stmt->query = strdup(query);
   stmt->prepared = false;
+  free(stmt->ingest_table);
+  stmt->ingest_table = NULL;
   return ADBC_STATUS_OK;
 }
 
@@ -520,6 +516,28 @@ static AdbcStatusCode OdbcStatementSetOption(struct AdbcStatement* statement, co
     long v = strtol(value, NULL, 10);
     if (v <= 0) return ADBC_STATUS_INVALID_ARGUMENT;
     stmt->reader_opts.batch_size = v;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_INGEST_OPTION_TARGET_TABLE) == 0) {
+    free(stmt->ingest_table); stmt->ingest_table = value ? strdup(value) : NULL;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_INGEST_OPTION_TARGET_CATALOG) == 0) {
+    free(stmt->ingest_catalog); stmt->ingest_catalog = value ? strdup(value) : NULL;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_INGEST_OPTION_TARGET_DB_SCHEMA) == 0) {
+    free(stmt->ingest_schema); stmt->ingest_schema = value ? strdup(value) : NULL;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_INGEST_OPTION_MODE) == 0) {
+    if (strcmp(value, ADBC_INGEST_OPTION_MODE_CREATE) != 0 &&
+        strcmp(value, ADBC_INGEST_OPTION_MODE_APPEND) != 0 &&
+        strcmp(value, ADBC_INGEST_OPTION_MODE_REPLACE) != 0 &&
+        strcmp(value, ADBC_INGEST_OPTION_MODE_CREATE_APPEND) != 0) {
+      InternalAdbcSetError(error, "Invalid ingest mode %s", value);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    free(stmt->ingest_mode); stmt->ingest_mode = strdup(value);
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_INGEST_OPTION_TEMPORARY) == 0) {
+    stmt->ingest_temporary = strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0;
     return ADBC_STATUS_OK;
   }
   InternalAdbcSetError(error, "Unknown statement option %s", key);
@@ -533,8 +551,32 @@ static AdbcStatusCode OdbcStatementSetOptionInt(struct AdbcStatement* statement,
   return OdbcStatementSetOption(statement, key, buf, error);
 }
 
+static AdbcStatusCode OdbcStatementBindStream(struct AdbcStatement* statement,
+                                              struct ArrowArrayStream* stream,
+                                              struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->bind_stream.release) stmt->bind_stream.release(&stmt->bind_stream);
+  stmt->bind_stream = *stream;
+  memset(stream, 0, sizeof(*stream));
+  stmt->has_bind = true;
+  return ADBC_STATUS_OK;
+}
+
+static AdbcStatusCode OdbcStatementBind(struct AdbcStatement* statement, struct ArrowArray* values,
+                                        struct ArrowSchema* schema, struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  struct ArrowArrayStream stream;
+  struct ArrowSchema schema_copy;
+  CHECK_NA(INTERNAL, ArrowSchemaDeepCopy(schema, &schema_copy), error);
+  CHECK_NA(INTERNAL, ArrowBasicArrayStreamInit(&stream, &schema_copy, 1), error);
+  ArrowBasicArrayStreamSetArray(&stream, 0, values);
+  return OdbcStatementBindStream(statement, &stream, error);
+}
+
 // Ensure we own a fresh, idle statement handle.
-static AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt,
+AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt,
                                                 struct AdbcError* error) {
   if (stmt->ref && stmt->ref->refcount > 1) {
     // A previous result stream still owns this handle; detach and allocate a new one.
@@ -579,10 +621,18 @@ static AdbcStatusCode OdbcStatementExecuteQuery(struct AdbcStatement* statement,
                                                 struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->ingest_table) {
+    if (out) {
+      InternalAdbcSetError(error, "Bulk ingest does not produce a result set");
+      return ADBC_STATUS_INVALID_STATE;
+    }
+    return OdbcStatementIngest(stmt, rows_affected, error);
+  }
   if (!stmt->query) {
     InternalAdbcSetError(error, "Must call StatementSetSqlQuery first");
     return ADBC_STATUS_INVALID_STATE;
   }
+  if (stmt->has_bind) return OdbcStatementExecuteBound(stmt, out, rows_affected, error);
   RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
   SQLHSTMT hstmt = stmt->ref->hstmt;
 
@@ -691,6 +741,9 @@ AdbcStatusCode AdbcDriverOdbcInit(int version, void* raw_driver, struct AdbcErro
   driver->ConnectionRollback = OdbcConnectionRollback;
   driver->ConnectionSetOption = OdbcConnectionSetOption;
 
+  driver->ConnectionGetObjects = OdbcConnectionGetObjects;
+  driver->StatementBind = OdbcStatementBind;
+  driver->StatementBindStream = OdbcStatementBindStream;
   driver->StatementExecuteQuery = OdbcStatementExecuteQuery;
   driver->StatementNew = OdbcStatementNew;
   driver->StatementPrepare = OdbcStatementPrepare;

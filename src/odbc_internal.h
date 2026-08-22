@@ -60,6 +60,52 @@ struct OdbcReaderOptions {
   bool decimal_as_string;
 };
 
+struct OdbcDatabase;
+
+struct OdbcConnection {
+  struct OdbcDatabase* db;
+  SQLHDBC hdbc;
+  bool connected;
+  bool autocommit;
+  struct OdbcReaderOptions reader_opts;
+};
+
+struct OdbcStatement {
+  struct OdbcConnection* conn;
+  struct OdbcHandleRef* ref;
+  char* query;
+  bool prepared;
+  struct OdbcReaderOptions reader_opts;
+  // Bound parameters (Bind / BindStream)
+  struct ArrowArrayStream bind_stream;
+  bool has_bind;
+  // Bulk ingest
+  char* ingest_table;
+  char* ingest_catalog;
+  char* ingest_schema;
+  char* ingest_mode;  // ADBC_INGEST_OPTION_MODE_* value
+  bool ingest_temporary;
+};
+
+/// Fetch the identifier quote character ('"' default, '\0' if none) into out[8].
+void OdbcQuoteChar(SQLHDBC hdbc, char* out);
+
+AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt, struct AdbcError* error);
+
+/// Execute stmt->query once per bound row (parameters from bind_stream).
+AdbcStatusCode OdbcStatementExecuteBound(struct OdbcStatement* stmt, struct ArrowArrayStream* out,
+                                         int64_t* rows_affected, struct AdbcError* error);
+
+/// Bulk ingest bind_stream into stmt->ingest_table.
+AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_affected,
+                                   struct AdbcError* error);
+
+AdbcStatusCode OdbcConnectionGetObjects(struct AdbcConnection* connection, int depth,
+                                        const char* catalog, const char* db_schema,
+                                        const char* table_name, const char** table_type,
+                                        const char* column_name, struct ArrowArrayStream* out,
+                                        struct AdbcError* error);
+
 /// Describe the result set of an executed/prepared statement as an Arrow schema.
 AdbcStatusCode OdbcDescribeResultSchema(SQLHSTMT hstmt, const struct OdbcReaderOptions* opts,
                                         struct ArrowSchema* out, struct AdbcError* error);

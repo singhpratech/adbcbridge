@@ -266,3 +266,12 @@ AdbcStatusCode InternalAdbcConnectionGetInfoAppendInt(struct ArrowArray* array,
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+AdbcStatusCode InternalAdbcInitConnectionObjectsSchema(struct ArrowSchema* schema,
+                                                       struct AdbcError* error);
+#ifdef __cplusplus
+}
+#endif

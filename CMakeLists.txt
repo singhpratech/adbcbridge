@@ -26,6 +26,8 @@ endif()
 add_library(adbc_driver_odbc SHARED
   src/odbc_driver.c
   src/odbc_reader.c
+  src/odbc_objects.c
+  src/odbc_bind.c
   src/utils.c
   vendor/nanoarrow/nanoarrow.c)
 
