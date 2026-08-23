@@ -269,3 +269,20 @@ services:
     environment: { SQLFLITE_PASSWORD: adbc, TLS_ENABLED: "0", PRINT_QUERIES: "0" }
     mem_limit: 2g
     ports: ["127.0.0.1:31337:31337"]
+  # GreptimeDB: a time-series database that serves the MySQL wire protocol on 4002 and
+  # the PostgreSQL one on 4003 (4000 is its HTTP API and dashboard, 4001 its gRPC).  In
+  # the "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d greptimedb
+  # The matrix entry connects over the *MySQL* wire, driven by MySQL Connector/ODBC:
+  # psqlodbc cannot complete SQLDriverConnect against the PostgreSQL port at all -- see
+  # tests/compat/README.md.  Both ports are published anyway so that check can be redone.
+  # The image needs no configuration: it comes up with a `greptime` catalog, a `public`
+  # schema, one passwordless `greptime` user and no authentication.
+  greptimedb:
+    profiles: ["extra"]
+    image: greptime/greptimedb:latest
+    command: >
+      standalone start --rpc-bind-addr 0.0.0.0:4001 --http-addr 0.0.0.0:4000
+      --mysql-addr 0.0.0.0:4002 --postgres-addr 0.0.0.0:4003
+    mem_limit: 1g
+    ports: ["127.0.0.1:14002:4002", "127.0.0.1:14003:4003"]

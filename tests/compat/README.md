@@ -2583,3 +2583,224 @@ For binary the entry declares `BYTE`, Informix's byte-string type (there is no
 does not configure). The clidriver describes it with IBM's own `SQL_BLOB` type code
 `-98`, which the reader now treats as a binary column — left unrecognised it fell through
 to the text default, where the driver hands the bytes back hex-encoded (`"0102"`).
+
+## GreptimeDB 1.1
+
+[GreptimeDB](https://github.com/GreptimeTeam/greptimedb) is a time-series database that
+serves **both** wire protocols the matrix already drives: the MySQL one on 4002 and the
+PostgreSQL one on 4003. Only the MySQL one is usable — psqlodbc cannot complete
+`SQLDriverConnect` against the PostgreSQL port at all (see below) — so the entry is
+driven by MySQL Connector/ODBC, the same driver as `mysql`, `tidb`, `dolt`, `databend`
+and `matrixone`.
+
+### Start the server
+
+It is behind the `extra` compose profile, so a plain `up -d` does not start it:
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d greptimedb
+```
+
+or by hand:
+
+```sh
+docker run -d --name adbcbridge-greptimedb --memory=1g \
+  -p 127.0.0.1:14002:4002 -p 127.0.0.1:14003:4003 \
+  greptime/greptimedb:latest standalone start \
+  --rpc-bind-addr 0.0.0.0:4001 --http-addr 0.0.0.0:4000 \
+  --mysql-addr 0.0.0.0:4002 --postgres-addr 0.0.0.0:4003
+```
+
+The image needs no setup: it is ready in a second or two with a `greptime` catalog, a
+`public` schema, one passwordless `greptime` user and no authentication. 1 GB is
+comfortable for this workload.
+
+### Run the entry
+
+The driver is the same MySQL Connector/ODBC tarball as the `mysql` entry (see that
+section for the download and for the `LD_PRELOAD` that `pyarrow` forces on it), so there
+is no new driver to extract:
+
+```sh
+export GREPTIMEDB_ODBC_DRIVER=/tmp/dbs/mysql/mysql-connector-odbc-9.4.0-linux-glibc2.28-x86-64bit/lib/libmyodbc9w.so
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+python tests/compat/test_matrix.py greptimedb
+# greptimedb PASS  (MySQL (via ODBC) 8.4.2)
+```
+
+It announces itself as `8.4.2-GreptimeDB-1.1.4` over the MySQL wire and, like Databend,
+reports `SQL_TXN_CAPABLE` = `SQL_TC_NONE`, so the driver's existing "MySQL
+Connector/ODBC in front of a non-MySQL" quirks (`temporal_binary_param_as_varchar`,
+`ansi_ddl_type_names`) already apply to it unchanged.
+
+### The PostgreSQL wire does not work with psqlodbc
+
+The same shape of failure as H2 (below), and for the same reason — psqlodbc's connect
+handshake, not anything adbcbridge does:
+
+```sh
+python - <<'EOF'
+import os, pyodbc
+pyodbc.connect("Driver=%s;Server=127.0.0.1;Port=14003;Database=public;Uid=greptime;"
+               % os.environ["POSTGRES_ODBC_DRIVER"])
+EOF
+# pyodbc.DataError: ('22023', '[22023] ERROR: Unsupported show variable:
+#   TRANSACTION_ISOLATION (110) (SQLDriverConnect)')
+```
+
+psqlodbc 16 sends one fixed batch inside `SQLDriverConnect` (the literal is in the driver
+binary): `SET DateStyle = 'ISO';SET extra_float_digits = 2;show transaction_isolation`.
+A short raw PostgreSQL v3 client shows GreptimeDB takes the first two statements and
+refuses the third:
+
+| Statement | GreptimeDB 1.1.4 |
+|---|---|
+| `SET DateStyle = 'ISO'` | OK |
+| `SET extra_float_digits = 2` | OK |
+| `show transaction_isolation` | `22023` `Unsupported show variable: TRANSACTION_ISOLATION` |
+| `SHOW TRANSACTION ISOLATION LEVEL` | OK — `read committed` |
+
+So the value exists; GreptimeDB simply does not implement the `transaction_isolation`
+GUC spelling that psqlodbc asks for (nor `max_identifier_length`, nor `server_version`).
+The failure is fatal on the driver side, and neither end has a knob for it:
+`Protocol=6.2/6.3/6.4/7.4-0/7.4-1/7.4-2`, `pqopt={options='…'}`, `ConnSettings=`,
+`Ksqo=0`, `UseDeclareFetch=0` and `UseServerSidePrepare=0` were all tried and all fail
+identically, and the server's only PostgreSQL-side switch is the listen address. It
+becomes testable if GreptimeDB adds the GUC or psqlodbc tolerates a failure of that
+batch. As with H2, no quirk in `OdbcDetectQuirks` could help: the handshake runs *inside*
+`SQLDriverConnect`, so adbcbridge never gets a connection handle.
+
+### Connection string: `NO_SSPS=1` and `PLUGIN_DIR`
+
+`NO_SSPS=1` is what makes the entry work at all. GreptimeDB *does* answer
+`COM_STMT_PREPARE`, unlike Databend, but its prepared-statement metadata is unusable: it
+describes **every** parameter as `VAR_STRING` whatever the target column is, and then
+type-checks the value it receives against the column and rejects the string it asked
+for. A standalone unixODBC probe against `(i INT, …)` shows both halves:
+
+```
+SQLNumParams = 5
+  param 1: SQL type 12 (SQL_VARCHAR), size 255, decdigits 0, nullable 2
+  param 2..5: SQL type 12 (SQL_VARCHAR), size 255            <- every one of them
+execute, bound SQL_C_SLONG -> SQL_INTEGER: FAILED
+    [HY000] (1210) (InvalidArguments): Expected type: Int32(Int32Type),
+                                       actual: MYSQL_TYPE_STRING
+execute, bound SQL_C_SLONG -> SQL_VARCHAR: FAILED
+    [HY000] (1210) (InvalidArguments): Expected type: Int32(Int32Type),
+                                       actual: MYSQL_TYPE_BLOB
+```
+
+No ODBC-side binding satisfies both halves, so the server-side prepare protocol is a dead
+end here. With `NO_SSPS=1` the connector substitutes bound parameters into the SQL text
+and every statement goes as a plain query, which GreptimeDB parses and types normally.
+The one thing it then needs is the driver quirk Databend already installs: in that mode
+Connector/ODBC writes dates, timestamps and binaries as MySQL charset-introducer literals
+(`_binary'2024-02-29 13:45:10.123456'`), which GreptimeDB's parser rejects with
+`Unsupported ast node in sqltorel: Prefixed { prefix: Ident { value: "_binary" … } }`.
+`temporal_binary_param_as_varchar` sends them as ordinary quoted text instead.
+
+`PLUGIN_DIR` (the `{plugin_dir}` key in the entry's connection string) is the same story
+as TiDB, Dolt and MatrixOne: GreptimeDB offers `mysql_native_password`, whose client-side
+plugin Connector/ODBC 9 loads at run time from the directory it was *built* with, so an
+unpacked tarball has to be pointed at its own copy.
+
+### Driver quirk: every table needs a `TIME INDEX`
+
+This is the one thing about GreptimeDB that needed new code rather than a tolerance flag.
+Every GreptimeDB table must declare exactly one `TIME INDEX` column:
+
+```
+CREATE TABLE t (i INT, s VARCHAR(50))
+-- (InvalidSyntax): Missing time index constraint
+```
+
+and that column has to be a `TIMESTAMP` (`time index column data type should be
+timestamp` for a `DATE`) and `NOT NULL` (`time index column can't be null`). An ingest
+payload need not carry a timestamp at all, so `adbc_ingest`'s generated
+CREATE TABLE for it is rejected outright and no per-entry tolerance can reach it — that
+DDL is built inside the driver.
+
+`reader_opts.ddl_extra_column` and `reader_opts.ddl_table_options` (`src/odbc_internal.h`)
+are two strings appended to a generated `CREATE TABLE`:
+
+```
+CREATE TABLE t (<ingested columns>, <ddl_extra_column>) <ddl_table_options>
+```
+
+Both are `NULL` for every other server, so nothing else changes. They are set in
+`OdbcDetectQuirks` inside the existing "Connector/ODBC in front of a non-transactional
+server" branch, keyed on `SELECT version()` containing `greptimedb` — the same pattern
+psqlodbc uses to tell QuestDB from PostgreSQL, and the extra query is paid only by a
+MySQL-wire server that already reported `SQL_TC_NONE`:
+
+```c
+conn->reader_opts.ddl_extra_column =
+    "greptime_timestamp TIMESTAMP(3) TIME INDEX DEFAULT CURRENT_TIMESTAMP";
+conn->reader_opts.ddl_table_options = "WITH ('append_mode'='true')";
+```
+
+`DEFAULT CURRENT_TIMESTAMP` is what keeps the ingested columns untouched: the `INSERT`
+names only the payload's own columns and the server fills the time index in itself. The
+table option is not decoration — outside append mode GreptimeDB *merges* rows that share
+a time index, so rows ingested inside the same millisecond collapse:
+
+```sql
+CREATE TABLE q3 (a BIGINT, ts TIMESTAMP(3) TIME INDEX DEFAULT CURRENT_TIMESTAMP);
+-- five INSERTs, one row each
+SELECT count(*) FROM q3;   -- 2
+```
+
+With `WITH ('append_mode'='true')` the same five inserts read back as five rows.
+
+### Entry notes
+
+Four things are the server's own and live in the entry's tolerance flags:
+
+* **`ts` is the `TIME INDEX`.** `adbc_t` declares
+  `ts TIMESTAMP(6) TIME INDEX … WITH ('append_mode'='true')`, and because a time index
+  cannot be NULL the all-NULL second row carries row 1's timestamp instead
+  (`row2_fill=("ts",)`, a new flag) with the read-back assertion skipping that column
+  (`not_null=("ts",)`). Append mode is needed on this table too: its two rows then share
+  a timestamp, and without it they would merge into one.
+* **Identifiers are backtick-quoted** (the new `quote` flag). GreptimeDB answers
+  `SELECT @@sql_mode` with `0` and has no `ANSI_QUOTES` to switch to, so a double-quoted
+  name in a column position is a *string literal*: `SELECT "a", "b" FROM t` returns the
+  constants `('a','b')` for every row and `WHERE "a" = 2` matches nothing — silently,
+  with no error. Connector/ODBC reports the backtick as `SQL_IDENTIFIER_QUOTE_CHAR`
+  against this server, so `adbc_ingest` already quotes correctly; it is
+  `test_matrix.py`'s own SQL that needed telling.
+* **No `DOUBLE PRECISION`.** GreptimeDB has `DOUBLE` and `FLOAT` but neither ISO
+  spelling: `SQL data type not supported yet: DoublePrecision` (and `: Real`). That is
+  the one portable name in the generated ingest DDL it rejects — `BIGINT`, `TEXT`,
+  `DATE`, `BOOLEAN`, `DECIMAL(p,s)`, `TIMESTAMP`, `BLOB`, `SMALLINT` and `INTEGER` are
+  all accepted — so the entry sends that column as a decimal instead
+  (`ingest_types={pa.float64(): pa.decimal128(12, 3)}`), which keeps create/append/replace
+  under test. `adbc_t`'s own `f DOUBLE` column is unaffected.
+* **`BOOLEAN` is `TINYINT(1)` on the wire** → `SQL_TINYINT` → `int8` (`bool_type="int8"`),
+  exactly as for MySQL itself.
+
+Everything else passes unchanged: the emoji round-trip, microsecond timestamps,
+`DECIMAL(10,3)`, `VARBINARY` bytes, NULL parameters, affected-row counts, the 5000-row
+batched read, `GetObjects`/`GetTableSchema` and the error text for an unknown table
+(`Table not found: greptime.public.adbc_no_such_table`).
+
+### Benchmark
+
+```
+greptimedb  MySQL (via ODBC) 8.4.2
+            fetch 926,622 rows/s (pyodbc 306,078/s)
+            ingest 5,054 rows/s, array 6,766 rows/s
+```
+
+`bench/matrix_bench.py`'s pyodbc ingest column is empty for this entry, and that is a
+pyodbc limitation rather than a server or a driver one: pyodbc has no equivalent of
+`temporal_binary_param_as_varchar`, so its `DATE` parameter goes out as the same
+`_binary'…'` literal GreptimeDB's parser refuses.
+
+### Clean up
+
+```sh
+docker rm -f adbcbridge-greptimedb
+# or: docker compose -f tests/compat/docker-compose.yml --profile extra rm -sf greptimedb
+```

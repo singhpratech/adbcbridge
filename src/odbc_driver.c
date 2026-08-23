@@ -659,6 +659,21 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // Its SQLGetTypeInfo answers with MySQL's type system whatever the server is, so
     // ingest DDL has to fall back to portable type names.
     conn->reader_opts.ansi_ddl_type_names = true;
+    // Which of those warehouses is behind the connector?  Only GreptimeDB needs more,
+    // and only it pays for the extra query -- version() is "8.4.2-GreptimeDB-1.1.4".
+    char version[256];
+    OdbcServerVersionString(conn->hdbc, version, sizeof(version));
+    if (strstr(version, "greptimedb")) {
+      // GreptimeDB is a time-series store: every table must declare exactly one TIME
+      // INDEX column, which has to be a NOT NULL TIMESTAMP ("Missing time index
+      // constraint" otherwise), and an ingest payload need not carry a timestamp at
+      // all.  Add one the server fills in itself, and create the table in append mode
+      // -- without it GreptimeDB merges rows that share a time index, so rows ingested
+      // within the same millisecond would collapse into one.
+      conn->reader_opts.ddl_extra_column =
+          "greptime_timestamp TIMESTAMP(3) TIME INDEX DEFAULT CURRENT_TIMESTAMP";
+      conn->reader_opts.ddl_table_options = "WITH ('append_mode'='true')";
+    }
   }
   if (strstr((const char*)name, "arrow flight")) {
     // The Arrow Flight SQL ODBC driver (SQL_DRIVER_NAME "Arrow Flight ODBC Driver"), the

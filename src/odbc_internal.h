@@ -178,6 +178,21 @@ struct OdbcReaderOptions {
   // answers SQLGetTypeInfo with MySQL's names ("bit", "long varchar", "datetime"),
   // which such servers reject.
   bool ansi_ddl_type_names;
+  // Server requirement (not a driver bug): this server refuses any CREATE TABLE that
+  // does not declare something the generic ingest DDL has no notion of, so a bulk-ingest
+  // table is created as
+  //     CREATE TABLE t (<ingested columns>, <ddl_extra_column>) <ddl_table_options>
+  // Both are NULL for every other server, which leaves the DDL exactly as it was.
+  //
+  // GreptimeDB is the one such server verified here.  Every GreptimeDB table must carry
+  // exactly one TIME INDEX column, and it has to be a NOT NULL TIMESTAMP -- an ingest
+  // payload need not have any timestamp column at all, so the extra column is one the
+  // server fills in itself (DEFAULT CURRENT_TIMESTAMP), which leaves the ingested
+  // columns untouched.  The table option matters just as much: outside append mode
+  // GreptimeDB *merges* rows that share a time index, so rows ingested within the same
+  // millisecond would silently collapse into one.
+  const char* ddl_extra_column;
+  const char* ddl_table_options;
   // Driver quirk: bind date, timestamp and binary parameters as SQL_VARCHAR text and
   // let the server's own literal parsing coerce them, instead of using SQL_TYPE_DATE /
   // SQL_TYPE_TIMESTAMP / SQL_VARBINARY.

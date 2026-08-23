@@ -22,6 +22,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFORMIX_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, COLUMNSTORE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, FLIGHTSQL_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, GREPTIMEDB_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -222,6 +223,66 @@ DBS = {
         ingest_types={pa.bool_(): pa.int8()},
         setup=["CREATE DATABASE IF NOT EXISTS adbc", "USE adbc",
                "SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "greptimedb": dict(
+        # GreptimeDB is a time-series database that serves *both* the PostgreSQL wire
+        # (4003) and the MySQL wire (4002).  This entry uses the MySQL one, driven by
+        # MySQL Connector/ODBC: psqlodbc cannot connect at all, because its fixed connect
+        # handshake asks for `show transaction_isolation` and GreptimeDB implements only
+        # the standard `SHOW TRANSACTION ISOLATION LEVEL` spelling -- the same shape of
+        # failure as H2.  See tests/compat/README.md.
+        #   Over the MySQL wire it announces itself as "8.4.2-GreptimeDB-1.1.4" and, like
+        # Databend, reports SQL_TC_NONE, so the connector's `myodbc + no transactions`
+        # quirk in src/odbc_driver.c already applies to it.
+        # The driver is the `mysql` entry's MySQL Connector/ODBC, unpacked once.
+        env="GREPTIMEDB_ODBC_DRIVER",
+        # The connection string, and the three things it does not say:
+        # No `sql_mode` to set: GreptimeDB answers `SELECT @@sql_mode` with "0" and its
+        # parser reads "..." as a string literal, so the double-quoted identifiers the
+        # `mysql` entry needs ANSI_QUOTES for would not parse here.  It does not need
+        # them: Connector/ODBC reports the backtick as SQL_IDENTIFIER_QUOTE_CHAR against
+        # this server, and GreptimeDB is a MySQL dialect that quotes with backticks.
+        # {plugin_dir}: GreptimeDB's MySQL handler offers mysql_native_password, whose
+        # client-side plugin Connector/ODBC 9 loads at run time -- see conn_uri() below.
+        #   NO_SSPS=1 is what makes the entry work at all, for the same reason Databend
+        # needs it, though the symptom differs: GreptimeDB *does* answer COM_STMT_PREPARE,
+        # but it describes every parameter of it as VAR_STRING whatever the target column
+        # is, and then type-checks the value it gets against the column and refuses the
+        # string it asked for ("Expected type: Int32(Int32Type), actual:
+        # MYSQL_TYPE_STRING").  No ODBC-side binding can satisfy both halves -- binding
+        # SQL_C_SLONG/SQL_INTEGER fails identically -- so the server-side prepare protocol
+        # is unusable here.  With NO_SSPS the connector substitutes bound parameters into
+        # the SQL text and every statement goes as a plain query, which GreptimeDB parses
+        # and types normally.
+        conn="Driver={drv};Server=127.0.0.1;Port=14002;Database=public;User=greptime;"
+             "NO_SSPS=1;{plugin_dir}",
+        # Every GreptimeDB table must declare exactly one TIME INDEX column, and it must
+        # be a TIMESTAMP and NOT NULL -- `ts` is the natural one here.  WITH append_mode
+        # is not decoration: a table without it merges rows that share a time index (and
+        # this table's two rows do, see row2_fill), so five inserts at the same
+        # millisecond would read back as one row.
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE,"
+            " ts TIMESTAMP(6) TIME INDEX, n DECIMAL(10,3), bo BOOLEAN)"
+            " WITH ('append_mode'='true')",
+        # The time index cannot be NULL, so the all-NULL second row carries row 1's
+        # timestamp instead of NULL, and the read-back assertion skips it.
+        row2_fill=("ts",), not_null=("ts",),
+        # GreptimeDB's BOOLEAN goes over the MySQL wire as a TINYINT(1), which
+        # Connector/ODBC reports as SQL_TINYINT -> int8, exactly as MySQL's own does.
+        bool_type="int8",
+        # GreptimeDB quotes identifiers the MySQL way and has no ANSI_QUOTES to switch
+        # to, so a "..." in a column position is a *string literal*: SELECT "a" FROM t
+        # returns the constant 'a' for every row rather than the column, silently.
+        # Connector/ODBC reports the backtick as SQL_IDENTIFIER_QUOTE_CHAR here, so
+        # adbc_ingest already quotes correctly; it is this file's own SQL that has to.
+        quote="`",
+        # The generated ingest DDL asks for the portable ISO type names (see
+        # `ansi_ddl_type_names` in src/odbc_driver.c), and GreptimeDB accepts all of them
+        # -- BIGINT, TEXT, DATE, BOOLEAN, DECIMAL(p,s) -- except the one for a double:
+        # it has DOUBLE and FLOAT but neither "DOUBLE PRECISION" nor "REAL" ("SQL data
+        # type not supported yet: DoublePrecision").  Sending that column as a decimal,
+        # a type it does name the same way, keeps the whole ingest -- create, append,
+        # replace -- under test.  adbc_t's own `f DOUBLE` column is unaffected.
+        ingest_types={pa.float64(): pa.decimal128(12, 3)}),
     "db2": dict(
         env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
@@ -568,6 +629,22 @@ DBS = {
 ROW1 = (1, 1.5, "héllo 🚀", b"\x01\x02", datetime.date(2024, 2, 29),
         datetime.datetime(2024, 2, 29, 13, 45, 10, 123456), decimal.Decimal("12.345"), True)
 ROW2 = (2, None, None, None, None, None, None, None)
+# adbc_t's columns, in the order ROW1/ROW2 give their values.
+COLS = ("i", "f", "s", "b", "d", "ts", "n", "bo")
+
+
+def row2(cfg):
+    """The all-NULL second row, with `row2_fill` columns taking row 1's value instead.
+
+    For a server that refuses a NULL there at all: GreptimeDB's TIME INDEX column is
+    mandatory and NOT NULL, so `ts` cannot be NULL in any row of any table.  Such a
+    column is normally also listed in `not_null`, which is the read-back half of the
+    same fact.
+    """
+    r = list(ROW2)
+    for name in cfg.get("row2_fill", ()):
+        r[COLS.index(name)] = ROW1[COLS.index(name)]
+    return tuple(r)
 
 
 def conn_uri(name, cfg, drv=None):
@@ -638,13 +715,13 @@ def run(name, cfg):
         for sql in cfg.get("setup", []):
             cur.execute(sql)
         if not ro:
-            for t in (t_name, ing_name, '"%s"' % ing_name):  # ingest quotes names (exact case)
+            for t in (t_name, ing_name, q(cfg, ing_name)):  # ingest quotes names (exact case)
                 try:
                     cur.execute("DROP TABLE " + t)
                 except Exception:
                     pass
             cur.execute(cfg["ddl"].replace("adbc_t", t_name))
-            rows = [ROW1, ROW2] if cfg.get("null_params", True) else [ROW1]
+            rows = [ROW1, row2(cfg)] if cfg.get("null_params", True) else [ROW1]
             cur.executemany("INSERT INTO %s VALUES (?, ?, ?, ?, ?, ?, ?, ?)" % t_name, rows)
             if not cfg.get("null_params", True):
                 cur.execute("INSERT INTO %s VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)" % t_name)
@@ -685,7 +762,8 @@ def run(name, cfg):
         assert cur.fetchone()[0].startswith("héllo")
         # bulk ingest + read back (read_only reads the fixture's big table instead)
         if ro:
-            check_big(cur, cfg, 'SELECT "a", "b" FROM "adbc_big"')
+            check_big(cur, cfg, "SELECT %s, %s FROM %s"
+                                % (q(cfg, "a"), q(cfg, "b"), q(cfg, "adbc_big")))
         else:
             check_ingest(cur, cfg, ing_name)
         # extra: per-database steps run after the standard workload, for features
@@ -718,7 +796,7 @@ def run(name, cfg):
     # an arbitrary order.  The result-set metadata of a SELECT is unaffected; only the
     # catalog calls are, so those entries compare the column names as a set.
     order = (lambda c: c) if cfg.get("column_order", True) else sorted
-    cols = ["i", "f", "s", "b", "d", "ts", "n", "bo"]
+    cols = list(COLS)
     # No catalog filter is given, so every catalog on the server that happens to
     # hold a table of this name is reported -- shared servers really do have
     # more than one.  Check the columns of each match individually.
@@ -731,6 +809,19 @@ def run(name, cfg):
     assert order([f.name.lower() for f in sch]) == order(cols)
     conn.close()
     return "PASS  (%s %s)" % (info["vendor_name"], info["vendor_version"])
+
+
+def q(cfg, name):
+    """`name` quoted the way this server quotes an identifier.
+
+    The double quote is SQL's and every other entry's; GreptimeDB is a MySQL dialect
+    with no ANSI_QUOTES to switch to, so a "..." there is a string literal and its
+    identifiers are backtick-quoted (`quote` in the entry).  adbc_ingest quotes with
+    whatever SQL_IDENTIFIER_QUOTE_CHAR the driver reports, so only this file's own SQL
+    needs telling.
+    """
+    c = cfg.get("quote", '"')
+    return c + name + c
 
 
 def refresh(cur, cfg, table):
@@ -780,7 +871,9 @@ def check_ingest(cur, cfg, ing_name):
     n2 = cur.adbc_ingest(ing_name, tbl, mode="append")
     assert (n1, n2) == (3, 3) or not cfg.get("rowcount", True), (n1, n2)
     refresh(cur, cfg, ing_name)
-    cur.execute('SELECT "a", "b", "c", "d" FROM "%s" WHERE "a" = 2' % ing_name)
+    cur.execute("SELECT %s, %s, %s, %s FROM %s WHERE %s = 2"
+                % (q(cfg, "a"), q(cfg, "b"), q(cfg, "c"), q(cfg, "d"),
+                   q(cfg, ing_name), q(cfg, "a")))
     got = cur.fetch_arrow_table().to_pylist()
     # The ingest DDL asks the driver for a date (or, where the server has no date type,
     # a timestamp) column; a server whose timestamp carries a zone -- psqlodbc's
@@ -795,7 +888,8 @@ def check_ingest(cur, cfg, ing_name):
                                                    "c": pa.array([float(i) for i in range(N)]), "d": pa.array([i for i in range(N)], pa.date32()),
                                                    "e": pa.array([i % 2 == 0 for i in range(N)])}), mode="replace")
     refresh(cur, cfg, ing_name)
-    check_big(cur, cfg, 'SELECT "a", "b" FROM "%s" ORDER BY "a"' % ing_name)
+    check_big(cur, cfg, "SELECT %s, %s FROM %s ORDER BY %s"
+              % (q(cfg, "a"), q(cfg, "b"), q(cfg, ing_name), q(cfg, "a")))
 
 
 if __name__ == "__main__":
