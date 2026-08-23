@@ -134,3 +134,106 @@ def test_phase2():
 
 if __name__ == "__main__":
     test_phase2()
+
+
+def test_types():
+    """Type-coverage checks for everything the SQLite ODBC driver can produce.
+
+    The SQL types this driver also handles but SQLite never reports
+    (SQL_SS_TIME2, SQL_SS_TIMESTAMPOFFSET, SQL_GUID, SQL_INTERVAL_*,
+    SQL_DECIMAL, SQL_C_WCHAR) are covered by the C unit tests in tests/c/.
+    """
+    import datetime
+    import math
+
+    import pyarrow as pa
+
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "types.db")
+    with connect(db) as conn:
+        with conn.cursor() as cur:
+            # --- TIME columns -> time32[s] --------------------------------
+            cur.execute("CREATE TABLE tm (t TIME)")
+            cur.execute("INSERT INTO tm VALUES ('12:34:56')")
+            cur.execute("INSERT INTO tm VALUES ('00:00:00')")
+            cur.execute("INSERT INTO tm VALUES ('23:59:59')")
+            cur.execute("INSERT INTO tm VALUES (NULL)")
+            cur.execute("SELECT t FROM tm ORDER BY rowid")
+            tbl = cur.fetch_arrow_table()
+            print("time schema:", tbl.schema)
+            assert tbl.schema.field("t").type == pa.time32("s"), tbl.schema
+            assert tbl.column("t").to_pylist() == [
+                datetime.time(12, 34, 56),
+                datetime.time(0, 0, 0),
+                datetime.time(23, 59, 59),
+                None,
+            ], tbl.column("t").to_pylist()
+
+            # --- GUID-like text round-trips as a string -------------------
+            guid = "6F9619FF-8B86-D011-B42D-00C04FC964FF"
+            cur.execute("CREATE TABLE g (id VARCHAR(36), iv VARCHAR(40))")
+            cur.execute(f"INSERT INTO g VALUES ('{guid}', '-1 12:34:56.789')")
+            cur.execute("SELECT id, iv FROM g")
+            tbl = cur.fetch_arrow_table()
+            assert tbl.schema.field("id").type == pa.string(), tbl.schema
+            assert tbl.column("id").to_pylist() == [guid]
+            # ODBC interval strings stay text: Arrow cannot hold every qualifier.
+            assert tbl.column("iv").to_pylist() == ["-1 12:34:56.789"]
+
+            # --- wide / unconstrained DECIMAL -> string, losslessly -------
+            cur.execute("CREATE TABLE dec (a DECIMAL(50,2), b DECIMAL, c DECIMAL(10,3))")
+            wide = "12345678901234567890123456789012345678901234.99"
+            cur.execute(f"INSERT INTO dec VALUES ('{wide}', '1.5', '12.345')")
+            cur.execute("SELECT a, b, c FROM dec")
+            tbl = cur.fetch_arrow_table()
+            print("decimal schema:", tbl.schema)
+            for name in ("a", "b", "c"):
+                assert tbl.schema.field(name).type == pa.string(), tbl.schema
+            # SQLite's NUMERIC affinity coerces an out-of-int64-range literal to
+            # a float, so compare the wide value numerically, not textually.
+            assert math.isclose(float(tbl.column("a").to_pylist()[0]), float(wide),
+                                rel_tol=1e-12), tbl.column("a").to_pylist()
+            assert tbl.column("b").to_pylist() == ["1.5"]
+            assert tbl.column("c").to_pylist() == ["12.345"]
+
+            # --- non-BMP characters survive the text path -----------------
+            # SQLite ODBC reports SQL_VARCHAR (not SQL_WVARCHAR), so this is
+            # the SQL_C_CHAR path; tests/c/test_utf16.c covers SQL_C_WCHAR.
+            emoji = "a😀b🇦🇸 ünïcödé 𝄞"
+            cur.execute("CREATE TABLE e (s TEXT)")
+            cur.executemany("INSERT INTO e VALUES (?)", [(emoji,), ("",), (None,)])
+            cur.execute("SELECT s FROM e ORDER BY rowid")
+            got = cur.fetch_arrow_table().column("s").to_pylist()
+            print("emoji round-trip:", got)
+            assert got == [emoji, "", None], got
+            # ...also when the value is long enough to take the SQLGetData path
+            long_emoji = "😀" * 40000
+            cur.executemany("INSERT INTO e VALUES (?)", [(long_emoji,)])
+            cur.execute("SELECT s FROM e WHERE length(s) = 40000")
+            assert cur.fetch_arrow_table().column("s").to_pylist() == [long_emoji]
+
+            # --- float specials pass through unchanged --------------------
+            cur.execute("SELECT 9e999 AS pinf, -9e999 AS ninf, 1.5 AS ok")
+            tbl = cur.fetch_arrow_table()
+            print("float schema:", tbl.schema)
+            d = tbl.to_pydict()
+            assert math.isinf(d["pinf"][0]) and d["pinf"][0] > 0, d
+            assert math.isinf(d["ninf"][0]) and d["ninf"][0] < 0, d
+            assert d["ok"] == [1.5], d
+            # An infinity must not be reported as a null.
+            assert tbl.column("pinf").null_count == 0
+
+            # --- timestamps still work alongside the new time handling ----
+            cur.execute("CREATE TABLE ts (v TIMESTAMP)")
+            cur.execute("INSERT INTO ts VALUES ('2024-02-29 13:45:10.123')")
+            cur.execute("SELECT v FROM ts")
+            tbl = cur.fetch_arrow_table()
+            assert tbl.schema.field("v").type == pa.timestamp("us"), tbl.schema
+            assert tbl.column("v").to_pylist() == [
+                datetime.datetime(2024, 2, 29, 13, 45, 10, 123000)
+            ]
+    print("TYPES OK")
+
+
+if __name__ == "__main__":
+    test_types()

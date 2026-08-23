@@ -46,3 +46,24 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 install(TARGETS adbc_driver_odbc LIBRARY DESTINATION lib)
+
+# --- C unit tests (ctest) ---
+option(ADBC_ODBC_BUILD_TESTS "Build the C unit tests" ON)
+if(ADBC_ODBC_BUILD_TESTS)
+  enable_testing()
+  foreach(test_name IN ITEMS test_utf16 test_types)
+    add_executable(${test_name}
+      tests/c/${test_name}.c
+      src/utils.c
+      vendor/nanoarrow/nanoarrow.c)
+    target_include_directories(${test_name} PRIVATE include vendor src tests/c)
+    target_compile_definitions(${test_name} PRIVATE
+      ADBC_EXPORTING
+      NANOARROW_DLL=)
+    target_link_libraries(${test_name} PRIVATE ODBC::ODBC)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+      target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    endif()
+    add_test(NAME ${test_name} COMMAND ${test_name})
+  endforeach()
+endif()

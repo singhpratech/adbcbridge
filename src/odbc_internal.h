@@ -12,6 +12,22 @@
 #include "nanoarrow/nanoarrow.h"
 #include "utils.h"
 
+// --- SQL type codes not present in every driver-manager header ---------------
+// Microsoft SQL Server extended types (msodbcsql.h).
+#ifndef SQL_SS_TIME2
+#define SQL_SS_TIME2 (-154)
+#endif
+#ifndef SQL_SS_TIMESTAMPOFFSET
+#define SQL_SS_TIMESTAMPOFFSET (-155)
+#endif
+// ODBC 4.0 datetime-with-timezone types.
+#ifndef SQL_TYPE_TIME_WITH_TIMEZONE
+#define SQL_TYPE_TIME_WITH_TIMEZONE 94
+#endif
+#ifndef SQL_TYPE_TIMESTAMP_WITH_TIMEZONE
+#define SQL_TYPE_TIMESTAMP_WITH_TIMEZONE 95
+#endif
+
 #if defined(_WIN32)
 #define ADBC_ODBC_EXPORT __declspec(dllexport)
 #else
