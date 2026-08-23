@@ -50,6 +50,10 @@ DBS = {
         # identifiers (used by ingest) need ANSI_QUOTES. See tests/compat/README.md for
         # the LD_PRELOAD needed by MySQL Connector/ODBC under pyarrow.
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "db2": dict(
+        env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
+        ident=str.upper),
 }
 
 # Typed values: ADBC clients send Arrow-typed parameters, so dates/timestamps go as
