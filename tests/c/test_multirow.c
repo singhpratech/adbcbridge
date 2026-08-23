@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Unit tests for the multi-row INSERT text the bulk-ingest batching builds
-// (MultiRowSql in odbc_bind.c) -- both the standard `VALUES (...),(...)` form and
-// Oracle's `INSERT ALL ... SELECT 1 FROM dual`.  The statement text is what every
-// backend is judged on, and it is not otherwise observable from a test.
+// (MultiRowSql in odbc_bind.c) -- the standard `VALUES (...),(...)` form, Oracle's
+// `INSERT ALL ... SELECT 1 FROM dual`, and Firebird's `SELECT CAST(? AS t), ... FROM
+// RDB$DATABASE UNION ALL ...`.  The statement text is what every backend is judged on,
+// and it is not otherwise observable from a test.
 //
 // The binding translation unit is included so its internal helpers are visible; the
 // handful of symbols it takes from the other translation units are stubbed below.
@@ -38,14 +39,24 @@ AdbcStatusCode OdbcDescribeParameterSchema(SQLHSTMT hstmt, const struct OdbcRead
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
 
-static void CheckSql(const char* into, int64_t ncols, int64_t rows, bool insert_all,
-                     const char* expected) {
-  char* sql = MultiRowSql(into, ncols, rows, insert_all);
+static char* const kCastTypes[] = {(char*)"BIGINT",  (char*)"BLOB SUB_TYPE TEXT",
+                                   (char*)"INTEGER", (char*)"DATE",
+                                   (char*)"TIMESTAMP"};
+
+static void CheckSqlForm(const char* into, int64_t ncols, int64_t rows, int form,
+                         const char* expected) {
+  char* sql = MultiRowSql(into, ncols, rows, form, kCastTypes, "RDB$DATABASE");
   CHECK_TRUE(sql != NULL);
   if (sql) {
     CHECK_STR(sql, strlen(sql), expected);
     free(sql);
   }
+}
+
+static void CheckSql(const char* into, int64_t ncols, int64_t rows, bool insert_all,
+                     const char* expected) {
+  CheckSqlForm(into, ncols, rows, insert_all ? ODBC_MULTIROW_INSERT_ALL : ODBC_MULTIROW_VALUES,
+               expected);
 }
 
 static void TestStandardForm(void) {
@@ -69,14 +80,27 @@ static void TestInsertAllForm(void) {
            "INSERT ALL INTO \"t\" (\"a\") VALUES (?) SELECT 1 FROM dual");
 }
 
+static void TestUnionForm(void) {
+  // Firebird: no multi-row VALUES and no INSERT ALL, and a bare `?` in a select list has
+  // no type the server can infer -- so every parameter is CAST to the type ingest would
+  // have given the column, and the row-groups are UNION ALL branches over a one-row table.
+  CheckSqlForm("\"t\" (\"a\", \"b\")", 2, 2, ODBC_MULTIROW_UNION,
+               "INSERT INTO \"t\" (\"a\", \"b\") "
+               "SELECT CAST(? AS BIGINT), CAST(? AS BLOB SUB_TYPE TEXT) FROM RDB$DATABASE"
+               " UNION ALL SELECT CAST(? AS BIGINT), CAST(? AS BLOB SUB_TYPE TEXT)"
+               " FROM RDB$DATABASE");
+  CheckSqlForm("\"t\" (\"a\")", 1, 1, ODBC_MULTIROW_UNION,
+               "INSERT INTO \"t\" (\"a\") SELECT CAST(? AS BIGINT) FROM RDB$DATABASE");
+}
+
 // The parameter placeholders must line up with what MultiRowExecGroup binds:
 // parameter (r * ncols + c + 1) is row r, column c.  Counting them is the cheapest
 // check that the text and the binder agree on the layout.
 static void TestParameterCount(void) {
   for (int64_t ncols = 1; ncols <= 5; ncols++) {
     for (int64_t rows = 1; rows <= 7; rows++) {
-      for (int pass = 0; pass < 2; pass++) {
-        char* sql = MultiRowSql("\"t\" (\"a\")", ncols, rows, pass == 1);
+      for (int pass = 0; pass < 3; pass++) {
+        char* sql = MultiRowSql("\"t\" (\"a\")", ncols, rows, pass, kCastTypes, "RDB$DATABASE");
         CHECK_TRUE(sql != NULL);
         if (!sql) continue;
         int64_t n = 0;
@@ -103,33 +127,34 @@ static void TestEnabledOnlyForIngest(void) {
 
   // A caller's own query: no ingest_into, so no rewrite.
   stmt.query = (char*)"INSERT INTO t VALUES (?, ?)";
-  MultiRowInit(&mr, &stmt, 2);
+  MultiRowInit(&mr, &stmt, NULL, 2);
   CHECK_TRUE(!mr.enabled);
 
   // Bulk ingest.
   stmt.ingest_into = (char*)"\"t\" (\"a\", \"b\")";
-  MultiRowInit(&mr, &stmt, 2);
+  MultiRowInit(&mr, &stmt, NULL, 2);
   CHECK_TRUE(mr.enabled);
 
   // adbc.odbc.rows_per_insert = 1 disables it.
   stmt.rows_per_insert = 1;
-  MultiRowInit(&mr, &stmt, 2);
+  MultiRowInit(&mr, &stmt, NULL, 2);
   CHECK_TRUE(!mr.enabled);
   stmt.rows_per_insert = 0;
 
   // Nothing to group.
-  MultiRowInit(&mr, &stmt, 0);
+  MultiRowInit(&mr, &stmt, NULL, 0);
   CHECK_TRUE(!mr.enabled);
 
   // A connection that is not up.
   conn.connected = false;
-  MultiRowInit(&mr, &stmt, 2);
+  MultiRowInit(&mr, &stmt, NULL, 2);
   CHECK_TRUE(!mr.enabled);
 }
 
 int main(void) {
   TestStandardForm();
   TestInsertAllForm();
+  TestUnionForm();
   TestParameterCount();
   TestEnabledOnlyForIngest();
   if (adbc_test_failures) {
