@@ -166,6 +166,120 @@ The important consequence: **on this stack, micro-optimising `AppendValue`
 cannot win more than ~6% end-to-end.** The optimisations that matter are the
 ones that change *which code path we take*, not how fast the current path runs.
 
+## Postgres: native vs bridge vs floor
+
+The SQLite numbers above are dominated by `SQLExecDirect`, which hides everything
+our own code does. Repeating the exercise against a **client/server** driver —
+PostgreSQL 16 in Docker via psqlodbc, 1,000,000 rows of
+`(int4, float8, text 'row_N', date)` — puts our code back on the critical path and
+exposed two structural problems that the SQLite benchmark could not see.
+
+Medians of 5 runs, `batch_size=8192`, Release build. *floor* is `bench/odbc_floor.c`
+against the same query; *native* is `adbc_driver_postgresql` (libpq, no ODBC).
+
+| Path | before | after | | |
+|---|---:|---:|---|---|
+| native `adbc_driver_postgresql` | 0.42 s | 0.42 s | | |
+| **adbcbridge (ODBC)** | **1.10 s** | **0.67 s** | | **1.64x faster** |
+| — of which execute | 0.54 s | 0.43 s | floor 0.44 s | |
+| — of which fetch + convert | 0.45 s | 0.25 s | floor 0.24 s | |
+| *floor*: raw `SQLBindCol`+`SQLFetch` | 0.68 s | 0.68 s | | |
+| pyodbc `fetchall()` -> `pyarrow.Table` | 1.45 s | 1.49 s | | |
+
+We went from **1.6x the raw-ODBC floor to within a couple of percent of it**, on
+both halves independently. What is left is psqlodbc and libpq; the remaining gap
+to *native* is the ODBC boundary itself (text-protocol decoding inside psqlodbc),
+which no bridge can remove.
+
+### What the two halves were
+
+**Execute (0.54 s -> 0.43 s): a wasted `SQLPrepare` round trip.** Every ADBC DBAPI
+client calls `AdbcStatementPrepare` before `AdbcStatementExecuteQuery`, even for a
+one-shot query with no parameters — `_prepare_execute()` in `dbapi.py` does it
+unconditionally. We turned that straight into `SQLPrepare` + `SQLExecute`: two
+server round trips where `SQLExecDirect` needs one. On an embedded driver that is
+free, which is why the SQLite benchmark never showed it.
+
+`AdbcStatementPrepare` now only *records* the request. The real `SQLPrepare` is
+issued when something actually needs it: parameters get bound
+(`src/odbc_bind.c` already did this lazily), `AdbcStatementExecuteSchema` is
+called, or the statement is executed a **second** time — the point at which a
+prepared statement starts paying for itself. Measured in isolation:
+`SQLPrepare`+`SQLExecute` 0.533 s vs `SQLExecDirect` 0.423 s, i.e. the entire
+execute-side gap.
+
+**Fetch (0.45 s -> 0.25 s): one column was disabling the block cursor.** This is
+optimisation #2 below, and this benchmark was silently paying its full price.
+psqlodbc reports `text` as `SQL_LONGVARCHAR` (with `column_size` 8190), and
+`ClassifyColumn()` refused to bind *any* `LONGVARCHAR`. One unbound column sets
+`rows_per_fetch = 1`, so all 1,000,000 rows were fetched one at a time, with a
+`SQLGetData` per column per row. A `text` column in the select list is not a
+corner case — it is most real queries.
+
+Two fixes were tried:
+
+- **`SQLSetPos(SQL_POSITION)` + `SQLGetData` on a block cursor** — the textbook
+  answer, and what optimisation #2 recommended. It is **much worse** on psqlodbc:
+  fetch went 0.45 s -> **3.90 s**, about 3.5 µs per `SQLSetPos`. Rejected.
+- **Bind the long column at its declared width and repair only what truncates.**
+  The indicator tells us the value's true length, so a value that did not fit is
+  re-read in full with `SQLGetData` (positioning with `SQLSetPos` only for that
+  row). The common case — every value fits — costs nothing, and long values stay
+  lossless. This is what shipped.
+
+Binding a long column is gated on the driver advertising
+`SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER` in `SQL_GETDATA_EXTENSIONS`, so
+the repair is always available when we rely on it. What the drivers report:
+
+| Driver | `SQL_GETDATA_EXTENSIONS` | binds long columns |
+|---|---|---|
+| psqlodbc, MariaDB, MySQL, Oracle, DuckDB | `0x0f` / `0x1f` | yes |
+| SQLite3 ODBC, clickhouse-odbc | `0x0b` (no `SQL_GD_BLOCK`) | no — unchanged |
+| MS ODBC 18 for SQL Server | `0x04` (no `SQL_GD_BOUND`/`ANY_ORDER`) | no — unchanged |
+
+So on three of the eight drivers in the compat matrix the read path is
+byte-for-byte what it was, and the drivers that do get the new path are exactly
+the ones that advertise support for it.
+
+### Column-at-a-time conversion
+
+Separately, `ReaderNextBatch()` now converts a rowset **column by column** instead
+of value by value (optimisations #4 and #5). A bound column's rowset buffer is
+already a contiguous C array, so:
+
+- `int8/16/32/64`, `uint8/16/32/64`, `float`, `double` are a single `memcpy` —
+  the ODBC buffer already has the exact Arrow layout (checked with
+  `_Static_assert` on every `SQL*` type width).
+- `date32`, `time32`, `timestamp` run one tight conversion loop into a reserved
+  buffer, with no nanoarrow append dispatch per value.
+- `string`/`binary` size the data buffer from the indicator array in one pass,
+  then bulk-append data and offsets.
+- Validity is appended in runs, and nanoarrow's laziness is preserved: a rowset
+  with no nulls never materialises a validity bitmap at all.
+- Each batch reserves its fixed-width buffers up front, removing the per-batch
+  realloc chain.
+
+Rowsets that contain a skipped or failed row (`SQL_ROW_NOROW` / `SQL_ROW_ERROR`),
+unbound columns, truncated values, and the text-parsed kinds (`decimal`,
+`time64`, `timestamptz` — where the parse dominates anyway) all fall back to the
+original per-value path, so behaviour is unchanged there.
+
+Worth **16 ms per 4M values** on this query (fetch 0.265 s -> 0.249 s, ~4 ns/value)
+— modest here because psqlodbc still dominates, but it is the part that scales:
+it is pure CPU, so its share grows as the driver gets faster. On SQLite the same
+change moved us from 93% to 95% of the floor (0.473 s vs a 0.451 s floor).
+
+### Reproduce
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+# floor
+cc -O2 -o odbc_floor bench/odbc_floor.c -lodbc
+./odbc_floor "Driver=$PSQL_ODBC_DRIVER;Server=127.0.0.1;Port=15432;Database=adbc;Uid=adbc;Pwd=adbc;" \
+  "SELECT i::int AS id, (i*0.5)::float8 AS val, 'row_'||i AS txt,
+          DATE '2024-01-01' + (i % 365) AS dt FROM generate_series(1,1000000) i" 8192
+```
+
 ## Optimisation suggestions, ranked by expected gain
 
 **1. Never ship or benchmark the `-O0` build.** `-DCMAKE_BUILD_TYPE=Debug`
@@ -178,7 +292,11 @@ where the fetch loop rather than `SQLExecDirect` dominates, this is worth
 considerably more than 8.8%.
 
 **2. Stop letting one unbound column force row-at-a-time fetching for the
-entire result set.** *Measured: 2.7x.* `ReaderBind()` does:
+entire result set.** *Measured: 2.7x.* **Done** — but not the way this entry
+proposed; see [Postgres: native vs bridge vs floor](#postgres-native-vs-bridge-vs-floor).
+`SQLSetPos` per row turned out to be 8x *worse* on psqlodbc, so long columns are
+now bound at their declared width with a `SQLGetData` repair for the values that
+truncate. `ReaderBind()` does:
 
 ```c
 r->rows_per_fetch = all_bound ? (SQLULEN)r->opts.batch_size : 1;
@@ -215,15 +333,16 @@ width after `DescribeColumns`, then clamp
 inside L2, which the sweep showed matters slightly at 65536. Correctness and
 robustness win that unblocks #2; no throughput cost.
 
-**4. Reserve Arrow buffers up front.** *Estimated: 5-15% of our 30 ms, ~1% end-to-end
+**4. Reserve Arrow buffers up front.** **Done.** *Estimated: 5-15% of our 30 ms, ~1% end-to-end
 here.* After `ArrowArrayStartAppending`, call `ArrowArrayReserve(&batch,
 rows_per_fetch)` — we know exactly how many rows the batch will hold. For bound
 `FETCH_CHAR`/`FETCH_BINARY` columns we also know the maximum byte width
 (`elem_size * rows_per_fetch`), so the data buffers can be reserved too. Removes
 the realloc/memcpy chain on every batch. Cheap, local, no behaviour change.
 
-**5. Bulk-append fixed-width columns instead of one call per value.**
-*Estimated: most of the remaining ~30 ms, ~5% end-to-end here.* For
+**5. Bulk-append fixed-width columns instead of one call per value.** **Done**
+(and extended to string/binary/date/time/timestamp; measured 16 ms per 4M values
+on Postgres). *Estimated: most of the remaining ~30 ms, ~5% end-to-end here.* For
 `FETCH_I32`/`FETCH_I64`/`FETCH_F64`/`FETCH_F32` the bound buffer is already a
 contiguous C array in exactly the Arrow layout. When a rowset contains no nulls
 for that column (check the indicator array in one pass — the common case), the

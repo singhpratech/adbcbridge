@@ -99,6 +99,12 @@ struct OdbcReaderOptions {
   // Driver quirk: some drivers (DuckDB) write a whole internal chunk into bound
   // buffers regardless of SQL_ATTR_ROW_ARRAY_SIZE; allocate at least this many rows.
   int64_t min_buffer_rows;
+  // Driver capability: SQLGetData can re-read a bound column of any row of a block
+  // cursor, in any order (SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER).  That lets
+  // us bind a long column at its declared width and fall back to SQLGetData only for
+  // the values that come back truncated, instead of refusing to bind it at all and
+  // collapsing the whole result set to a one-row rowset.
+  bool getdata_repair;
   // Driver quirk: bind boolean parameters as integers (DuckDB rejects SQL_BIT params).
   bool bool_param_as_int;
   // Driver quirk: no SQL_C_SBIGINT parameter support (Oracle); send 64-bit ints as numeric text.
@@ -187,7 +193,9 @@ struct OdbcStatement {
   struct OdbcConnection* conn;
   struct OdbcHandleRef* ref;
   char* query;
-  bool prepared;
+  bool prepared;           // SQLPrepare has been issued for `query` on `ref->hstmt`
+  bool prepare_requested;  // AdbcStatementPrepare was called; SQLPrepare is deferred
+  bool executed;           // `query` has been executed at least once since it was set
   struct OdbcReaderOptions reader_opts;
   // Bound parameters (Bind / BindStream)
   struct ArrowArrayStream bind_stream;
