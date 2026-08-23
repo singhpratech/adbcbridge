@@ -3122,3 +3122,241 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down influxdb3
 # or, if started standalone:
 docker rm -f adbcbridge-influxdb3
 ```
+
+## OpenSearch 3.8 (SQL plugin)
+
+OpenSearch is a search engine, not a SQL database, but every distribution bundles the
+**SQL plugin**: a `/_plugins/_sql` REST endpoint that answers `SELECT`/`SHOW`/`DESCRIBE`
+over indices. The OpenSearch project also publishes an ODBC driver for that endpoint,
+which is what this entry drives. It is a read-only driver, and the project ships it for
+**Windows and macOS only** — so the Linux build below is the interesting part of this
+section.
+
+Server:
+
+```sh
+docker run -d --name adbcbridge-opensearch --memory=3g -p 127.0.0.1:19200:9200 \
+  -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true \
+  -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" \
+  opensearchproject/opensearch:latest
+```
+
+(or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d opensearch`;
+it is in the `extra` profile, so a plain `up -d` leaves it alone). It is ready in under a
+minute — `curl -s http://127.0.0.1:19200` answers with the version document.
+`DISABLE_SECURITY_PLUGIN=true` turns off TLS and authentication, which is what lets the
+ODBC connection through with `auth=NONE;useSSL=0`; `OPENSEARCH_JAVA_OPTS` pins a 512 MB
+heap, since the default is a quarter of the host's RAM.
+
+### Getting the driver: there is no Linux build to download
+
+`opensearch-project/sql-odbc` has exactly one release (1.5.0.0, July 2023) and its single
+asset, `artifacts.tar.gz`, holds one macOS `.pkg` and two Windows `.msi` files — no
+`.so`. The README says as much ("a read-only ODBC driver for Windows and Mac"), and the
+source tree carries `build_mac_*.sh` and `build_win_*.ps1` and no Linux script.
+
+It does build on Linux, though: `src/CMakeLists.txt` has a `WITH_UNIXODBC` branch and
+`src/sqlodbc/CMakeLists.txt` links `odbc odbcinst` for `UNIX`. That branch has plainly
+never been compiled — five things stand in the way, three of them real bugs — but once
+they are fixed the driver works. Build it root-free (no `vcpkg` needed; the only
+dependency is the AWS SDK for C++ `core` component, which the driver uses as its HTTP
+client, and it builds against the system curl/openssl/zlib):
+
+```sh
+mkdir -p /tmp/dbs/opensearch && cd /tmp/dbs/opensearch
+git clone --depth 1 https://github.com/opensearch-project/sql-odbc.git src-repo
+
+# 1. aws-cpp-sdk-core.  1.8.x is the last series with no aws-crt-cpp dependency, so
+#    BUILD_ONLY=core is a few minutes rather than half an hour.
+curl -sSLO https://github.com/aws/aws-sdk-cpp/archive/refs/tags/1.8.186.tar.gz
+tar xzf 1.8.186.tar.gz
+# Its aws-c-common / aws-checksums / aws-c-event-stream ExternalProjects build their test
+# suites with -Werror and do not compile clean under gcc 13, and the SDK forwards no
+# flags to them: add -DBUILD_TESTING=OFF to the three CMAKE_ARGS lists, and drop -Werror
+# from the SDK's own warning list.
+sed -i 's|-DCMAKE_INSTALL_PREFIX=${AWS_DEPS_INSTALL_DIR}|&\n        -DBUILD_TESTING=OFF|' \
+  aws-sdk-cpp-1.8.186/third-party/cmake/BuildAws{CCommon,Checksums,EventStream}.cmake
+sed -i 's/"-Wall" "-Werror"/"-Wall"/' aws-sdk-cpp-1.8.186/cmake/compiler_settings.cmake
+cmake -S aws-sdk-cpp-1.8.186 -B aws-build -DCMAKE_BUILD_TYPE=Release -DBUILD_ONLY=core \
+  -DENABLE_TESTING=OFF -DCUSTOM_MEMORY_MANAGEMENT=OFF -DENABLE_RTTI=OFF \
+  -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX=$PWD/aws-prefix
+cmake --build aws-build -j6 && cmake --install aws-build
+```
+
+Then the driver tree. Three of the five fixes are one-line `sed`s; two are edits:
+
+```sh
+cd /tmp/dbs/opensearch/src-repo
+# (a) -Werror, on a 2023 code base under gcc 13
+sed -i 's/ -Werror//' src/CMakeLists.txt
+# (b) a vestigial `#include "linux/kconfig.h"` -- a *kernel* header, which is also why
+#     the CMakeLists puts /usr/src/linux-headers-5.0.0-27/include on the include path
+sed -i '/#include "linux\/kconfig.h"/d' src/sqlodbc/opensearch_odbc.h
+# (e) sem_init() is given the semaphore's *capacity* as its initial count, where WIN32
+#     (CreateSemaphore(NULL, initial, capacity, ...)) and __APPLE__
+#     (dispatch_semaphore_create(initial)) both use `initial`.  See below: this one
+#     crashes at run time rather than at compile time.
+sed -i 's/sem_init(&m_semaphore, 0, capacity);/sem_init(\&m_semaphore, 0, initial);/' \
+  src/sqlodbc/opensearch_semaphore.cpp
+```
+
+* **(c) rapidjson.** `src/CMakeLists.txt` sets `RAPIDJSON_SRC` inside an `if(WIN32)`
+  (macOS gets rapidjson from vcpkg) although the vendored copy is right there in
+  `libraries/rapidjson/include`. Drop that one guard so the `set(RAPIDJSON_SRC ...)`
+  runs unconditionally.
+* **(d) `src/sqlodbc/opensearch_semaphore.cpp` does not compile off Windows/macOS at
+  all.** Its constructor's member-initialiser list is empty on any other platform, so a
+  bare `:` is left before the constructor body; and `try_lock_for` calls
+  `sem_timedwait(&m_semaphore & ts)` where it means `sem_timedwait(&m_semaphore, &ts)`.
+  Guard the `:` with `#if defined(WIN32) || defined(__APPLE__)` and pass `&ts` as the
+  second argument (normalising `ts.tv_nsec` past a second into `tv_sec` while you are
+  there, or `sem_timedwait` answers `EINVAL`).
+
+Then build:
+
+```sh
+cd /tmp/dbs/opensearch
+# SIZEOF_VOID_P / SIZEOF_LONG / HAVE_SSIZE_T are hard-coded for __APPLE__ in
+# opensearch_odbc.h and #error out otherwise; the LP64 values are the Linux ones.
+DEFS="-DSIZEOF_VOID_P=8 -DSIZEOF_LONG=8 -DHAVE_SSIZE_T -DHAVE_LONG_LONG"
+cmake -S src-repo/src -B odbc-build -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_TESTS=OFF \
+  -DCMAKE_C_FLAGS="$DEFS" -DCMAKE_CXX_FLAGS="$DEFS" -DCMAKE_PREFIX_PATH=$PWD/aws-prefix
+cmake --build odbc-build -j6
+# -> src-repo/build/odbc/lib/libsqlodbc.so
+```
+
+Keep the driver and the AWS shared objects together and put that directory on
+`LD_LIBRARY_PATH`:
+
+```sh
+mkdir -p /tmp/dbs/opensearch/lib
+cp /tmp/dbs/opensearch/src-repo/build/odbc/lib/libsqlodbc.so /tmp/dbs/opensearch/lib/
+cp /tmp/dbs/opensearch/aws-prefix/lib/*.so* /tmp/dbs/opensearch/lib/
+export OPENSEARCH_ODBC_DRIVER=/tmp/dbs/opensearch/lib/libsqlodbc.so
+export LD_LIBRARY_PATH=/tmp/dbs/opensearch/lib:$LD_LIBRARY_PATH
+```
+
+The driver reports `SQL_DRIVER_NAME` as `libsqlodbc.dylib` whatever it was built as — a
+compiled-in constant, not the file it is loaded from.
+
+### Loading the data (the entry cannot)
+
+The SQL plugin is a query interface: `SELECT`, `SHOW` and `DESCRIBE` are the whole
+grammar — there is no `CREATE TABLE` and no `INSERT`, an index comes into existence when
+a document is written to it over the REST API — and the driver answers `SQLBindParameter`
+with `OpenSearch does not support parameters`. Either alone would make the entry
+`read_only=True`; together they leave no way at all to load a table over ODBC, so the
+three indices are written first:
+
+```sh
+python3 tests/compat/fixtures/load_opensearch.py        # http://127.0.0.1:19200
+# wrote adbc_t (2 docs), adbc_big (100000 docs) and adbc_search (3 docs) to ...
+```
+
+That script (stdlib only) creates each index with an explicit mapping — field types would
+otherwise be guessed from the first document, and a `null` in it maps nothing — and
+`_bulk`-writes `adbc_t` (the workload's two rows), `adbc_big` (100,000 `(a, b, c, d, e)`
+documents) and `adbc_search` (three documents with an analysed `text` field, for the
+full-text `extra` steps). It takes about two seconds and is idempotent: each document
+carries its own `_id`, so a second run replaces the same documents.
+
+It also raises one **cluster setting**, which is not about storage but about what SQL may
+return: `plugins.query.size_limit` (default 10,000) caps a result set whatever its
+`LIMIT` says, and the rows past it are dropped without a word — a 100,000-document
+`adbc_big` would otherwise read back as 10,000 rows and `check_big()` would fail on the
+count with nothing to explain it.
+
+Run the entry:
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py opensearch
+# opensearch PASS  (OpenSearch (via ODBC) 3.8.0)
+```
+
+### Driver quirk: the ANSI `SQLDriverConnect` cannot connect at all
+
+adbcbridge connects with the narrow `SQLDriverConnect`, which unixODBC hands straight to
+a driver that exports one. Against this driver that returned `SQL_ERROR` **with no
+diagnostic record at all**, while pyodbc — which calls `SQLDriverConnectW` — connected to
+the same server with the same connection string.
+
+The reason is in `CC_connect()` (`src/sqlodbc/opensearch_connection.cpp`):
+
+```c
+CC_determine_locale_encoding(self);      // hard-codes "SQL_ASCII" -- a TODO in the file
+if (CC_is_in_unicode_driver(self)) {     // set only by SQLDriverConnectW
+    if (!SQL_SUCCEEDED(CC_send_client_encoding(self, "UTF8"))) return 0;
+} else {
+    if (!SQL_SUCCEEDED(CC_send_client_encoding(self, self->locale_encoding))) return 0;
+}
+```
+
+`SetClientEncoding` accepts only the encodings in `m_supported_client_encodings`, and
+`SQL_ASCII` is not one of them — so on the ANSI path the connect always fails, and it
+fails through `CheckRetVal`'s `"Error from CC_Connect"`, which goes to `CC_log_error`
+rather than `CC_set_error`: hence `SQL_ERROR` with an empty diagnostic queue. A `dlopen`
+of the driver calling its own `SQLDriverConnect` directly reproduces it with no driver
+manager in the picture, which is what pinned it on the driver.
+
+No entry in `OdbcDetectQuirks` can fix this: a quirk is keyed off a *live connection*,
+and this is what fails to make one. adbcbridge therefore **retries a connect that failed
+with an empty diagnostic queue through `SQLDriverConnectW`** (`OdbcDriverConnectWide` in
+`src/odbc_driver.c`). The empty queue is the guard as much as the symptom: a connect that
+failed *and said why* — bad credentials, no such host — is a real answer and is left
+alone rather than attempted a second time, which against a locking-out server would cost
+a second bad login. Everything after the connect — `SQLExecDirect`, `SQLDescribeCol`,
+`SQLGetData`, `SQLColumns` — goes through the driver's ANSI entry points as before and
+works, emoji included.
+
+### Driver fix: `sem_init()` with the wrong initial count
+
+With the connection working, the first `conn.close()` segfaulted inside
+`OpenSearchResultQueue::clear()`. `opensearch_semaphore`'s POSIX branch does
+
+```c
+sem_init(&m_semaphore, 0, capacity);   // WIN32: CreateSemaphore(NULL, initial, capacity, ...)
+                                       // APPLE: dispatch_semaphore_create(initial)
+```
+
+— `capacity` where the other two platforms use `initial`. The result queue constructs
+`m_pop_semaphore(0, capacity)`, so on Linux the *pop* semaphore starts full instead of
+empty: `pop()` succeeds on an empty queue, `std::queue::pop()` on an empty queue corrupts
+it, and the next `clear()` deletes a garbage pointer. Fixing the argument (step (e)
+above) fixes the crash. It is a bug in the driver's Linux path rather than anything
+adbcbridge can work around, so it is a patch to the source you build.
+
+### Types: what the SQL plugin and the driver between them can express
+
+| flag | why |
+|---|---|
+| `read_only=True` | no DDL and no DML: the SQL plugin is query-only, and the driver has no `SQLBindParameter` — two independent reasons. The indices come from `fixtures/load_opensearch.py`. |
+| `params=False` | `SQLBindParameter` answers `OpenSearch does not support parameters`; the parameterised query runs with a literal. |
+| ``quote="`"`` | OpenSearch SQL quotes identifiers with the backtick. A `"..."` is not an identifier at all: `SELECT "a" FROM "adbc_big"` fails with ``no such index ["adbc_big"]``. Same fact as the `greptimedb` entry. |
+| `ts_text=True` | `date` is OpenSearch's one temporal field type; the SQL plugin types it `DATE` when the format is date-only and `TIMESTAMP` when it carries a time. The driver's `type_to_oid_map` (`opensearch_parse_result.cpp`) maps `date` — to `SQL_TYPE_TIMESTAMP` — but has no entry for `timestamp` at all, a type name the plugin grew after the driver's last release, and anything unmapped falls back to VARCHAR. So `d` arrives as a timestamp and `ts` as the text `2024-02-29 13:45:10.123`; the workload parses it and checks the value as usual. |
+| `binary_text="\\x0102"` | no binary type at all, so the two bytes are stored as text, exactly as for CrateDB and InfluxDB 3. |
+| `decimal_type="string"` | no `DECIMAL` either; `n` is a `keyword` field read back as its exact digits. |
+| `column_order=False` | `SQLColumns` reports an index's fields in mapping order, which is neither the workload's order nor alphabetical, so the catalog columns are compared as a set. |
+
+Everything else in the workload runs unchanged: `int64`, `double`, `string` (including
+`"héllo 🚀"` — the astral-plane emoji survives the round trip), `bool`, `DATE`, the
+all-NULL row (a field a document does not have simply is not there, which is how a NULL
+is spelled), the 100,000-row batched read, `GetObjects`, `GetTableSchema` and the error
+text (`no such index [adbc_no_such_table]`). The timestamp is millisecond-resolution —
+OpenSearch stores a date as epoch milliseconds — which the workload's `ts_us` default
+already allows.
+
+The `extra` steps run the thing only a search engine does: `MATCH` and `MATCH_QUERY`
+full-text predicates over `adbc_search`'s analysed `text` field, plus two aggregations
+pushed down to the engine over `adbc_big`.
+
+Fetch: **~120k rows/s** over the 100,000-document `adbc_big` (`bench/matrix_bench.py`).
+There is no ingest number — nothing can be written through this driver.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down opensearch
+# or, if started standalone:
+docker rm -f adbcbridge-opensearch
+```

@@ -425,6 +425,12 @@ struct OdbcStatement {
 /// Fetch the identifier quote character ('"' default, '\0' if none) into out[8].
 void OdbcQuoteChar(SQLHDBC hdbc, char* out);
 
+/// UTF-8 -> UTF-16 into `o`, NUL-terminating it; returns the units written.  A UTF-8
+/// byte never produces more than one UTF-16 unit (a 4-byte sequence becomes a two-unit
+/// surrogate pair), so `n + 1` units is always enough room.  Malformed input becomes
+/// U+FFFD.  Used for the wide parameter path and for the wide connect retry.
+int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n);
+
 AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt, struct AdbcError* error);
 
 /// Execute stmt->query once per bound row (parameters from bind_stream).

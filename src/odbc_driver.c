@@ -462,6 +462,46 @@ static void OdbcServerVersionString(SQLHDBC hdbc, char* out, size_t out_size) {
   OdbcServerScalarString(hdbc, "SELECT version()", out, out_size);
 }
 
+// Did the last call on this handle leave a diagnostic record?
+static bool OdbcHasDiag(SQLHDBC hdbc) {
+  SQLCHAR state[7] = {0}, msg[8] = {0};
+  SQLINTEGER native = 0;
+  SQLSMALLINT len = 0;
+  // A tiny message buffer is enough: only the record's existence is being asked about,
+  // and truncation answers SQL_SUCCESS_WITH_INFO, which still counts as one.  Reading a
+  // record does not clear the queue, so OdbcSetError still finds it afterwards.
+  return SQL_SUCCEEDED(
+      SQLGetDiagRec(SQL_HANDLE_DBC, hdbc, 1, state, &native, msg, sizeof(msg), &len));
+}
+
+// Retry a connect that failed *silently* through the driver's wide entry point.
+//
+// This driver connects with the narrow SQLDriverConnect, which unixODBC hands straight
+// to a driver that exports one.  A driver may implement only its wide connect properly:
+// the OpenSearch SQL ODBC driver's CC_connect() asks the server for the "SQL_ASCII"
+// client encoding unless SQLDriverConnectW marked the connection as running in the
+// Unicode driver -- and the only encoding it supports is UTF8 -- so its ANSI connect
+// always fails.  It fails through a path that logs rather than sets an error, so
+// SQL_ERROR comes back with an empty diagnostic queue.  A quirk cannot help: quirks are
+// detected on a live connection, and this is what fails to make one.
+//
+// The empty diagnostic queue is also the guard.  A connect that failed and said why --
+// bad credentials, no such host -- is a real answer and is left alone rather than
+// attempted a second time, which for a locking-out server would cost a second bad
+// login; only a driver that refused without a word is asked again the other way.
+//
+// `s` is the UTF-8 connection string; the caller keeps ownership.
+static SQLRETURN OdbcDriverConnectWide(SQLHDBC hdbc, const char* s) {
+  int64_t n = (int64_t)strlen(s);
+  SQLWCHAR* w = (SQLWCHAR*)malloc((size_t)(n + 1) * sizeof(SQLWCHAR));
+  if (!w) return SQL_ERROR;
+  int64_t units = OdbcUtf8ToUtf16Into(w, s, n);
+  SQLRETURN ret =
+      SQLDriverConnectW(hdbc, NULL, w, (SQLSMALLINT)units, NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
+  free(w);
+  return ret;
+}
+
 // Per-driver workarounds, keyed on SQL_DRIVER_NAME (or SQL_DBMS_NAME for a driver that
 // does not implement it), plus the capability probes the reader needs.
 static void OdbcDetectQuirks(struct OdbcConnection* conn) {
@@ -810,6 +850,9 @@ static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
 
   SQLRETURN ret = SQLDriverConnect(conn->hdbc, NULL, (SQLCHAR*)sb.buffer, SQL_NTS, NULL, 0, NULL,
                                    SQL_DRIVER_NOPROMPT);
+  if (!SQL_SUCCEEDED(ret) && !OdbcHasDiag(conn->hdbc)) {
+    ret = OdbcDriverConnectWide(conn->hdbc, sb.buffer);
+  }
   InternalAdbcStringBuilderReset(&sb);
   if (!SQL_SUCCEEDED(ret)) {
     AdbcStatusCode s = OdbcSetError(SQL_HANDLE_DBC, conn->hdbc, "SQLDriverConnect", error);
