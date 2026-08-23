@@ -185,6 +185,12 @@ Parameters are bound as a `RecordBatch`, one column per `?` and one row per
 execution: `statement.prepare()?; statement.bind(params)?;` then `execute()` or
 `execute_update()`. See `tests/rust/` for a runnable example.
 
+Options (set on the statement):
+
+| key | meaning |
+|---|---|
+| `adbc.odbc.array_binding` | `true` (default) to bind each Arrow batch as an ODBC parameter array, so bulk ingest and `executemany` issue one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE` fall back automatically. Reported rows-affected is identical in both modes. |
+
 ## Test
 
 ```sh

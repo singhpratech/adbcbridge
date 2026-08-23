@@ -518,6 +518,7 @@ static AdbcStatusCode OdbcStatementNew(struct AdbcConnection* connection,
   }
   stmt->conn = conn;
   stmt->reader_opts = conn->reader_opts;
+  stmt->array_binding = true;
   statement->private_data = stmt;
   return ADBC_STATUS_OK;
 }
@@ -580,6 +581,16 @@ static AdbcStatusCode OdbcStatementSetOption(struct AdbcStatement* statement, co
     return ADBC_STATUS_OK;
   } else if (strcmp(key, ADBC_INGEST_OPTION_TEMPORARY) == 0) {
     stmt->ingest_temporary = strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) {
+    if (strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) {  // "true"
+      stmt->array_binding = true;
+    } else if (strcmp(value, ADBC_OPTION_VALUE_DISABLED) == 0) {  // "false"
+      stmt->array_binding = false;
+    } else {
+      InternalAdbcSetError(error, "Invalid value \"%s\" for %s (expected true/false)", value, key);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
     return ADBC_STATUS_OK;
   }
   InternalAdbcSetError(error, "Unknown statement option %s", key);
@@ -739,6 +750,7 @@ static AdbcStatusCode OdbcStatementGetOptionInt(struct AdbcStatement* statement,
                                                 int64_t* value, struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) { *value = stmt->reader_opts.batch_size; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) { *value = stmt->array_binding ? 1 : 0; return ADBC_STATUS_OK; }
   InternalAdbcSetError(error, "Unknown statement option %s", key);
   return ADBC_STATUS_NOT_FOUND;
 }
