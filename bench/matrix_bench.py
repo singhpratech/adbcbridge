@@ -59,12 +59,22 @@ def connect(uri, cfg, autocommit=True, **db_kwargs):
     return conn
 
 
-def drop(cur, ident):
+def drop(cur, ident, reset=None):
     for t in (ident(TABLE), '"%s"' % TABLE, TABLE):
         try:
             cur.execute("DROP TABLE " + t)
+            return
         except Exception:
-            pass
+            if reset:  # a failed statement aborts the transaction on MonetDB/Postgres
+                reset()
+
+
+def quiet(fn):
+    """Call fn, ignoring errors such as DuckDB's 'no transaction is active' on rollback."""
+    try:
+        fn()
+    except Exception:
+        pass
 
 
 def table_ref(conn, ident):
@@ -115,13 +125,12 @@ def time_ingest(uri, cfg, ident, tbl, array_binding, autocommit=True):
 
 def time_pyodbc_ingest(uri, cfg, ident, tbl):
     import pyodbc
-    pc = pyodbc.connect(uri, autocommit=False)
+    pc = pyodbc.connect(uri, autocommit=True)  # DDL first; some drivers' SQLEndTran is a no-op
     try:
         for sql in cfg.get("setup", []):
             pc.execute(sql)
         cur = pc.cursor()
         drop(cur, ident)
-        pc.commit()
         # Let adbcbridge create the table so the DDL is identical, then time only the rows.
         conn = connect(uri, cfg, **{"adbc.odbc.delegate": "never"})
         with conn.cursor() as c:
@@ -129,8 +138,10 @@ def time_pyodbc_ingest(uri, cfg, ident, tbl):
         conn.close()
         rows = list(zip(*[tbl.column(c).to_pylist() for c in COLS]))
         sql = "INSERT INTO %s VALUES (?, ?, ?, ?)" % table_ref(pc, ident)
+        pc.autocommit = bool(os.environ.get("ADBC_BENCH_PYODBC_AUTOCOMMIT"))
+        fast = not os.environ.get("ADBC_BENCH_PYODBC_NO_FAST")
         try:
-            cur.fast_executemany = True
+            cur.fast_executemany = fast
         except Exception:
             pass
         t0 = time.perf_counter()
@@ -138,12 +149,20 @@ def time_pyodbc_ingest(uri, cfg, ident, tbl):
             cur.executemany(sql, rows)
         except Exception:
             cur.fast_executemany = False
-            pc.rollback()
+            quiet(pc.rollback)
             t0 = time.perf_counter()
             cur.executemany(sql, rows)
-        pc.commit()
+        if not pc.autocommit:
+            pc.commit()
         dt = time.perf_counter() - t0
-        return dict(secs=dt, fast=bool(cur.fast_executemany))
+        conn = connect(uri, cfg, **{"adbc.odbc.delegate": "never"})
+        try:
+            got = count(conn, ident)
+        finally:
+            conn.close()
+        if got != tbl.num_rows:
+            return dict(error="wrong row count %d != %d" % (got, tbl.num_rows))
+        return dict(secs=dt, fast=bool(cur.fast_executemany), autocommit=pc.autocommit)
     finally:
         pc.close()
 
@@ -200,13 +219,27 @@ def in_child(fn_name, name, uri):
     os.environ[name.upper() + "_CONN"] = uri  # the matrix's temp dir is per-process
     cmd = [sys.executable, __file__, "--rows", str(args.rows), "--fetch-rows", str(args.fetch_rows),
            "--reps", str(args.reps), "--_child", fn_name, name]
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=args.pyodbc_timeout)
-    except subprocess.TimeoutExpired:
-        return dict(error="pyodbc timed out after %ds" % args.pyodbc_timeout)
-    if p.returncode != 0:
-        return dict(error="pyodbc child exited %d: %s" % (p.returncode, (p.stderr.strip().splitlines() or ["?"])[-1][:100]))
-    return json.loads(p.stdout.strip().splitlines()[-1])
+    # pyodbc's fast_executemany (its own parameter arrays) segfaults against sqliteodbc
+    # and the Db2 clidriver and trips MonetDB's driver, and MonetDB's SQLEndTran is a
+    # no-op under pyodbc: fall back to plain executemany, then to autocommit per row,
+    # so the column shows pyodbc as it actually works against that driver.
+    stages = [{}] if fn_name != "ingest" else [
+        {}, {"ADBC_BENCH_PYODBC_NO_FAST": "1"},
+        {"ADBC_BENCH_PYODBC_NO_FAST": "1", "ADBC_BENCH_PYODBC_AUTOCOMMIT": "1"}]
+    res = None
+    for extra in stages:
+        env = dict(os.environ, **extra)
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=args.pyodbc_timeout, env=env)
+        except subprocess.TimeoutExpired:
+            return dict(error="pyodbc timed out after %ds" % args.pyodbc_timeout)
+        if p.returncode != 0:
+            res = dict(error="pyodbc child exited %d: %s" % (p.returncode, (p.stderr.strip().splitlines() or ["?"])[-1][:100]))
+            continue
+        res = json.loads(p.stdout.strip().splitlines()[-1])
+        if "error" not in res:
+            return res
+    return res
 
 
 def attempt(fn, *a, **kw):
