@@ -131,3 +131,15 @@ services:
     profiles: ["extra"]
     environment: { DOLT_ROOT_HOST: "%" }
     ports: ["127.0.0.1:13310:3306"]
+  # Azure SQL Edge: the SQL Server 2022 engine in a smaller, separately shipped image,
+  # driven by the same msodbcsql 18 as the `mssql` service.  In the "extra" profile, so
+  # a plain `up -d` leaves it alone (it would otherwise run a second SQL Server engine
+  # alongside `mssql` for no extra coverage); start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d azuresqledge
+  # This image takes ACCEPT_EULA=1, not the "Y" the mssql image wants.
+  azuresqledge:
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    profiles: ["extra"]
+    environment: { ACCEPT_EULA: "1", MSSQL_SA_PASSWORD: "Adbc!Bridge2026" }
+    mem_limit: 2g
+    ports: ["127.0.0.1:14332:1433"]

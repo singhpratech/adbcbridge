@@ -1232,6 +1232,65 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down questdb
 docker stop adbcbridge-questdb && docker rm adbcbridge-questdb
 ```
 
+## Azure SQL Edge 16.0
+
+Azure SQL Edge is the SQL Server 2022 engine shipped as a smaller container image for
+edge deployments, so Microsoft's `msodbcsql 18` — the driver the `mssql` entry uses —
+drives it unchanged. It is a separate entry rather than a note on `mssql` because it is
+a separately built engine with a trimmed feature set; running the workload against it
+directly is what shows the ODBC path is unaffected.
+
+### Get the ODBC driver without root
+
+The same driver as the `mssql` entry. If `msodbcsql18` is already installed system-wide
+just point at it; otherwise unpack the Debian package anywhere:
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+# msodbcsql18_*.deb from packages.microsoft.com (ACCEPT_EULA=Y is baked into the .deb)
+dpkg-deb -x msodbcsql18_*.deb msodbc
+export AZURESQLEDGE_ODBC_DRIVER=$PWD/msodbc/opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.6.so.2.1
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d azuresqledge
+# or standalone:
+docker run -d --name adbcbridge-azuresqledge --memory=2g \
+  -e ACCEPT_EULA=1 -e MSSQL_SA_PASSWORD="Adbc!Bridge2026" \
+  -p 127.0.0.1:14332:1433 mcr.microsoft.com/azure-sql-edge:latest
+```
+
+Two differences from the `mssql` image worth noting: this one wants `ACCEPT_EULA=1`
+(not `Y`), and TDS is published on `14332` so it can run alongside the `mssql` service
+on `14331`. It takes about half a minute to come up and is ready when the log says so:
+
+```sh
+docker logs adbcbridge-azuresqledge 2>&1 | grep -q "ready for client connections"
+```
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py azuresqledge
+# azuresqledge PASS  (Microsoft SQL Server (via ODBC) 16.00.5100)
+```
+
+### Quirks: none
+
+The whole workload passes with no tolerance flags and no `OdbcDetectQuirks` entry: `INT`,
+`FLOAT`, `NVARCHAR(50)`, `VARBINARY(10)`, `DATE`, `DATETIME2(6)`, `DECIMAL(10,3)` and
+`BIT` all round-trip, including the astral-plane emoji, microsecond timestamps and NULL
+parameters, and bulk ingest reports its row counts.
+
+Note that Azure SQL Edge is indistinguishable from SQL Server through ODBC: it reports
+`SQL_DBMS_NAME` "Microsoft SQL Server" and `SQL_DBMS_VER` `16.00.5100`, the same pair a
+real SQL Server 2022 gives, so no quirk could be keyed on it even if one were needed.
+`SELECT @@VERSION` is what tells them apart — it names "Microsoft Azure SQL Edge
+Developer (RTM)".
+
 ## Microsoft Access (MDB Tools)
 
 No server: MDB Tools reads an Access `.mdb`/`.accdb` file directly. Getting the driver

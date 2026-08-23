@@ -38,6 +38,7 @@ from the second table to the first.
 | TiDB 7.5 | MySQL Connector/ODBC (MySQL wire) | PASS | tarball driver needs `PLUGIN_DIR` for `mysql_native_password` |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
 | Databend | MySQL Connector/ODBC (MySQL wire) | PASS | no prepared statements (`NO_SSPS=1`); `_binary` literals; MySQL type names in ingest DDL |
+| Azure SQL Edge 16.0 | msodbcsql 18 | PASS | SQL Server 2022 engine; no quirks |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 
 ## Driver available, free server available — queued for verification
@@ -54,7 +55,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | MatrixOne | MySQL Connector/ODBC | `matrixorigin/matrixone` | queued |
 | MariaDB ColumnStore | MariaDB Connector/ODBC | `mariadb/columnstore` | queued |
 | MongoDB (BI Connector) | MySQL Connector/ODBC | `mongo` + `mongosqld` | queued |
-| Azure SQL Edge | msodbcsql | `mcr.microsoft.com/azure-sql-edge` | queued |
 | IBM Informix | Db2 clidriver (DRDA) | `icr.io/informix/informix-developer-database` | queued |
 | OpenLink Virtuoso | virtodbc | `openlink/virtuoso-opensource-7` | queued |
 | Apache Ignite | ignite-odbc | `apacheignite/ignite` | queued |
