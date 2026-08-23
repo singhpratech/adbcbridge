@@ -700,6 +700,12 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
         *supported = false;
         return;
       }
+      if (opts->no_timestamp_param_arrays) {
+        // The driver's inlined form of a timestamp parameter is one this server has no
+        // type for (Spanner: '...'::timestamp); this batch goes row-at-a-time instead.
+        *supported = false;
+        return;
+      }
       if (opts->timestamp_as_text) {  // see SlotFromArrowValue
         p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR;
         p->elem_size = ARRAY_BIND_TIMESTAMP_CHARS;
@@ -2510,7 +2516,8 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
       }
     }
     // ddl_extra_column / ddl_table_options: a column and a table option this server
-    // requires of every table (GreptimeDB's TIME INDEX); see odbc_internal.h.
+    // requires of every table (GreptimeDB's TIME INDEX, YDB's and Spanner's mandatory
+    // PRIMARY KEY); see odbc_internal.h.
     if (conn->reader_opts.ddl_extra_column) {
       InternalAdbcStringBuilderAppend(&sb, "%s%s", schema.n_children ? ", " : "",
                                       conn->reader_opts.ddl_extra_column);

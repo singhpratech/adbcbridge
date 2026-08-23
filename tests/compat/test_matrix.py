@@ -35,6 +35,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, OCEANBASE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DREMIO_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, TDENGINE_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SPANNER_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -791,6 +792,64 @@ DBS = {
         # values actually in the result set (3 for the 12.345 stored here; 6 -- psqlodbc's
         # default -- for an empty result).
         decimal_type="decimal128(28, 3)"),
+    "spanner": dict(
+        # Google Cloud Spanner, reached through PGAdapter -- the PostgreSQL-wire proxy
+        # Google ships for it -- in front of the Spanner emulator, so psqlodbc drives it
+        # (PGAdapter announces itself as PostgreSQL 14.1).  Only the wire protocol is
+        # PostgreSQL's; the schema is Spanner's, and three things about it shape the DDL
+        # below.  Every Spanner table must have a PRIMARY KEY ("Primary key must be
+        # defined for table"), hence the key on `i`.  There is no TIMESTAMP WITHOUT TIME
+        # ZONE ("Type <timestamp> is not supported") -- Spanner's one timestamp type is
+        # UTC-based and spelled timestamptz.  And NUMERIC takes no modifier ("Type
+        # modifier is not supported for type <numeric>"): Spanner has a single numeric
+        # type, whatever precision and scale are asked for.
+        #   Two more things about Spanner are the driver's business rather than this
+        # entry's, both keyed on a setting only PGAdapter answers (version() says nothing
+        # about Spanner) -- see OdbcDetectQuirks: psqlodbc inlines a parameter array's
+        # timestamps as '...'::timestamp, which Spanner has no type for, and the
+        # CREATE TABLE that bulk ingest generates needs a primary key of its own.
+        env="SPANNER_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=15442;Database=test-database;Uid=adbc;",
+        ddl="CREATE TABLE adbc_t (i bigint PRIMARY KEY, f double precision, s varchar(50),"
+            " b bytea, d date, ts timestamptz, n numeric, bo bool)",
+        # Spanner has no 32-bit integer type at all ("Type <int4> is not supported; use
+        # bigint or int8 instead"), and psqlodbc's SQLGetTypeInfo names int4 for one, so
+        # an int32 column is sent as int64 -- which is what Spanner would store anyway.
+        # (The rest of the generated ingest DDL needs no help: psqlodbc's own names
+        # bytea, timestamptz, numeric, date, float8 and text are all Spanner types, so
+        # `ansi_ddl_type_names` would make things worse rather than better here.)
+        ingest_types={pa.int32(): pa.int64()},
+        # Spanner's NUMERIC is one fixed type and it does not report a precision over
+        # the wire, so psqlodbc falls back to its own maximum (28) with the scale of the
+        # values in the result set (3 for the 12.345 stored here).
+        decimal_type="decimal128(28, 3)",
+        # The standard workload alone would look much like `postgres`, so the `extra`
+        # steps exercise the reason to run Spanner: an INTERLEAVED table, where the child
+        # rows are stored physically inside the parent's key range rather than in a table
+        # of their own.  They ingest through ADBC into both tables and read back across
+        # them.  The child's key must be prefixed by the parent's, so "a" (unique in
+        # EXTRA_ROWS) is the parent key and ("a", "b") the child's.
+        extra=[
+            ('DROP TABLE IF EXISTS "adbc_child{sfx}"', None),
+            ('DROP TABLE IF EXISTS "adbc_parent{sfx}"', None),
+            # Column names/types match EXTRA_ROWS: the ingests below append into these.
+            ('CREATE TABLE "adbc_parent{sfx}" ("a" bigint PRIMARY KEY, "b" varchar(20),'
+             ' "c" double precision, "d" date, "e" bool)', None),
+            ('CREATE TABLE "adbc_child{sfx}" ("a" bigint NOT NULL, "b" varchar(20) NOT NULL,'
+             ' "c" double precision, "d" date, "e" bool, PRIMARY KEY ("a", "b"))'
+             ' INTERLEAVE IN PARENT "adbc_parent{sfx}" ON DELETE CASCADE', None),
+            # Spanner really owns the child as an interleaved table, not a plain one.
+            ("SELECT parent_table_name = 'adbc_parent{sfx}' FROM information_schema.tables"
+             " WHERE table_name = 'adbc_child{sfx}'", (True,)),
+            (("adbc_parent{sfx}", EXTRA_ROWS), (4,)),   # bulk ingest into the parent
+            # An interleaved row may only be written under an existing parent row, so
+            # this ingest passes only because the one above really landed.
+            (("adbc_child{sfx}", EXTRA_ROWS), (4,)),
+            ('SELECT count(*) FROM "adbc_child{sfx}"', (4,)),
+            ('SELECT p."b", c."c" FROM "adbc_parent{sfx}" p JOIN "adbc_child{sfx}" c'
+             ' ON p."a" = c."a" WHERE p."a" = 3', ("r", None)),
+        ],
+    ),
     "firebird": dict(
         env="FIREBIRD_ODBC_DRIVER",
         conn="Driver={drv};DBNAME=inet://127.0.0.1:13050//var/lib/firebird/data/adbc.fdb;UID=adbc;PWD=adbc;CHARSET=UTF8;",
@@ -1430,6 +1489,13 @@ def run(name, cfg):
         # value is still the right one, so parse it and check it the same way.
         if cfg.get("ts_text") and isinstance(ts, str):
             ts = datetime.datetime.fromisoformat(ts)
+        # A server whose only timestamp type carries a zone (Spanner: there is no
+        # TIMESTAMP WITHOUT TIME ZONE) describes the column as one, so the value arrives
+        # as an aware datetime.  The ODBC driver hands over the wall clock the server
+        # rendered in the session's zone -- the one that was stored -- so compare that.
+        # After the ts_text parse above, so a text timestamp is a datetime by here.
+        if ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
         assert ts.replace(microsecond=0) == datetime.datetime(2024, 2, 29, 13, 45, 10), ts
         # ts_us: servers whose TIMESTAMP is coarser than a microsecond (Firebird: 1/10000 s)
         assert ts.microsecond in cfg.get("ts_us", (123456, 123000)), ts
