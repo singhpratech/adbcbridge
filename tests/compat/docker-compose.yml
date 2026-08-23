@@ -444,3 +444,33 @@ services:
       --enable-feature-flag enable_temp_tables
     mem_limit: 3g
     ports: ["127.0.0.1:15444:5432"]
+
+  # Vertica: a columnar analytics warehouse, reached over its own native protocol on 5433
+  # with its own ODBC client driver (not a PostgreSQL wire, despite the port).  In the
+  # "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d vertica
+  #   tests/compat/fixtures/setup_vertica.sh
+  # The second command is not optional: this image ships a server with no database and no
+  # way to create one on its own -- it is built for the VerticaDB Kubernetes operator,
+  # which drives `vcluster` from outside the pod -- so the entrypoint here only holds the
+  # container open and the fixture script does the four steps that make a database.  See
+  # the comments there and in tests/compat/README.md.
+  # 25.3 rather than latest: Vertica 26.1 dropped Community Edition, and the CE licence
+  # this image ships is refused outright by a 26.x server ("CE license is deprecated and
+  # no longer supported"), so the catalog bootstrap fails.
+  # user 0: the image's /etc/passwd has no `dbadmin` account even though every file it
+  # ships is owned by uid 997, so the fixture script has to add one back; the server
+  # itself then runs as dbadmin.  nofile 65536: Vertica's own start-up check refuses to
+  # run below 32768 open file handles ("Host does not meet minimum requirements").
+  # 15433 is free here -- the `yugabyte` entry uses it too, but neither is in the default
+  # profile and they are never up at the same time.
+  vertica:
+    profiles: ["extra"]
+    image: opentext/vertica-k8s:25.3.0-8-minimal
+    user: "0"
+    entrypoint: ["/bin/bash", "-c", "sleep infinity"]
+    ulimits:
+      nofile: 65536
+      nproc: 8192
+    mem_limit: 4g
+    ports: ["127.0.0.1:15433:5433"]

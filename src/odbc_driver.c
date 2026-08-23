@@ -723,6 +723,15 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // the parameter-status array -- seven bound rows insert one, silently.
     conn->reader_opts.no_param_arrays = true;
   }
+  if (strstr((const char*)name, "verticaodbc")) {
+    // The second driver whose parameter arrays beat a multi-row INSERT (after maodbc):
+    // Vertica's own client driver turns a bound array into one native bulk load, while a
+    // multi-row INSERT stays one row-store insert per statement -- which a column store
+    // is the worst case for.  10,000-row ingests here: arrays 148-163k rows/s against
+    // 17-20k for the multi-row form, so keep arrays ahead of it.  (The multi-row form is
+    // still what runs when the caller turns array binding off.)
+    conn->reader_opts.prefer_param_arrays = true;
+  }
   if (strstr((const char*)name, "psqlodbc")) {
     // psqlodbc is the driver for every PostgreSQL-wire server (PostgreSQL itself,
     // CockroachDB, YugabyteDB, TimescaleDB, QuestDB, ...), so its name says nothing
