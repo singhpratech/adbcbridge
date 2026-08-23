@@ -330,6 +330,37 @@ struct OdbcReaderOptions {
   // turns a bound array into one COM_STMT_BULK_EXECUTE, and Vertica's own client driver,
   // which turns one into a native bulk load.
   bool prefer_param_arrays;
+  // Driver quirk: spell an unbounded Arrow string column as the driver's widest VARCHAR
+  // in generated ingest DDL, rather than as its SQL_LONGVARCHAR type.
+  //
+  // Set for IBM's CLI driver, whose SQL_LONGVARCHAR is Db2's LONG VARCHAR -- a type IBM
+  // deprecated in Db2 9 and never gave a bulk-insert path.  Writing 20,000 rows of
+  // (INTEGER, DOUBLE, <string>, DATE) into one, medians of 3 straight through the ODBC
+  // API with no adbcbridge in the way: 737 rows/s as LONG VARCHAR against 516,459 as
+  // VARCHAR(32672), 429,865 as VARCHAR(20) and 402,356 as CLOB(1M).  Every other string
+  // type Db2 has is within 25% of the fastest; LONG VARCHAR alone is 700x off it, and
+  // it is what SQLGetTypeInfo(SQL_LONGVARCHAR) names, so the generated DDL picked it.
+  //
+  // The width is the maximum the driver reports for SQL_VARCHAR (32,672 bytes on Db2),
+  // so the column still holds all but the last 28 bytes of what LONG VARCHAR could, and
+  // -- unlike LONG VARCHAR, which Db2 bars from indexes, ORDER BY, GROUP BY and
+  // DISTINCT -- an ordinary VARCHAR column can be used for all of them.
+  bool ddl_string_as_max_varchar;
+  // Driver quirk: the literal DDL type to give an unbounded Arrow string column, for a
+  // server whose SQL_LONGVARCHAR type is one it barely supports and whose replacement
+  // cannot be spelled from SQLGetTypeInfo (its width is the word "MAX", not a number).
+  //
+  // Set for msodbcsql, whose SQL_LONGVARCHAR is SQL Server's TEXT.  Microsoft deprecated
+  // TEXT, NTEXT and IMAGE in SQL Server 2005 and documents NVARCHAR(MAX) as the
+  // replacement, and a TEXT column is close to unusable: ORDER BY and GROUP BY on one
+  // are error 306, SELECT DISTINCT is 421, and even `WHERE s = 'a'` is 402, "the data
+  // types text and varchar are incompatible".  So a table adbcbridge created could not
+  // be sorted, grouped, de-duplicated or filtered on its own string column.
+  // NVARCHAR(MAX) holds the same 2 GB, is Unicode rather than the database's code page,
+  // and is faster both ways: 20,000-row ingest 172,081 rows/s as TEXT against 233,303 as
+  // NVARCHAR(MAX), and a 100,000-row read 859,215 rows/s against 3,172,747 (medians of
+  // 5, interleaved).
+  const char* ddl_string_type_name;
   // SQL_MAX_STATEMENT_LEN, in bytes; 0 when the driver will not say.
   int64_t max_statement_len;
   // Rowsets kept in flight on a background fetch thread (0 = off, the default).  See

@@ -24,9 +24,9 @@ from the second table to the first.
 | MariaDB ColumnStore 23.02 | MariaDB Connector/ODBC (MariaDB wire) | PASS | columnar engine inside MariaDB 11.1: standard-SQL ingest DDL (`LONG VARCHAR`/`BIT` rejected), no `VARBINARY` column type; needs `columnstore_cache_inserts=ON` (bound-parameter inserts are ~2 rows/s without it) and `provision` to start the backend processes; ingest 14.9k rows/s (54.6k with array binding), fetch 1.41M rows/s |
 | MySQL 8.4 | MySQL Connector/ODBC | PASS | driver executes parameter arrays row by row |
 | Dolt 2.3.1 (MySQL 8.0.33 wire) | MySQL Connector/ODBC | PASS | `mysql_native_password` only, so the connector needs `PLUGIN_DIR` |
-| SQL Server 2022 | msodbcsql 18 | PASS | |
+| SQL Server 2022 | msodbcsql 18 | PASS | ingest DDL spells an Arrow string `NVARCHAR(MAX)`, not the deprecated `TEXT` the driver names (unsortable, not even comparable) |
 | Oracle 23ai Free | Instant Client ODBC | PASS | no `SQL_C_SBIGINT` |
-| IBM Db2 12.1 | Db2 clidriver | PASS | 32-bit `SQLLEN` |
+| IBM Db2 12.1 | Db2 clidriver | PASS | 32-bit `SQLLEN`; ingest DDL spells an Arrow string as the widest `VARCHAR`, not the `LONG VARCHAR` the driver names (deprecated, unsortable, ~700x slower to write) |
 | ClickHouse 26 | clickhouse-odbc | PASS | one HTTP request per row on ingest |
 | CockroachDB 26 | psqlodbc (PG wire) | PASS | |
 | Percona Server 8.4 | MySQL Connector/ODBC (MySQL wire) | PASS | drop-in MySQL fork: same entry as MySQL, no quirks; ingest 21.1k rows/s, fetch 1.18M rows/s |
@@ -40,7 +40,7 @@ from the second table to the first.
 | TiDB 7.5 | MySQL Connector/ODBC (MySQL wire) | PASS | tarball driver needs `PLUGIN_DIR` for `mysql_native_password` |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
 | Databend | MySQL Connector/ODBC (MySQL wire) | PASS | no prepared statements (`NO_SSPS=1`); `_binary` literals; MySQL type names in ingest DDL |
-| Azure SQL Edge 16.0 | msodbcsql 18 | PASS | SQL Server 2022 engine; no quirks |
+| Azure SQL Edge 16.0 | msodbcsql 18 | PASS | SQL Server 2022 engine; same path as SQL Server 2022, `TEXT` ingest-DDL quirk included |
 | OpenLink Virtuoso 7.2 | Virtuoso ODBC (`virtodbc.so`) | PASS | ODBC-native server; no `SQL_C_WCHAR` (UTF-8 narrow path), no `SQL_C_SBIGINT`, date parameter arrays repeat row 0; no `BOOLEAN` type; ingest 11.9k rows/s, fetch 1.04M rows/s |
 | openGauss 6.0 | psqlodbc (PG wire) | PASS | no quirks: a PostgreSQL 9.2 fork, driven by the `postgres` entry's types unchanged; server-side setup only (`CAP_SYS_NICE` for the MOT engine's `mbind()`, `max_process_memory` >= 2 GB, and a role created after start-up because the initial user cannot log in remotely); ingest 9.5k rows/s (36.9k with array binding), fetch 1.30M rows/s |
 | IBM Informix 15.0.1 | Db2 clidriver (DRDA) | PASS | same `libdb2.so` as Db2, keyed on `SQL_DBMS_NAME`: no `SQL_C_WCHAR` params (UTF-8 narrow path), no `SQL_C_BIT` params; 32-bit `SQLLEN`; `BYTE` described as IBM's `SQL_BLOB` (-98); server side: `GL_USEGLU=1` for 4-byte UTF-8, `DELIMIDENT=y` for quoted identifiers, `FRACTION(5)` timestamps; ingest 15.6k rows/s (130k array), fetch 751k rows/s |

@@ -296,7 +296,10 @@ SQLite where `odbc-api` did 2.04 M — because of one column.
 
 An Arrow `utf8` column has no length, so `adbc_ingest` creates the widest text
 type the database has: `longvarchar` on SQLite, `TEXT`/`LONGTEXT` on
-MySQL/MariaDB, `VARCHAR(MAX)` on SQL Server. Reading one back, `SQLDescribeCol`
+MySQL/MariaDB, `NVARCHAR(MAX)` on SQL Server (see [Ingest DDL: two servers where
+the widest text type is a trap](#ingest-ddl-two-servers-where-the-widest-text-type-is-a-trap)
+for why that one and Db2's are not simply whatever `SQLGetTypeInfo` names).
+Reading one back, `SQLDescribeCol`
 answers with what the *type* could hold rather than with anything the table
 holds:
 
@@ -938,6 +941,200 @@ This is why prefetch is off by default and why partitioning is the mechanism tha
 the result. SQL Server was not measured: the only SQL Server container on this host
 belongs to another workload and starting a second one was out of scope.
 
+## SQL Server's `VARCHAR(MAX)`: the cliff is real, and it is small
+
+The [`TEXT` column cliff](#the-text-column-cliff) above closes wherever a truncated bound
+value can be re-read. msodbcsql 18 was the one driver left offering neither repair route,
+so a `VARCHAR(MAX)` column still costs the whole result set its block cursor. This
+section is what a standalone C probe against msodbcsql 18.06.0002 / SQL Server 2022
+16.00.4250 found when asked what the driver *reports* and, separately, what it *does*.
+
+### What it reports
+
+```
+SQL_GETDATA_EXTENSIONS              = 0x00000004
+    ANY_COLUMN=0 ANY_ORDER=0 BLOCK=1 BOUND=0 OUTPUT_PARAMS=0
+SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1 = 0x0000e001   ABSOLUTE=0
+SQL_STATIC_CURSOR_ATTRIBUTES1       = 0x0008124f   ABSOLUTE=1
+SQL_DYNAMIC_CURSOR_ATTRIBUTES1      = 0x0001fe47   ABSOLUTE=1
+```
+
+No `SQL_GD_BOUND`, and no `SQL_CA1_ABSOLUTE` on the forward-only cursor the reader uses.
+Both repair routes end in `SQLGetData` on a bound column, so both are ruled out on paper.
+
+### What it does
+
+The probe ran `SQLGetData` on a bound column and `SQLFetchScroll(SQL_FETCH_ABSOLUTE)`
+under all four cursor types crossed with all four `SQL_ATTR_CONCURRENCY` values, and
+again with `SQL_ATTR_CURSOR_SCROLLABLE` set. The driver does not lie in either direction:
+
+* `SQLGetData` on a **bound** column fails in every one of the sixteen combinations —
+  `HY109 Invalid cursor position` on a forward-only cursor (where `SQLSetPos` itself is
+  refused), `07009 Invalid Descriptor Index` on STATIC, DYNAMIC and KEYSET, where
+  `SQLSetPos(n, SQL_POSITION)` succeeds but the column being bound makes `SQLGetData`
+  illegal. That is `SQL_GD_BOUND=0` honoured exactly.
+* `SQLFetchScroll(SQL_FETCH_ABSOLUTE)` is refused on a forward-only cursor
+  (`HY106 Fetch type out of range`, and from the server "the fetch type absolute cannot
+  be used with forward only cursors") and **works correctly** on STATIC, DYNAMIC and
+  KEYSET: it returns the right row, and a plain `SQLFetch` afterwards resumes at the
+  right place. `SQL_ATTR_CURSOR_SCROLLABLE` changes nothing that the cursor type has not
+  already decided. `STATIC` with any concurrency other than `SQL_CONCUR_READ_ONLY` is
+  `HYC00 Optional feature not implemented`.
+* msodbcsql 18 has no `SQL_SOPT_SS_*` statement attribute and no connection keyword that
+  bears on this; `SQL_SOPT_SS_CURSOR_OPTIONS` selects fast-forward-only server cursors,
+  which are forward-only and so cannot reposition either.
+
+So a repair route exists, but only behind a scrollable cursor — and that is the trap.
+
+### Why the repair costs more than the cliff
+
+A scrollable cursor is a **server** cursor. It has to be asked for before `SQLExecute`,
+and the moment SQL Server opens one the read stops being a streamed default result set.
+Reading 100,000 rows of `(int, float, VARCHAR(50), date, VARCHAR(MAX))`, medians of 5
+straight through the ODBC API:
+
+| how the wide column is read | median | rows/s |
+|---|---:|---:|
+| forward-only, rowset 1, `SQLGetData` (**what the reader does today**) | 0.042 s | 2,353,434 |
+| static server cursor, rowset 1024, bound at 2 KiB | 0.171 s | 583,401 |
+| static server cursor, rowset 1024, `SQLSetPos` + `SQLGetData` per row | 6.645 s | 15,050 |
+| static server cursor, rowset 1, `SQLGetData` per row | 12.784 s | 7,822 |
+
+The cheapest repair is **4x slower** than the cliff it repairs, and the one that keeps
+`SQLGetData` is 150x slower. The third route — re-reading just the wide column through a
+second statement keyed on the row's identity — cannot be done without changing results:
+an arbitrary `SELECT` has no key to key on, and msodbcsql reports no bookmark support
+(`SQL_CA1_BOOKMARK=0`) on any cursor a forward-only read could use.
+
+### And the cliff is far smaller than the fetch count suggests
+
+The "100,000 `SQLFetch` calls instead of 13" framing counts ODBC calls, not round trips.
+It matters **only if the rowset size is set before the cursor is opened**, which the
+reader does not do: `ReaderBind()` runs on the first batch, after `SQLExecDirect`, because
+it needs `SQLDescribeCol` first. That ordering turns out to decide everything. Counting
+`sys.dm_exec_connections.num_reads` and `sys.dm_exec_cursors` around a 100,000-row read:
+
+| `SQL_ATTR_ROW_ARRAY_SIZE` set… | fetches | server reads | server cursors | median |
+|---|---:|---:|---:|---:|
+| …before `SQLExecDirect`, rowset 1 | 100,000 | 1 | 0 | 0.028 s |
+| …before `SQLExecDirect`, rowset 2 | 50,000 | 50,002 | 1 | 4.332 s |
+| …before `SQLExecDirect`, rowset 1024 | 98 | 99 | 1 | 0.114 s |
+| …after `SQLExecDirect`, rowset 1 | 100,000 | — | — | 0.026 s |
+| …after `SQLExecDirect`, rowset 1024 | 98 | — | — | 0.022 s |
+
+Asking for a rowset **before** execution makes msodbcsql open a server cursor and pay one
+round trip per rowset — 50,002 of them at rowset 2. Asking **after** keeps the default
+result set: one server read for the whole table, and every rowset size from 1 to 8192
+lands within noise of 4.6 M rows/s. Dropping to rowset 1 on this driver therefore costs
+the *ODBC call overhead* and nothing else.
+
+What the wide column actually costs, end to end through `fetch_arrow_table()`, 100,000
+rows, medians of 7 (host load average 3.9):
+
+| table | median | rows/s |
+|---|---:|---:|
+| `(int, float, VARCHAR(50), date)` | 0.0219 s | 4,556,557 |
+| the same plus `VARCHAR(50)` holding the same short values | 0.0305 s | 3,283,791 |
+| the same plus `VARCHAR(MAX)` holding the same short values | 0.0516 s | 1,938,393 |
+
+The honest gap is the last two rows — 0.0305 s against 0.0516 s — because the first row
+is reading one column fewer. At the ODBC layer the whole of what a perfect fix could
+recover is 0.042 s → 0.034 s, **19%**, of which only 10% is the block rowset and the rest
+is binding instead of `SQLGetData`.
+
+**Conclusion: no change.** The cliff is structural on msodbcsql — the driver genuinely
+offers no repair route on a forward-only cursor, and the probe confirms it does what it
+says. It is also worth 19% rather than the 100x the fetch count implies, and every repair
+route measured costs between 4x and 150x more than that.
+
+## Ingest DDL: two servers where the widest text type is a trap
+
+Chasing why Db2 bulk ingest ran at half of `odbc-api`'s rate turned up something else
+entirely, and the same defect on SQL Server. An Arrow `utf8` column has no width, so
+generated ingest DDL asks the driver for its `SQL_LONGVARCHAR` type. On two servers that
+type is one the server barely supports.
+
+### Db2: `LONG VARCHAR`
+
+`SQLGetTypeInfo(SQL_LONGVARCHAR)` on IBM's clidriver answers **`LONG VARCHAR`**, which IBM
+deprecated in Db2 9. Writing 20,000 rows of `(INTEGER, DOUBLE, <string>, DATE)` straight
+through the ODBC API with no adbcbridge in the way, medians of 3 — this is the *server*,
+not the bridge:
+
+| `txt` column type | multi-row `VALUES`, K=500 | parameter arrays, 8192 |
+|---|---:|---:|
+| `VARCHAR(20)` | 429,865 rows/s | 432,857 rows/s |
+| `VARCHAR(4000)` | 448,002 rows/s | 376,764 rows/s |
+| `VARCHAR(32672)` | **516,459 rows/s** | 419,435 rows/s |
+| `CLOB(1048576)` | 402,356 rows/s | 326,541 rows/s |
+| `LONG VARCHAR` | **737 rows/s** | 7,519 rows/s |
+
+Every string type Db2 has is within 25% of the fastest. `LONG VARCHAR` alone is 700x off
+it. It is also close to unusable: `ORDER BY`, `GROUP BY` and `DISTINCT` on one are all
+`SQL0134N`, "improper use of a string column" — so a table adbcbridge created could not be
+sorted or grouped on its own text column.
+
+This is what made Db2 look like a bridge problem. In-driver instrumentation of a
+20,000-row ingest showed 160,000 `SQLBindParameter` calls costing 0.052 s in total and all
+the rest of the time — 141 ms per 250-row `SQLExecute` — inside the driver. `strace`
+showed 40 `sendto`/`recvfrom` pairs for 5,000 rows: not round trips, not `SQLDescribeParam`
+(2.2 µs a call), not the 32-bit `SQLLEN` quirk, not the statement-length ceiling
+(Db2 reports `SQL_MAX_STATEMENT_LEN` = 2,097,152, ample), and not DDL (`CREATE TABLE` is
+9 ms). It was the column type all along, which is also why multi-row batching "gave Db2
+almost nothing": the `LONG VARCHAR` write cost swamps every path equally.
+
+The fix (`ddl_string_as_max_varchar`) asks for the widest VARCHAR the driver reports
+instead — `VARCHAR(32672)` on Db2. That holds all but the last 28 bytes of what `LONG
+VARCHAR` could, and unlike `LONG VARCHAR` it can be sorted, grouped and de-duplicated.
+
+Db2 bulk ingest through `adbc_ingest`, autocommit off, DDL + data + commit, row count
+verified afterwards, medians of 5–7 interleaved (host load average 1.4–2.2):
+
+| | before | after | |
+|---|---:|---:|---:|
+| 20,000 rows, multi-row `VALUES` (default) | 3,960 rows/s | 116,591 rows/s | **29x** |
+| 20,000 rows, `adbc.odbc.array_binding=true` | 3,948 rows/s | 117,412 rows/s | **30x** |
+| 20,000 rows, row-at-a-time | 3,338 rows/s | 36,711 rows/s | 11x |
+| 100,000 rows, multi-row `VALUES` | 600 rows/s | 440,492 rows/s | **734x** |
+| 100,000-row read back | 92,989 rows/s | 1,565,590 rows/s | **17x** |
+
+The 100,000-row row is the striking one: with `LONG VARCHAR` the cost per row grew with
+the row count, so the collapse got worse the more there was to write. It is linear again.
+
+Note the first two rows against each other: multi-row `VALUES` and parameter arrays are
+now within 1% on Db2, so `prefer_param_arrays` is **not** warranted here — the hypothesis
+that `odbc-api` won by using arrays where we prefer multi-row `VALUES` is not what was
+happening. Both paths were writing into the same pathological column type.
+
+### SQL Server: `TEXT`
+
+The same question asked of msodbcsql: `SQLGetTypeInfo(SQL_LONGVARCHAR)` answers **`text`**,
+which Microsoft deprecated in SQL Server 2005. A `text` column cannot be sorted (error
+306), grouped (306), de-duplicated (`SELECT DISTINCT`, 421) — or even compared:
+`WHERE s = 'a'` is error 402, "the data types text and varchar are incompatible". A table
+adbcbridge created on SQL Server could not be filtered on its own string column.
+
+`NVARCHAR(MAX)`, which is what Microsoft documents as the replacement, holds the same
+2 GB, is Unicode rather than the database's code page, and is faster both ways.
+20,000-row ingest and 100,000-row read through adbcbridge, medians of 5, interleaved:
+
+| `txt` DDL type | ingest rows/s | fetch rows/s |
+|---|---:|---:|
+| `TEXT` (before) | 172,081 | 859,215 |
+| `VARCHAR(MAX)` | 220,123 | 2,962,631 |
+| `NVARCHAR(MAX)` (after) | **233,303** | **3,172,747** |
+| `NVARCHAR(4000)` | 242,106 | 4,848,066 |
+
+`ddl_string_type_name` carries the fixed spelling, since `MAX` is a word rather than a
+number and cannot be derived from `SQLGetTypeInfo`.
+
+Both fixes are guarded by `text_sortable` in `tests/compat/test_matrix.py`, which reads an
+ingest-created table back with `ORDER BY`, `GROUP BY` and `DISTINCT` on its text column.
+It is opt-in rather than universal because the same restriction is genuine on some servers
+whatever adbcbridge does — Oracle's `SQL_LONGVARCHAR` is `CLOB`, and `ORDER BY` on a
+`CLOB` is ORA-00932 — so it is claimed only where it has been checked: sqlite, duckdb,
+mssql and db2.
+
 ## Files
 
 - `bench/fetch_bench.py` — the benchmark harness (all three paths, batch-size
@@ -957,6 +1154,9 @@ belongs to another workload and starting a second one was out of scope.
   of order and concurrently), the single-partition fallback, and the SQL scanner.
 - `tests/test_prefetch.py` — prefetch equivalence, an error mid-stream, and aborting a
   stream while the fetch thread is running.
+- `text_sortable` in `tests/compat/test_matrix.py` — an ingest-created table read back
+  with `ORDER BY`, `GROUP BY` and `DISTINCT` on its text column, which is what Db2's
+  `LONG VARCHAR` and SQL Server's `TEXT` refuse.
 - `tests/c/test_multirow.c`, `test_multirow_ingest` in `tests/test_sqlite.py` — the
   multi-row `INSERT` text and its behaviour (NULLs in every row-group position, a batch
   that is not a multiple of K, a single-row batch, a failure that must leave no rows,

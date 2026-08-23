@@ -116,10 +116,11 @@ DBS = {
         env="SQLITE_ODBC_DRIVER", conn="Driver={drv};Database=" + os.path.join(TMP, "m.db") + ";",
         ddl="CREATE TABLE adbc_t (i INTEGER, f REAL, s TEXT, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
         # sqliteodbc converts UTF-8 through UCS-2 and drops the astral-plane emoji.
-        decimal_type="string", ts_precision="ms", astral=False),
+        decimal_type="string", ts_precision="ms", astral=False, text_sortable=True),
     "duckdb": dict(
         env="DUCKDB_ODBC_DRIVER", conn="Driver={drv};Database=:memory:;",
-        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)"),
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        text_sortable=True),
     "postgres": dict(
         env="POSTGRES_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15432;Database=adbc;Uid=adbc;Pwd=adbc;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"),
@@ -158,7 +159,8 @@ DBS = {
         null_params=False, rowcount=False, big_rows=300),
     "mssql": dict(
         env="MSSQL_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1,14331;Database=master;Uid=sa;Pwd=Adbc!Bridge2026;TrustServerCertificate=yes;",
-        ddl="CREATE TABLE adbc_t (i INT, f FLOAT, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME2(6), n DECIMAL(10,3), bo BIT)"),
+        ddl="CREATE TABLE adbc_t (i INT, f FLOAT, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME2(6), n DECIMAL(10,3), bo BIT)",
+        text_sortable=True),
     "azuresqledge": dict(
         # Azure SQL Edge is the SQL Server 2022 engine (it reports SQL_DBMS_NAME
         # "Microsoft SQL Server" 16.00.x, indistinguishable from mssql over the wire),
@@ -473,7 +475,11 @@ DBS = {
         # Db2 folds unquoted identifiers to upper case.  The clidriver libdb2.so is built
         # with a 32-bit SQLLEN; the driver detects that itself (adbc.odbc.sqllen_32bit),
         # so no tolerance flag is needed here.  See README.md.
-        ident=str.upper),
+        ident=str.upper,
+        # Db2's SQL_LONGVARCHAR is LONG VARCHAR, which it will not sort, group or
+        # de-duplicate on and writes ~700x slower than a VARCHAR; ingest DDL asks for the
+        # widest VARCHAR instead.  See ddl_string_as_max_varchar in src/odbc_internal.h.
+        text_sortable=True),
     "informix": dict(
         # IBM Informix is reached over DRDA -- the same wire protocol Db2 speaks, served
         # by Informix's `<server>_dr` alias on port 9089 -- so the Db2 CLI driver
@@ -1510,6 +1516,35 @@ def check_ingest(cur, cfg, ing_name):
               % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, ing_name), qi(cfg, "a")))
     check_big(cur, cfg, "SELECT %s, %s FROM %s ORDER BY %s" % (
         qi(cfg, "a"), qi(cfg, "b"), qi(cfg, ing_name), qi(cfg, "a")))
+    check_text_sortable(cur, cfg, ing_name, N)
+
+
+def check_text_sortable(cur, cfg, ing_name, n):
+    """The text column bulk ingest created must be an ordinary sortable string column.
+
+    `text_sortable` opts an entry in.  It is a real property of the generated DDL, not a
+    formality: a server's answer to SQLGetTypeInfo(SQL_LONGVARCHAR) -- which is what the
+    ingest DDL asks for, an Arrow string column having no declared width -- can name a
+    type the server then refuses to sort, group or de-duplicate on.  Db2's is LONG
+    VARCHAR, and ORDER BY, GROUP BY and DISTINCT on one are all SQL0134N, "improper use
+    of a string column"; the column is also written about 700x slower than an ordinary
+    VARCHAR (see ddl_string_as_max_varchar in src/odbc_internal.h).  So an ingested table
+    that cannot be sorted on its own text column is a defect worth a test.
+
+    Left off by default because the same restriction is genuine on some servers whatever
+    adbcbridge does -- Oracle's SQL_LONGVARCHAR is CLOB, and ORDER BY on a CLOB is
+    ORA-00932 -- so this is only claimed where it has been checked.
+    """
+    if not cfg.get("text_sortable"):
+        return
+    b, t = qi(cfg, "b"), qi(cfg, ing_name)
+    cur.execute("SELECT %s FROM %s ORDER BY %s" % (b, t, b))
+    ordered = cur.fetch_arrow_table().column(0).to_pylist()
+    assert ordered == sorted("r%d" % i for i in range(n)), (ordered[:3], ordered[-3:])
+    cur.execute("SELECT DISTINCT %s FROM %s" % (b, t))
+    assert len(cur.fetch_arrow_table()) == n
+    cur.execute("SELECT %s FROM %s GROUP BY %s" % (b, t, b))
+    assert len(cur.fetch_arrow_table()) == n
 
 
 if __name__ == "__main__":

@@ -866,6 +866,13 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // that grows one would simply use it.
     conn->reader_opts.multirow_insert_all = true;
   }
+  if (strstr((const char*)name, "msodbcsql")) {
+    // SQLGetTypeInfo(SQL_LONGVARCHAR) answers "text", which is what generated ingest DDL
+    // would otherwise give an Arrow string column -- a type Microsoft deprecated in SQL
+    // Server 2005 and that cannot be sorted, grouped, de-duplicated or compared.
+    // See ddl_string_type_name.
+    conn->reader_opts.ddl_string_type_name = "NVARCHAR(MAX)";
+  }
   if (strstr((const char*)name, "db2")) {
     // IBM's CLI driver ("libdb2.a") speaks DRDA to Db2 *and* to Informix, whose DRDA
     // alias is a second listener on the same server, so the driver name says nothing
@@ -885,6 +892,15 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       // Informix describes its BOOLEAN as SMALLINT over DRDA anyway, and an integer
       // parameter stores into one correctly.
       conn->reader_opts.bool_param_as_int = true;
+    } else {
+      // Db2 proper.  SQLGetTypeInfo(SQL_LONGVARCHAR) names LONG VARCHAR, which IBM
+      // deprecated in Db2 9 and which has no bulk-insert path at all: 20,000 rows of
+      // (INTEGER, DOUBLE, <string>, DATE) straight through the ODBC API, medians of 3,
+      // go in at 737 rows/s as LONG VARCHAR against 516,459 as VARCHAR(32672) -- while
+      // VARCHAR(20) manages 429,865 and even CLOB(1M) 402,356, so it is that one type
+      // and not the server's write path.  Generated ingest DDL takes the widest VARCHAR
+      // instead; see ddl_string_as_max_varchar.
+      conn->reader_opts.ddl_string_as_max_varchar = true;
     }
   }
   if (!conn->reader_opts.sqllen_32bit_forced) {
