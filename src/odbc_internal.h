@@ -27,6 +27,9 @@
 #define ADBC_ODBC_OPTION_BATCH_SIZE "adbc.odbc.batch_size"
 #define ADBC_ODBC_OPTION_MAX_BIND_BYTES "adbc.odbc.max_bind_bytes"
 #define ADBC_ODBC_OPTION_DECIMAL_AS_STRING "adbc.odbc.decimal_as_string"
+/// Bind Arrow batches as ODBC parameter arrays (one execute per batch) when the
+/// driver supports it.  "true"/"false"; default true.
+#define ADBC_ODBC_OPTION_ARRAY_BINDING "adbc.odbc.array_binding"
 
 #define ADBC_ODBC_DEFAULT_BATCH_SIZE 1024
 #define ADBC_ODBC_DEFAULT_MAX_BIND_BYTES 32768
@@ -79,6 +82,8 @@ struct OdbcStatement {
   // Bound parameters (Bind / BindStream)
   struct ArrowArrayStream bind_stream;
   bool has_bind;
+  /// Try column-wise parameter arrays before falling back to row-at-a-time.
+  bool array_binding;
   // Bulk ingest
   char* ingest_table;
   char* ingest_catalog;

@@ -65,6 +65,12 @@ Options (set on the database):
 | `adbc.odbc.max_bind_bytes` | max bound buffer per value before falling back to `SQLGetData` (default 32768) |
 | `adbc.odbc.decimal_as_string` | `true` to return DECIMAL/NUMERIC as strings |
 
+Options (set on the statement):
+
+| key | meaning |
+|---|---|
+| `adbc.odbc.array_binding` | `true` (default) to bind each Arrow batch as an ODBC parameter array, so bulk ingest and `executemany` issue one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE` fall back automatically. |
+
 ## Test
 
 ```sh
