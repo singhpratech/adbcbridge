@@ -32,6 +32,19 @@ Early (0.1.0). Working today:
 
 Planned: conformance suite, prebuilt binaries.
 
+## Performance
+
+1,000,000 rows `(int, double, varchar(20), date)` from SQLite, median of 5 (`bench/BENCHMARKS.md`):
+
+| Path | Time | Relative |
+|---|---:|---:|
+| **adbcbridge `fetch_arrow_table()`** | **0.48 s** | 1.0× |
+| pyodbc `fetchall()` → `pyarrow.Table` | 1.16 s | 2.4× slower |
+| pyodbc `fetchall()` → `pandas.DataFrame` | 1.32 s | 2.8× slower |
+| raw `SQLBindCol`+`SQLFetch`, no Arrow (floor) | 0.44 s | 0.93× |
+
+The bridge runs within 7% of the raw ODBC floor; the remaining cost is the ODBC driver itself.
+
 ## Compatibility matrix
 
 Same workload (types, NULLs, Unicode incl. emoji, parameters, bulk ingest, batched
