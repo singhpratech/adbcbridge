@@ -108,6 +108,7 @@ enum OdbcFetchKind {
   FETCH_TIME,     // TIME_STRUCT -> time32[s]
   FETCH_TIMESTAMP,// TIMESTAMP_STRUCT -> timestamp[us|ns]
   FETCH_DECIMAL,  // SQL_C_CHAR -> decimal128
+  FETCH_BOOL_STR, // SQL_C_CHAR ('t'/'1'/'true') -> bool (PostgreSQL, DuckDB report bool as char)
 };
 
 struct OdbcColumn {
@@ -135,9 +136,27 @@ static bool IsUnsigned(SQLHSTMT hstmt, SQLUSMALLINT col) {
   return false;
 }
 
+static bool TypeNameIsBool(SQLHSTMT hstmt, SQLUSMALLINT col) {
+  SQLCHAR name[64] = {0};
+  SQLSMALLINT len = 0;
+  if (!SQL_SUCCEEDED(SQLColAttribute(hstmt, col, SQL_DESC_TYPE_NAME, name, sizeof(name), &len, NULL))) {
+    return false;
+  }
+  for (SQLSMALLINT i = 0; i < len && i < (SQLSMALLINT)sizeof(name); i++) {
+    if (name[i] >= 'A' && name[i] <= 'Z') name[i] = (SQLCHAR)(name[i] - 'A' + 'a');
+  }
+  return strcmp((const char*)name, "bool") == 0 || strcmp((const char*)name, "boolean") == 0;
+}
+
 static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn* c,
                            const struct OdbcReaderOptions* opts) {
   c->bound = true;
+  if ((c->sql_type == SQL_CHAR || c->sql_type == SQL_VARCHAR || c->sql_type == SQL_WCHAR ||
+       c->sql_type == SQL_WVARCHAR) &&
+      c->column_size <= 8 && TypeNameIsBool(hstmt, icol)) {
+    c->kind = FETCH_BOOL_STR; c->c_type = SQL_C_CHAR; c->elem_size = 16;
+    return;
+  }
   switch (c->sql_type) {
     case SQL_BIT:
       c->kind = FETCH_BOOL; c->c_type = SQL_C_BIT; c->elem_size = sizeof(unsigned char);
@@ -267,6 +286,14 @@ static AdbcStatusCode DescribeColumns(SQLHSTMT hstmt, const struct OdbcReaderOpt
     }
     ClassifyColumn(hstmt, (SQLUSMALLINT)(i + 1), c, opts);
   }
+  // ODBC (and SQL Server strictly) requires SQLGetData columns to come after all bound
+  // columns and to be read in increasing order: unbind everything after the first
+  // unbound column.
+  bool seen_unbound = false;
+  for (SQLSMALLINT i = 0; i < n; i++) {
+    if (!cols[i].bound) seen_unbound = true;
+    else if (seen_unbound) cols[i].bound = false;
+  }
   *out_cols = cols;
   *out_n = n;
   return ADBC_STATUS_OK;
@@ -291,7 +318,8 @@ static AdbcStatusCode BuildSchema(const struct OdbcColumn* cols, SQLSMALLINT n,
     struct ArrowSchema* f = out->children[i];
     enum ArrowType t = NANOARROW_TYPE_STRING;
     switch (c->kind) {
-      case FETCH_BOOL: t = NANOARROW_TYPE_BOOL; break;
+      case FETCH_BOOL:
+      case FETCH_BOOL_STR: t = NANOARROW_TYPE_BOOL; break;
       case FETCH_I8: t = NANOARROW_TYPE_INT8; break;
       case FETCH_I16: t = NANOARROW_TYPE_INT16; break;
       case FETCH_I32: t = NANOARROW_TYPE_INT32; break;
@@ -634,6 +662,12 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
                       ? secs * 1000000000LL + (int64_t)t->fraction
                       : secs * 1000000LL + (int64_t)t->fraction / 1000;
       CHECK_NA(INTERNAL, ArrowArrayAppendInt(arr, v), error);
+      break;
+    }
+    case FETCH_BOOL_STR: {
+      char ch = len > 0 ? (char)data[0] : '0';
+      bool v = (ch == 't' || ch == 'T' || ch == '1' || ch == 'y' || ch == 'Y');
+      CHECK_NA(INTERNAL, ArrowArrayAppendInt(arr, v ? 1 : 0), error);
       break;
     }
     case FETCH_DECIMAL: {

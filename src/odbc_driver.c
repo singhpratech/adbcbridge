@@ -206,6 +206,7 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // SQL_ATTR_ROW_ARRAY_SIZE (heap overflow otherwise) and misaligns rows when the
     // array size is not a multiple of 2048.
     conn->reader_opts.min_buffer_rows = 2048;
+    conn->reader_opts.bool_param_as_int = true;
   }
 }
 

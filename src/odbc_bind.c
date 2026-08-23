@@ -16,6 +16,7 @@ struct ParamSlot {
   SQLLEN indicator;
   SQLLEN buffer_length;
   const void* data;  // points into fixed or into Arrow buffers
+  struct ArrowBuffer wbuf;  // UTF-16 conversion of string parameters
   union {
     unsigned char bit;
     SQLBIGINT i64;
@@ -41,8 +42,39 @@ static void CivilFromDays(int64_t z, int* y, unsigned* m, unsigned* d) {
   *y = (int)(yy + (*m <= 2));
 }
 
+// UTF-8 -> UTF-16 (SQLWCHAR units) into buf; returns number of units.
+static ArrowErrorCode Utf8ToUtf16(struct ArrowBuffer* buf, const char* s, int64_t n, int64_t* units) {
+  buf->size_bytes = 0;
+  NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buf, (n + 1) * (int64_t)sizeof(SQLWCHAR)));
+  SQLWCHAR* o = (SQLWCHAR*)buf->data;
+  int64_t k = 0;
+  for (int64_t i = 0; i < n;) {
+    unsigned char c = (unsigned char)s[i];
+    uint32_t cp;
+    int len;
+    if (c < 0x80) { cp = c; len = 1; }
+    else if ((c & 0xE0) == 0xC0 && i + 1 < n) { cp = ((c & 0x1F) << 6) | (s[i + 1] & 0x3F); len = 2; }
+    else if ((c & 0xF0) == 0xE0 && i + 2 < n) { cp = ((c & 0x0F) << 12) | ((s[i + 1] & 0x3F) << 6) | (s[i + 2] & 0x3F); len = 3; }
+    else if ((c & 0xF8) == 0xF0 && i + 3 < n) { cp = ((c & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) | ((s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F); len = 4; }
+    else { cp = 0xFFFD; len = 1; }
+    i += len;
+    if (cp >= 0x10000) {
+      cp -= 0x10000;
+      o[k++] = (SQLWCHAR)(0xD800 + (cp >> 10));
+      o[k++] = (SQLWCHAR)(0xDC00 + (cp & 0x3FF));
+    } else {
+      o[k++] = (SQLWCHAR)cp;
+    }
+  }
+  o[k] = 0;
+  buf->size_bytes = k * (int64_t)sizeof(SQLWCHAR);
+  *units = k;
+  return NANOARROW_OK;
+}
+
 static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchemaView* sv,
                                     const struct ArrowArrayView* av, int64_t row,
+                                    const struct OdbcReaderOptions* opts,
                                     struct AdbcError* error) {
   if (ArrowArrayViewIsNull(av, row)) {
     p->indicator = SQL_NULL_DATA;
@@ -52,10 +84,22 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
     p->indicator = 0;
   }
   switch (sv->type) {
+    case NANOARROW_TYPE_NA:
+      // Untyped NULL (e.g. Python None): send as a NULL varchar.
+      p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = 1;
+      p->indicator = SQL_NULL_DATA;
+      p->data = p->fixed.text; p->buffer_length = 0;
+      break;
     case NANOARROW_TYPE_BOOL:
-      p->c_type = SQL_C_BIT; p->sql_type = SQL_BIT;
-      p->fixed.bit = (unsigned char)ArrowArrayViewGetIntUnsafe(av, row);
-      p->data = &p->fixed.bit; p->buffer_length = 1;
+      if (opts->bool_param_as_int) {
+        p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_INTEGER;
+        p->fixed.i64 = ArrowArrayViewGetIntUnsafe(av, row) ? 1 : 0;
+        p->data = &p->fixed.i64; p->buffer_length = sizeof(SQLBIGINT);
+      } else {
+        p->c_type = SQL_C_BIT; p->sql_type = SQL_BIT;
+        p->fixed.bit = (unsigned char)ArrowArrayViewGetIntUnsafe(av, row);
+        p->data = &p->fixed.bit; p->buffer_length = 1;
+      }
       break;
     case NANOARROW_TYPE_INT8: case NANOARROW_TYPE_INT16:
     case NANOARROW_TYPE_INT32: case NANOARROW_TYPE_INT64:
@@ -76,13 +120,16 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
       p->data = &p->fixed.f64; p->buffer_length = sizeof(SQLDOUBLE);
       break;
     case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING: {
-      struct ArrowStringView s = {NULL, 0};
-      if (p->indicator != SQL_NULL_DATA) s = ArrowArrayViewGetStringUnsafe(av, row);
-      p->c_type = SQL_C_CHAR;
-      p->sql_type = s.size_bytes > 4000 ? SQL_LONGVARCHAR : SQL_VARCHAR;
-      p->column_size = (SQLULEN)(s.size_bytes > 0 ? s.size_bytes : 1);
-      p->data = s.data; p->buffer_length = s.size_bytes;
-      if (p->indicator != SQL_NULL_DATA) p->indicator = s.size_bytes;
+      int64_t units = 0;
+      if (p->indicator != SQL_NULL_DATA) {
+        struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(av, row);
+        CHECK_NA(INTERNAL, Utf8ToUtf16(&p->wbuf, s.data, s.size_bytes, &units), error);
+      }
+      p->c_type = SQL_C_WCHAR;
+      p->sql_type = units > 4000 ? SQL_WLONGVARCHAR : SQL_WVARCHAR;
+      p->column_size = (SQLULEN)(units > 0 ? units : 1);
+      p->data = p->wbuf.data; p->buffer_length = units * (int64_t)sizeof(SQLWCHAR);
+      if (p->indicator != SQL_NULL_DATA) p->indicator = p->buffer_length;
       break;
     }
     case NANOARROW_TYPE_BINARY: case NANOARROW_TYPE_LARGE_BINARY:
@@ -180,6 +227,7 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
   int64_t ncols = schema.n_children;
   struct ArrowSchemaView* svs = calloc((size_t)(ncols > 0 ? ncols : 1), sizeof(*svs));
   struct ParamSlot* slots = calloc((size_t)(ncols > 0 ? ncols : 1), sizeof(*slots));
+  for (int64_t i = 0; i < ncols; i++) ArrowBufferInit(&slots[i].wbuf);
   CHECK_NA_DETAIL(INTERNAL, ArrowArrayViewInitFromSchema(&view, &schema, &na_error), &na_error, error);
   for (int64_t i = 0; i < ncols; i++) {
     CHECK_NA_DETAIL(INTERNAL, ArrowSchemaViewInit(&svs[i], schema.children[i], &na_error), &na_error, error);
@@ -209,7 +257,7 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
       }
       SQLFreeStmt(hstmt, SQL_CLOSE);
       for (int64_t i = 0; i < ncols; i++) {
-        status = SlotFromArrow(&slots[i], &svs[i], view.children[i], row, error);
+        status = SlotFromArrow(&slots[i], &svs[i], view.children[i], row, &stmt->reader_opts, error);
         if (status != ADBC_STATUS_OK) break;
         struct ParamSlot* p = &slots[i];
         SQLRETURN r = SQLBindParameter(hstmt, (SQLUSMALLINT)(i + 1), SQL_PARAM_INPUT, p->c_type,
@@ -241,6 +289,7 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
   free(svs);
   if (schema.release) schema.release(&schema);
   SQLFreeStmt(hstmt, SQL_RESET_PARAMS);
+  for (int64_t i = 0; i < ncols; i++) ArrowBufferReset(&slots[i].wbuf);
   // The stream is consumed; drop it.
   stream->release(stream);
   memset(stream, 0, sizeof(*stream));

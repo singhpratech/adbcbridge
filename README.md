@@ -32,6 +32,21 @@ Planned: `GetObjects` (SQLTables/SQLColumns), parameter binding, bulk ingest via
 `SQLBindParameter` arrays, driver manifest for `adbc_driver_manager` discovery,
 conformance suite, Windows/macOS builds.
 
+## Compatibility matrix
+
+Same workload (types, NULLs, Unicode incl. emoji, parameters, bulk ingest, batched
+reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
+
+| Database | ODBC driver | Status |
+|---|---|---|
+| SQLite 3.45 | sqliteodbc 0.99991 | PASS |
+| DuckDB (latest) | duckdb-odbc | PASS (driver quirks handled: 2048-row vectors, no `SQL_BIT` params) |
+| PostgreSQL 16 | psqlodbc 16 | PASS |
+| MariaDB 11 / MySQL | MariaDB Connector/ODBC 3.1 | PASS |
+| SQL Server 2022 | msodbcsql 18 | PASS (incl. `NVARCHAR(MAX)` via chunked `SQLGetData`) |
+
+Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
+
 ## Build
 
 ```sh

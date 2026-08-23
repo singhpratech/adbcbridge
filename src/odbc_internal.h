@@ -61,6 +61,8 @@ struct OdbcReaderOptions {
   // Driver quirk: some drivers (DuckDB) write a whole internal chunk into bound
   // buffers regardless of SQL_ATTR_ROW_ARRAY_SIZE; allocate at least this many rows.
   int64_t min_buffer_rows;
+  // Driver quirk: bind boolean parameters as integers (DuckDB rejects SQL_BIT params).
+  bool bool_param_as_int;
 };
 
 struct OdbcDatabase;

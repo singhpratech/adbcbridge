@@ -1,0 +1,15 @@
+# Test servers for the adbcbridge compatibility matrix.
+#   docker compose -f tests/compat/docker-compose.yml up -d
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: adbc, POSTGRES_PASSWORD: adbc, POSTGRES_DB: adbc }
+    ports: ["127.0.0.1:15432:5432"]
+  mariadb:
+    image: mariadb:11
+    environment: { MARIADB_ROOT_PASSWORD: adbc, MARIADB_DATABASE: adbc, MARIADB_USER: adbc, MARIADB_PASSWORD: adbc }
+    ports: ["127.0.0.1:13306:3306"]
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment: { ACCEPT_EULA: "Y", MSSQL_SA_PASSWORD: "Adbc!Bridge2026" }
+    ports: ["127.0.0.1:14331:1433"]
