@@ -326,3 +326,28 @@ services:
     command: ["influxdb3", "serve", "--node-id=n1", "--object-store=memory", "--without-auth"]
     mem_limit: 2g
     ports: ["127.0.0.1:18181:8181"]
+  # MongoDB behind the MongoDB BI Connector: `mongosqld` reads the MongoDB in this same
+  # container and serves the MySQL wire protocol over it on 3307, which MySQL
+  # Connector/ODBC connects to.  In the "extra" profile, so a plain `up -d` leaves it
+  # alone; it also needs MONGODB_BI_DIR pointing at the unpacked BI Connector (see
+  # tests/compat/README.md -- it is a separate free download, not an image), so:
+  #   MONGODB_BI_DIR=/tmp/dbs/mongodbbi/bi \
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d mongodbbi
+  # The image starts mongod only.  Once it is up, load the two collections and start
+  # mongosqld on top of them -- the entry is read-only, mongosqld having no DDL and no
+  # DML, so its tables have to be written into MongoDB directly:
+  #   docker exec -i adbcbridge-mongodbbi mongosh --quiet < tests/compat/fixtures/load_mongodbbi.js
+  #   docker exec -d adbcbridge-mongodbbi /opt/mongobi/mongosqld --addr 0.0.0.0:3307 \
+  #     --mongo-uri mongodb://127.0.0.1:27017 --schema /etc/mongodbbi.drdl --logPath /tmp/mongosqld.log
+  mongodbbi:
+    profiles: ["extra"]
+    image: mongo:7
+    container_name: adbcbridge-mongodbbi
+    # mongosqld is linked against OpenSSL 1.1, which this image does not have; keep
+    # libssl.so.1.1 and libcrypto.so.1.1 in MONGODB_BI_DIR beside the binary (README).
+    environment: { LD_LIBRARY_PATH: /opt/mongobi }
+    volumes:
+      - ${MONGODB_BI_DIR:-/nonexistent}:/opt/mongobi:ro
+      - ./fixtures/mongodbbi.drdl:/etc/mongodbbi.drdl:ro
+    mem_limit: 2g
+    ports: ["127.0.0.1:13315:3307"]

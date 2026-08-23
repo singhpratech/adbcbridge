@@ -695,6 +695,22 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // Its SQLGetTypeInfo answers with MySQL's type system whatever the server is, so
     // ingest DDL has to fall back to portable type names.
     conn->reader_opts.ansi_ddl_type_names = true;
+    // The MongoDB BI Connector (mongosqld), which serves the MySQL wire over a MongoDB.
+    // Its version() is a bare "5.7.12", so it is identified by SQL_DBMS_VER -- which the
+    // connector takes from the handshake, "5.7.12 mongosqld v2.14.22" -- and not by a
+    // query.  Its information_schema.columns leaves NUMERIC_PRECISION, NUMERIC_SCALE and
+    // CHARACTER_OCTET_LENGTH NULL for every column, and Connector/ODBC 9 builds
+    // SQLColumns entirely from information_schema: for a DECIMAL column it runs strtol()
+    // on that NULL pointer and segfaults (catalog.cc get_buffer_length), taking the
+    // process with it.  A table with no DECIMAL column comes back fine, so nothing in the
+    // return code marks the difference -- skip the call and describe a zero-row SELECT.
+    SQLCHAR dbms_ver[128] = {0};
+    SQLSMALLINT dbms_ver_len = 0;
+    if (SQL_SUCCEEDED(
+            SQLGetInfo(conn->hdbc, SQL_DBMS_VER, dbms_ver, sizeof(dbms_ver), &dbms_ver_len)) &&
+        strstr((const char*)dbms_ver, "mongosqld")) {
+      conn->reader_opts.no_sql_columns = true;
+    }
     // Which of those warehouses is behind the connector?  Only GreptimeDB needs more,
     // and only it pays for the extra query -- version() is "8.4.2-GreptimeDB-1.1.4".
     char version[256];

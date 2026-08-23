@@ -271,9 +271,11 @@ struct OdbcReaderOptions {
   // SQLFetch on that cursor, with no bound columns at all.  psqlodbc against ArcadeDB
   // returns SQL_SUCCESS and an empty result set, because the pg_catalog query it builds
   // is one ArcadeDB's SQL parser rejects -- so every table would look like it has no
-  // columns.  Neither leaves a return code to fall back on, so the call has to be
-  // skipped: GetObjects describes "SELECT * FROM <table> WHERE 1=0" instead, which is
-  // where GetTableSchema already gets a table's columns from.
+  // columns.  MySQL Connector/ODBC against the MongoDB BI Connector segfaults inside
+  // SQLColumns itself, on a NULL NUMERIC_PRECISION that mongosqld's information_schema
+  // reports for a DECIMAL column.  None of them leaves a return code to fall back on, so
+  // the call has to be skipped: GetObjects describes "SELECT * FROM <table> WHERE 1=0"
+  // instead, which is where GetTableSchema already gets a table's columns from.
   bool no_sql_columns;
   // Driver quirk: DDL type for a TIME column with fractional seconds, e.g. "Time64(%d)";
   // the %d takes the fractional digit count.  Used for drivers whose SQLGetTypeInfo TIME

@@ -51,6 +51,7 @@ from the second table to the first.
 | ArcadeDB 26.9 | psqlodbc (PG wire) | PASS (read) | multi-model engine behind the PG wire: no `CREATE TABLE` (a type plus one `CREATE PROPERTY` per column), so `adbc_ingest` cannot create its target and the entry runs the read side; `SQLColumns` and `SQLTables(SQL_ALL_TABLE_TYPES)` are queries its parser rejects, so `GetObjects` describes a zero-row SELECT and `GetTableTypes` falls back to the listing; `BoolsAsChar=0`, ISO-8601 `T` timestamp literals, `@rid`/`@type`/`@cat` in every `SELECT *`; also traverses a small graph (vertices, edges, `expand(out())`); fetch 332k rows/s |
 | Materialize 26.38 | psqlodbc (PG wire) | PASS | streaming warehouse; PostgreSQL SQL layer, so no driver quirks -- but no `SAVEPOINT`, so psqlodbc needs `Protocol=7.4-0` for an ingest big enough to split into a second batch; `NUMERIC` is 39 digits, past decimal128, so it reads back as an exact string; also ingests into and reads back an incrementally maintained `MATERIALIZED VIEW`; ingest 6.5k rows/s (array binding), fetch 248k rows/s |
 | MatrixOne 4.2 (MySQL 8.0.30 wire) | MySQL Connector/ODBC (MySQL wire) | PASS | `mysql_native_password` only, so the connector needs `PLUGIN_DIR`; a table without a PRIMARY KEY gets a hidden `__mo_fake_pk_col` that `SQLColumns` reports; a parameter bound into a `BIT` column aborts the server, so ingest sends booleans as `TINYINT`; describes a TEXT column as 5 characters (driver fix: bind a no-declared-length column at `long_bind_bytes`); ingest 4.4k rows/s, fetch 2.05M rows/s |
+| MongoDB 7 + BI Connector 2.14 (MySQL 5.7.12 wire) | MySQL Connector/ODBC (MySQL wire) | PASS (read) | `mongosqld` presents MongoDB collections as SQL tables over the MySQL wire; a query engine only (no DDL, no DML), so the two collections are loaded with mongosh and the entry runs the read side. `SQLColumns` segfaults inside Connector/ODBC on any table with a `DECIMAL` column -- mongosqld's `information_schema` reports NULL `NUMERIC_PRECISION` and the connector runs `strtol()` on it -- so `GetObjects` describes a zero-row SELECT instead (existing `no_sql_columns`, keyed on `SQL_DBMS_VER`); the handshake also segfaults without `PLUGIN_DIR` (`mysql_native_password`), and `COM_STMT_PREPARE` is refused (`NO_SSPS=1`). No binary type and no DATE type, decimals described as `DECIMAL(65,20)` so they read back as exact text, `_id` in every `SELECT *`; fetch 128k rows/s |
 
 ## Driver available, free server available — queued for verification
 
@@ -59,7 +60,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Database | Wire / driver | Server | Status |
 |---|---|---|---|
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |
-| MongoDB (BI Connector) | MySQL Connector/ODBC | `mongo` + `mongosqld` | queued |
 | Apache Ignite | ignite-odbc | `apacheignite/ignite` | queued |
 | Vertica CE | Vertica ODBC | `vertica/vertica-ce` | queued |
 | OpenSearch | opensearch-sql-odbc | `opensearchproject/opensearch` | queued |
