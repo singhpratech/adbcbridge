@@ -216,6 +216,22 @@ static void TimestampFromArrow(int64_t v, enum ArrowTimeUnit unit, TIMESTAMP_STR
   ts->second = (SQLUSMALLINT)(sod % 60); ts->fraction = (SQLUINTEGER)(frac * frac_mul);
 }
 
+// Render an ODBC TIMESTAMP_STRUCT as "YYYY-MM-DD HH:MM:SS[.ffffff]"; returns its
+// length.  Used by temporal_binary_param_as_varchar, which sends timestamps as text.
+static int TimestampTextFromStruct(const TIMESTAMP_STRUCT* ts, enum ArrowTimeUnit unit,
+                                   char* out, size_t out_size) {
+  const int digits = FractionalDigits(unit);
+  if (digits == 0) {
+    return snprintf(out, out_size, "%04d-%02d-%02d %02d:%02d:%02d", ts->year, ts->month, ts->day,
+                    ts->hour, ts->minute, ts->second);
+  }
+  int64_t scale = 1;
+  for (int i = digits; i < 9; i++) scale *= 10;  // TIMESTAMP_STRUCT.fraction is nanoseconds
+  return snprintf(out, out_size, "%04d-%02d-%02d %02d:%02d:%02d.%0*lld", ts->year, ts->month,
+                  ts->day, ts->hour, ts->minute, ts->second, digits,
+                  (long long)(ts->fraction / scale));
+}
+
 static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct ArrowSchemaView* sv,
                                          const struct ArrowArrayView* av, int64_t row,
                                          bool is_null, const struct OdbcReaderOptions* opts,
@@ -318,8 +334,15 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
     case NANOARROW_TYPE_FIXED_SIZE_BINARY: case NANOARROW_TYPE_BINARY_VIEW: {
       struct ArrowBufferView b = {{NULL}, 0};
       if (p->indicator != SQL_NULL_DATA) b = ArrowArrayViewGetBytesUnsafe(av, row);
-      p->c_type = SQL_C_BINARY;
-      p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARBINARY : SQL_VARBINARY;
+      // temporal_binary_param_as_varchar: the bytes go across as a character
+      // parameter, so the driver quotes them as an ordinary string literal instead
+      // of a `_binary'...'` introducer the server cannot parse.
+      p->c_type = opts->temporal_binary_param_as_varchar ? SQL_C_CHAR : SQL_C_BINARY;
+      if (opts->temporal_binary_param_as_varchar) {
+        p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARCHAR : SQL_VARCHAR;
+      } else {
+        p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARBINARY : SQL_VARBINARY;
+      }
       p->column_size = (SQLULEN)(b.size_bytes > 0 ? b.size_bytes : 1);
       p->data = b.data.as_uint8; p->buffer_length = b.size_bytes;
       if (p->indicator != SQL_NULL_DATA) p->indicator = b.size_bytes;
@@ -330,6 +353,13 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
       CivilFromDays(ArrowArrayViewGetIntUnsafe(av, row), &y, &m, &d);
       p->fixed.date.year = (SQLSMALLINT)y; p->fixed.date.month = (SQLUSMALLINT)m;
       p->fixed.date.day = (SQLUSMALLINT)d;
+      if (opts->temporal_binary_param_as_varchar) {
+        const int n = snprintf(p->fixed.text, sizeof(p->fixed.text), "%04d-%02d-%02d", y, m, d);
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = 10;
+        p->data = p->fixed.text; p->buffer_length = n + 1;
+        if (p->indicator != SQL_NULL_DATA) p->indicator = n;
+        break;
+      }
       p->c_type = SQL_C_TYPE_DATE; p->sql_type = SQL_TYPE_DATE;
       p->data = &p->fixed.date; p->buffer_length = sizeof(DATE_STRUCT);
       break;
@@ -360,6 +390,17 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
     }
     case NANOARROW_TYPE_TIMESTAMP: {
       TimestampFromArrow(ArrowArrayViewGetIntUnsafe(av, row), sv->time_unit, &p->fixed.ts);
+      if (opts->temporal_binary_param_as_varchar) {
+        // fixed.ts and fixed.text are the same union member, so take a copy of the
+        // struct before rendering the text over it.
+        const TIMESTAMP_STRUCT ts = p->fixed.ts;
+        const int n = TimestampTextFromStruct(&ts, sv->time_unit, p->fixed.text,
+                                              sizeof(p->fixed.text));
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = (SQLULEN)n;
+        p->data = p->fixed.text; p->buffer_length = n + 1;
+        if (p->indicator != SQL_NULL_DATA) p->indicator = n;
+        break;
+      }
       p->c_type = SQL_C_TYPE_TIMESTAMP; p->sql_type = SQL_TYPE_TIMESTAMP;
       TimestampParamSize(sv->time_unit, &p->column_size, &p->decimal_digits);
       p->data = &p->fixed.ts; p->buffer_length = sizeof(TIMESTAMP_STRUCT);
@@ -607,9 +648,21 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       p->c_type = SQL_C_DOUBLE; p->sql_type = SQL_DOUBLE; p->elem_size = sizeof(SQLDOUBLE);
       p->needs_buffer = true; break;
     case NANOARROW_TYPE_DATE32:
+      // temporal_binary_param_as_varchar renders each value as text; that is a
+      // per-value conversion only the row path does, as with null_param_as_varchar
+      // above.  Such a driver substitutes parameters into the SQL text anyway, so it
+      // sends one statement per set either way and nothing is lost by going row-wise.
+      if (opts->temporal_binary_param_as_varchar) {
+        *supported = false;
+        return;
+      }
       p->c_type = SQL_C_TYPE_DATE; p->sql_type = SQL_TYPE_DATE;
       p->elem_size = sizeof(DATE_STRUCT); p->needs_buffer = true; break;
     case NANOARROW_TYPE_TIMESTAMP:
+      if (opts->temporal_binary_param_as_varchar) {  // see DATE32 above
+        *supported = false;
+        return;
+      }
       p->c_type = SQL_C_TYPE_TIMESTAMP; p->sql_type = SQL_TYPE_TIMESTAMP;
       p->elem_size = sizeof(TIMESTAMP_STRUCT);
       TimestampParamSize(sv->time_unit, &p->column_size, &p->decimal_digits);
@@ -654,6 +707,10 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       // SQL_C_CHAR array is transcoded from the driver's narrow charset and
       // mangles anything outside it (SQL Server stored "hello ?" for an emoji).
       // Drivers whose SQLWCHAR is not UTF-16 keep the narrow, UTF-8 path.
+      if (binary && opts->temporal_binary_param_as_varchar) {  // see DATE32 above
+        *supported = false;
+        return;
+      }
       const bool wide = !binary && !opts->wchar_as_utf8;
       int64_t max = ArrayParamVarLenMax(av, binary, wide, nrows);
       if (max < 0) {  // too wide to stage: this batch goes row-at-a-time
@@ -1620,10 +1677,14 @@ struct TypeParams {
 
 // Ask the driver for its name of one SQL type via SQLGetTypeInfo. Returns false if the
 // driver has no such type.
-static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, const struct TypeParams* tp, bool q,
-                        char* out, size_t out_size) {
+static bool TypeNameOne(SQLHDBC hdbc, const struct OdbcReaderOptions* opts,
+                        SQLSMALLINT sql_type, const struct TypeParams* tp, bool q, char* out,
+                        size_t out_size) {
   SQLHSTMT hstmt = NULL;
   bool done = false;
+  // The driver's type names describe some other DBMS; the caller's portable fallback
+  // is the better answer.
+  if (opts->ignore_driver_type_names) return false;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
   if (SQL_SUCCEEDED(SQLGetTypeInfo(hstmt, sql_type)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
     char name[256] = {0}, params[256] = {0};
@@ -1666,11 +1727,11 @@ static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, const struct TypePar
 }
 
 // Try a chain of candidate SQL types (e.g. BIGINT, then NUMERIC(19,0) for Oracle).
-static void TypeNameFor(SQLHDBC hdbc, const SQLSMALLINT* candidates, int n,
-                        const struct TypeParams* tp, bool q, const char* fallback, char* out,
-                        size_t out_size) {
+static void TypeNameFor(SQLHDBC hdbc, const struct OdbcReaderOptions* opts,
+                        const SQLSMALLINT* candidates, int n, const struct TypeParams* tp, bool q,
+                        const char* fallback, char* out, size_t out_size) {
   for (int i = 0; i < n; i++) {
-    if (TypeNameOne(hdbc, candidates[i], tp, q, out, out_size)) return;
+    if (TypeNameOne(hdbc, opts, candidates[i], tp, q, out, out_size)) return;
   }
   snprintf(out, out_size, "%s", fallback);
 }
@@ -1693,8 +1754,9 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
   }
 #define TYPES(...) ((const SQLSMALLINT[]){__VA_ARGS__})
 #define CHAIN_P(params, fallback, ...)                                                    \
-  TypeNameFor(hdbc, TYPES(__VA_ARGS__), (int)(sizeof(TYPES(__VA_ARGS__)) / sizeof(SQLSMALLINT)), \
-              params, q, fallback, out, out_size)
+  TypeNameFor(hdbc, opts, TYPES(__VA_ARGS__),                                              \
+              (int)(sizeof(TYPES(__VA_ARGS__)) / sizeof(SQLSMALLINT)), params, q, fallback,     \
+              out, out_size)
 #define CHAIN(fallback, ...) CHAIN_P(&(const struct TypeParams){0}, fallback, __VA_ARGS__)
   switch (sv->type) {
     case NANOARROW_TYPE_BOOL: CHAIN("BOOLEAN", SQL_BIT, SQL_TINYINT, SQL_SMALLINT); break;
@@ -1703,11 +1765,11 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
     case NANOARROW_TYPE_UINT16:
     case NANOARROW_TYPE_INT32: CHAIN("INTEGER", SQL_INTEGER, SQL_BIGINT); break;
     case NANOARROW_TYPE_UINT32: case NANOARROW_TYPE_INT64: case NANOARROW_TYPE_UINT64:
-      if (!TypeNameOne(hdbc, SQL_BIGINT, &(const struct TypeParams){0}, q, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_DECIMAL, &(const struct TypeParams){.precision = 19}, q, out,
-                       out_size) &&
-          !TypeNameOne(hdbc, SQL_NUMERIC, &(const struct TypeParams){.precision = 19}, q, out,
-                       out_size)) {
+      if (!TypeNameOne(hdbc, opts, SQL_BIGINT, &(const struct TypeParams){0}, q, out, out_size) &&
+          !TypeNameOne(hdbc, opts, SQL_DECIMAL, &(const struct TypeParams){.precision = 19}, q,
+                       out, out_size) &&
+          !TypeNameOne(hdbc, opts, SQL_NUMERIC, &(const struct TypeParams){.precision = 19}, q,
+                       out, out_size)) {
         snprintf(out, out_size, "BIGINT");
       }
       break;
@@ -1748,8 +1810,8 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
     case NANOARROW_TYPE_DECIMAL128: case NANOARROW_TYPE_DECIMAL256: {
       const struct TypeParams dec = {.precision = sv->decimal_precision,
                                      .scale = sv->decimal_scale};
-      if (!TypeNameOne(hdbc, SQL_DECIMAL, &dec, q, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_NUMERIC, &dec, q, out, out_size)) {
+      if (!TypeNameOne(hdbc, opts, SQL_DECIMAL, &dec, q, out, out_size) &&
+          !TypeNameOne(hdbc, opts, SQL_NUMERIC, &dec, q, out, out_size)) {
         snprintf(out, out_size, "DECIMAL(%d,%d)", sv->decimal_precision, sv->decimal_scale);
       }
       break;

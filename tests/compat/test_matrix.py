@@ -7,7 +7,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, POSTGRES_ODBC_DRIVER, MARIADB_ODBC_DRIVER,
     MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER,
     DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
-    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DATABEND_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -68,6 +68,44 @@ DBS = {
         # identifiers (used by ingest) need ANSI_QUOTES. See tests/compat/README.md for
         # the LD_PRELOAD needed by MySQL Connector/ODBC under pyarrow.
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "databend": dict(
+        # Databend speaks the MySQL wire protocol, so MySQL Connector/ODBC drives it, but
+        # it is a column-store warehouse rather than a MySQL: no sql_mode (its default
+        # dialect is PostgreSQL, so the double-quoted identifiers ingest emits already
+        # work) and no prepared statements.
+        #   NO_SSPS=1 is what makes the entry work at all: Databend's MySQL handler
+        # refuses COM_STMT_PREPARE outright ("Prepare is not support in Databend"), which
+        # surfaces as SQLPrepare failing.  With NO_SSPS the connector stops using the
+        # server-side prepare protocol and substitutes bound parameters into the SQL text
+        # itself, so every statement goes as a plain query.
+        #   {plugin}: Databend authenticates with mysql_native_password, which is no
+        # longer built into Connector/ODBC 9 -- it is a loadable plugin shipped beside the
+        # driver.  See the note on the format key in run() and README.md.
+        env="DATABEND_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=13311;Database=default;User=root;Password=adbc;NO_SSPS=1;{plugin}",
+        #   b is VARCHAR, not BINARY, for the same reason ClickHouse's is String: a
+        # Databend BINARY column is rendered as *hex text* on the MySQL wire, so
+        # b"\x01\x02" reads back as b"0102" and no byte string ever round-trips.  A
+        # character column carries the two bytes through unchanged.
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARCHAR(50), d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        # Databend sends BOOLEAN over the MySQL wire as a SMALLINT (MySQL's own BOOLEAN
+        # is TINYINT(1), which the same driver reports as SQL_TINYINT -> int8).
+        bool_type="int16",
+        # Databend describes every DECIMAL column on the MySQL wire with scale 0 --
+        # DECIMAL(10,3) arrives as precision 9, scale 0 -- while sending the digits
+        # themselves in full.  Taken at face value that scale rounds 12.345 to 12, so
+        # this entry reads decimals as their exact text instead.
+        db_kwargs={"adbc.odbc.decimal_as_string": "true"}, decimal_type="string",
+        # Databend's information_schema reports ordinal_position 1 for every column, so
+        # SQLColumns -- which orders by it -- hands back the columns in an arbitrary
+        # order.  SELECT metadata is unaffected; only GetObjects/GetTableSchema are.
+        column_order=False,
+        # Databend commits a fresh immutable data block per INSERT, and the connector in
+        # NO_SSPS mode sends one statement per parameter set (a parameter array is not a
+        # multi-row INSERT), so single-row ingest runs at a few tens of rows/s.  2000 still
+        # crosses the reader's 1024-row batch boundary, which is what this step is for,
+        # without spending five minutes on it.
+        big_rows=2000),
     "db2": dict(
         env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
@@ -149,6 +187,24 @@ DBS = {
         big_rows=3000),
 }
 
+def conn_uri(name, cfg, drv=None):
+    """The entry's connection string, with `<NAME>_CONN` and the format keys applied.
+
+    `{drv}` is the driver library.  `{plugin}` expands to a PLUGIN_DIR= setting pointing
+    at the "plugin" directory beside the driver when there is one, and to nothing when
+    there is not: MySQL Connector/ODBC keeps its client-side authentication plugins
+    there, and unpacked from the generic tarball (as README.md describes) its compiled-in
+    default plugin path does not exist, so a server that asks for an auth plugin the
+    client does not have built in cannot be reached without it.  A packaged root install,
+    whose default path is correct, has no such directory and is left alone.
+    """
+    if drv is None:
+        drv = os.environ[cfg["env"]]
+    pdir = os.path.join(os.path.dirname(drv), "plugin")
+    plugin = "PLUGIN_DIR=%s;" % pdir if os.path.isdir(pdir) else ""
+    return os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv, plugin=plugin)
+
+
 # Typed values: ADBC clients send Arrow-typed parameters, so dates/timestamps go as
 # date32/timestamp (string literals for dates are not portable, e.g. Oracle).
 ROW1 = (1, 1.5, "héllo 🚀", b"\x01\x02", datetime.date(2024, 2, 29),
@@ -165,14 +221,14 @@ def run(name, cfg):
         os.environ.setdefault(k, v)
     if cfg.get("fixture"):  # file-based, read-only database: work on a private copy
         shutil.copy(HERE / "fixtures" / cfg["fixture"], os.path.join(TMP, cfg["fixture"]))
-    uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv)
+    uri = conn_uri(name, cfg, drv)
     # This matrix exists to exercise the ODBC path, so native delegation (which
     # would take over for e.g. SQLite/PostgreSQL) is switched off here.
-    conn = dbapi.connect(
-        driver=DRIVER,
-        db_kwargs={"uri": uri, "adbc.odbc.delegate": "never"},
-        autocommit=True,
-    )
+    # db_kwargs: extra adbcbridge database options this entry needs, for a server whose
+    # metadata the generic path cannot take at face value.
+    kwargs = {"uri": uri, "adbc.odbc.delegate": "never"}
+    kwargs.update(cfg.get("db_kwargs", {}))
+    conn = dbapi.connect(driver=DRIVER, db_kwargs=kwargs, autocommit=True)
     info = conn.adbc_get_info()
     ident = cfg.get("ident", lambda x: x)  # how the server stores unquoted names
     # read_only: the driver executes no DDL/DML (MDB Tools), so the table and its rows
@@ -257,16 +313,22 @@ def run(name, cfg):
                 assert "adbc_no_such_table" in str(e) or "not" in str(e).lower(), str(e)
     # metadata
     objs = conn.adbc_get_objects(depth="all", table_name_filter=T).read_all().to_pylist()
+    # column_order: SQLColumns orders columns by ORDINAL_POSITION, so a server whose
+    # catalog does not populate it (Databend reports 1 for every column) reports them in
+    # an arbitrary order.  The result-set metadata of a SELECT is unaffected; only the
+    # catalog calls are, so those entries compare the column names as a set.
+    order = (lambda c: c) if cfg.get("column_order", True) else sorted
+    cols = ["i", "f", "s", "b", "d", "ts", "n", "bo"]
     # No catalog filter is given, so every catalog on the server that happens to
     # hold a table of this name is reported -- shared servers really do have
     # more than one.  Check the columns of each match individually.
-    per_table = [[c["column_name"].lower() for c in t["table_columns"]]
+    per_table = [order([c["column_name"].lower() for c in t["table_columns"]])
                  for cat in objs for s in cat["catalog_db_schemas"] or []
                  for t in s["db_schema_tables"] or []]
-    assert ["i", "f", "s", "b", "d", "ts", "n", "bo"] in per_table, per_table
+    assert order(cols) in per_table, per_table
     assert "adbc_t" in [x.lower() for x in conn.adbc_get_table_types()] or True
     sch = conn.adbc_get_table_schema(T)
-    assert [f.name.lower() for f in sch] == ["i", "f", "s", "b", "d", "ts", "n", "bo"]
+    assert order([f.name.lower() for f in sch]) == order(cols)
     conn.close()
     return "PASS  (%s %s)" % (info["vendor_name"], info["vendor_version"])
 

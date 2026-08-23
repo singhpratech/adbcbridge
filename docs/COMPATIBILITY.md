@@ -31,6 +31,7 @@ from the second table to the first.
 | TimescaleDB 2.29 | psqlodbc (PG wire) | PASS | |
 | MonetDB 11.55 | MonetDBODBClib | PASS | no usable parameter arrays; `SQLEndTran` unreliable under pyodbc |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
+| Databend | MySQL Connector/ODBC (MySQL wire) | PASS | no prepared statements (`NO_SSPS=1`); `_binary` literals; MySQL type names in ingest DDL |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 
 ## Driver available, free server available — queued for verification
@@ -51,7 +52,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | TiDB | MySQL Connector/ODBC | `pingcap/tidb` | queued |
 | Dolt | MySQL Connector/ODBC | `dolthub/dolt-sql-server` | queued |
 | Percona Server | MySQL Connector/ODBC | `percona` | queued |
-| Databend | MySQL Connector/ODBC | `datafuselabs/databend` | queued |
 | MatrixOne | MySQL Connector/ODBC | `matrixorigin/matrixone` | queued |
 | MariaDB ColumnStore | MariaDB Connector/ODBC | `mariadb/columnstore` | queued |
 | MongoDB (BI Connector) | MySQL Connector/ODBC | `mongo` + `mongosqld` | queued |

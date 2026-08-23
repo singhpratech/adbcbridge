@@ -125,6 +125,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | TimescaleDB 2.29 (PostgreSQL 16) | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; also ingests into and reads back a `create_hypertable()` hypertable) |
 | IBM Db2 12.1 | Db2 CLI driver (clidriver `libdb2.so`) | PASS (driver quirk handled: 32-bit `SQLLEN` — see `adbc.odbc.sqllen_32bit`) |
 | Firebird 5 | Firebird ODBC 3.5.0-rc1 | PASS (driver quirks handled: `SQL_C_WCHAR` sized in 4-byte `wchar_t`, no usable parameter arrays) |
+| Databend 1.2 | MySQL Connector/ODBC 9.4 (MySQL wire protocol) | PASS (server has no prepared statements, so the connector runs with `NO_SSPS=1`; driver quirks handled: `_binary` literals for date/timestamp/binary params, MySQL type names in ingest DDL) |
 | Microsoft Access `.mdb`/`.accdb` | MDB Tools 1.0 (`odbc-mdbtools`) | PASS, read side only — the driver executes no DDL/DML and has no `SQLBindParameter` (32-bit `SQLLEN`, as Db2) |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
