@@ -5307,3 +5307,186 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down spanner-p
 docker rm -f adbcbridge-spanner-pg adbcbridge-spanner
 docker network rm adbcbridge-spanner-net
 ```
+
+## MongoDB 7 + BI Connector 2.14 (mongosqld)
+
+MongoDB has no SQL wire protocol of its own. The [MongoDB BI
+Connector](https://www.mongodb.com/docs/bi-connector/current/) is MongoDB's own answer to
+that: `mongosqld` sits in front of a MongoDB instance, presents each collection as a
+relational table and speaks the **MySQL wire protocol** to clients, announcing itself as
+`5.7.12 mongosqld v2.14.22`. So the ODBC route is MySQL Connector/ODBC — the same
+`libmyodbc9w.so` the [`mysql`](#mysql-8) entry uses (read that section for the download
+and for the `LD_PRELOAD` pyarrow needs), pointed at a second variable:
+
+```sh
+export MONGODBBI_ODBC_DRIVER=$MYSQL_ODBC_DRIVER
+```
+
+### The BI Connector tarball (free download, no account, no root)
+
+`mongosqld` is not in any image; it ships as a tarball MongoDB serves without a login:
+
+```sh
+mkdir -p /tmp/dbs/mongodbbi && cd /tmp/dbs/mongodbbi
+curl -sSLO https://info-mongodb-com.s3.amazonaws.com/mongodb-bi/v2/mongodb-bi-linux-x86_64-ubuntu2004-v2.14.22.tgz
+tar xzf mongodb-bi-linux-x86_64-ubuntu2004-v2.14.22.tgz
+# -> mongodb-bi-linux-x86_64-ubuntu2004-v2.14.22/bin/{mongosqld,mongodrdl,mongotranslate}
+```
+
+The binaries are dynamically linked against **OpenSSL 1.1**, which `mongo:7` (Ubuntu
+22.04, OpenSSL 3) does not have — `mongosqld` refuses to start with `error while loading
+shared libraries: libssl.so.1.1`. Unpack the two libraries from the Ubuntu 20.04 package
+(no root: `dpkg-deb -x` writes wherever it is told) and put them next to the binary, which
+is the directory the container mounts:
+
+```sh
+mkdir -p bi && cp mongodb-bi-linux-x86_64-ubuntu2004-v2.14.22/bin/mongosqld bi/
+curl -sSLO http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb
+dpkg-deb -x libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb ssl
+cp ssl/usr/lib/x86_64-linux-gnu/lib{ssl,crypto}.so.1.1 bi/
+export MONGODB_BI_DIR=/tmp/dbs/mongodbbi/bi
+```
+
+### Server
+
+One container runs both halves: `mongod` (the image's own entrypoint) and, on top of it,
+`mongosqld` reading it over localhost and serving the MySQL wire on 3307.
+
+```sh
+docker run -d --name adbcbridge-mongodbbi --memory=2g -p 127.0.0.1:13315:3307 \
+  -e LD_LIBRARY_PATH=/opt/mongobi -v $MONGODB_BI_DIR:/opt/mongobi:ro \
+  -v $PWD/tests/compat/fixtures/mongodbbi.drdl:/etc/mongodbbi.drdl:ro mongo:7
+```
+
+(or `MONGODB_BI_DIR=… docker compose -f tests/compat/docker-compose.yml --profile extra up
+-d mongodbbi`; it is in the `extra` profile, so a plain `up -d` leaves it alone.) MongoDB
+is ready in a few seconds — `docker exec adbcbridge-mongodbbi mongosh --quiet --eval
+'db.runCommand({ping:1})'` answers `{ ok: 1 }`.
+
+### Loading the data (the entry cannot)
+
+`mongosqld` is a **query engine only**: it has no `CREATE TABLE` and no `INSERT`, and a
+"table" there is a MongoDB collection plus a column mapping in its schema. So the entry is
+`read_only=True` and its two collections are written into MongoDB directly, the way the
+`influxdb3` entry's tables are written over the HTTP API:
+
+```sh
+docker exec -i adbcbridge-mongodbbi mongosh --quiet < tests/compat/fixtures/load_mongodbbi.js
+# adbc_t=2 adbc_big=100000
+```
+
+Then start `mongosqld` on top of the loaded collections, with the schema that maps them:
+
+```sh
+docker exec -d adbcbridge-mongodbbi /opt/mongobi/mongosqld --addr 0.0.0.0:3307 \
+  --mongo-uri mongodb://127.0.0.1:27017 --schema /etc/mongodbbi.drdl \
+  --logPath /tmp/mongosqld.log --logAppend
+docker exec adbcbridge-mongodbbi tail -2 /tmp/mongosqld.log
+# ... [initandlisten] waiting for connections at [::]:3307
+```
+
+`fixtures/mongodbbi.drdl` is a DRDL schema — the BI Connector's own mapping format, of
+which `mongodrdl` (in the same tarball) generates a first draft by sampling. The matrix
+uses a written one because sampling types a field from the values it happens to see:
+`adbc_big.c` comes out `int` because its first values are whole, and a `binData` field
+comes out `varchar` and then reads back NULL. Anything the schema does not list is not a
+table, which is also why `mongosqld` needs restarting (or `--schemaRefreshIntervalSecs`)
+after the collections change.
+
+### Run the entry
+
+```sh
+export MONGODBBI_ODBC_DRIVER=$MYSQL_ODBC_DRIVER
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py mongodbbi
+# mongodbbi PASS  (MySQL (via ODBC) 5.7.12 mongosqld v2.14.22)
+```
+
+### What works
+
+The whole read side of the workload: `int64`, `double`, `string` (including `"héllo 🚀"`
+— the emoji survives the round trip), `bool` as `int8`, timestamps, the all-NULL row, the
+parameterised `SELECT`, the 100,000-row batched read, `GetObjects`, `GetTableSchema` and
+the error text. On the SQL side `mongosqld` translates into MongoDB aggregation pipelines,
+so the entry's `extra` steps run a filtered count, a `GROUP BY` on a boolean field and a
+`COUNT(DISTINCT _id)` over the `ObjectId` every document carries.
+
+Fetch: **128k rows/s** over the 100,000-row `adbc_big` (`bench/matrix_bench.py`). There is
+no ingest number — nothing can be written through `mongosqld`.
+
+### Two Connector/ODBC crashes, and the one that needed a driver quirk
+
+Both were found with a standalone C program against `libmyodbc9w.so` (no adbcbridge in the
+picture), and both are segfaults inside the connector, not error returns.
+
+**1. The handshake, without `PLUGIN_DIR`.** `mongosqld` offers only
+`mysql_native_password`, whose client-side plugin Connector/ODBC 9 no longer links in — it
+ships as a loadable `.so` beside the driver, and the compiled-in search path of the generic
+tarball is `/usr/local/mysql/lib/plugin`. Where [Dolt](#dolt) reports that as a clean
+`Authentication plugin ... cannot be loaded`, here `SQLDriverConnect` **segfaults**.
+Pointing `PLUGIN_DIR` at the tarball's own plugin directory — which `conn_uri()`'s
+`{plugin_dir}` already does for TiDB, Dolt, Databend and MatrixOne — avoids it entirely, so
+this one costs the entry nothing but a connection property.
+
+**2. `SQLColumns` on any table with a `DECIMAL` column.** This is the one the driver had to
+work around:
+
+```
+#0  __GI_____strtol_l_internal (nptr=0x0, ...)
+#1  get_buffer_length (..., sqltype=3 /* SQL_DECIMAL */, col_size=0) at driver/catalog.cc:626
+#2  columns_i_s (..., table="adbc_t", ...) at driver/catalog.cc:962
+#3  MySQLColumns (...) / SQLColumnsW (...)
+```
+
+`mongosqld`'s `information_schema.columns` reports `NULL` for `NUMERIC_PRECISION`,
+`NUMERIC_SCALE` and `CHARACTER_OCTET_LENGTH` on every column, and Connector/ODBC 9 builds
+`SQLColumns` entirely from `information_schema` (the older `SHOW`-based path is gone; there
+is no `NO_I_S` option left to switch to). For a `DECIMAL` column it runs `strtol()` on that
+NULL pointer and the process dies. `adbc_big`, which has no decimal column, comes back
+fine — so nothing in the return code separates the two cases:
+
+```sh
+./probe_c "Driver=…libmyodbc9w.so;…;PLUGIN_DIR=…;" columns adbc_big   # SQLColumns rc=0, six columns
+./probe_c "Driver=…libmyodbc9w.so;…;PLUGIN_DIR=…;" columns adbc_t     # Segmentation fault
+```
+
+The fix is one keyed entry in `OdbcDetectQuirks` setting the **existing**
+`no_sql_columns` flag — the same one the Arrow Flight SQL driver and psqlodbc-against-
+ArcadeDB use — after which `GetObjects` describes `SELECT * FROM <table> WHERE 1=0` instead,
+which is where `GetTableSchema` already gets a table's columns from. It is keyed on
+`SQL_DBMS_VER` (`"5.7.12 mongosqld v2.14.22"`, straight out of the handshake) rather than on
+`SELECT version()`, which answers a bare `5.7.12` here and names nothing.
+
+### The entry's tolerances are the BI Connector's type system
+
+| flag | why |
+|---|---|
+| `read_only=True` | `mongosqld` has no DDL and no DML at all, so neither the entry's `ddl` nor `adbc_ingest` has anywhere to go. The two collections come from `fixtures/load_mongodbbi.js`. |
+| `NO_SSPS=1` (in `conn`) | `COM_STMT_PREPARE` comes back as error 1295, `This command is not supported in the prepared statement protocol yet` — the same answer Databend's MySQL handler gives. With `NO_SSPS` the connector substitutes bound parameters into the SQL text, and the parameterised `SELECT` works. |
+| `{plugin_dir}` (in `conn`) | `mysql_native_password`, as above — and here its absence is a segfault, not a diagnostic. |
+| `pseudo_columns=("_id",)` | every MongoDB document carries an `_id` and the BI Connector maps it as an ordinary column, so `SELECT *` returns a ninth, always-populated column — the same shape as ArcadeDB's `@rid`. |
+| `catalog_cols=(...)` | `mongosqld` reports a table's columns in its own alphabetical order, in the catalog and in `SELECT *` alike. |
+| `quote` set to a backtick | a MySQL dialect with no `sql_mode` to set (there is no `SET SESSION` at all), so `"…"` is a string literal and identifiers are backtick-quoted, as for GreptimeDB. |
+| `bool_type="int8"` | MongoDB's boolean goes over the MySQL wire as `TINYINT(1)`, which Connector/ODBC reports as `SQL_TINYINT`, exactly as MySQL's own `BOOLEAN` does. |
+| `decimal_type="string"` | `mongosqld` describes every decimal as `DECIMAL(65,20)` whatever is in it; 65 digits is past what an Arrow `decimal128` holds, so the column arrives as its exact text (`"12.345"`), as for `databend` and `flightsql`. |
+| `big_rows=100000` | `adbc_big` is what `check_big()` reads and what `bench/matrix_bench.py` times a fetch of on a read-only entry. |
+
+Two more facts about the mapping, both of them the connector's and neither costing a flag:
+
+* **No binary type exists.** `bson.Binary` is rejected as a DRDL Mongo type (`unsupported
+  Mongo type: "bson.Binary"`) and `varbinary`/`binary`/`bindata` are all rejected as DRDL
+  SQL types; a sampled `binData` field is mapped to `varchar` and then reads back NULL. So
+  the workload's two bytes are stored as *text* and read back as text, which the assertion
+  already allows — the same place CrateDB and InfluxDB 3 end up.
+* **A BSON date is milliseconds.** `ts` keeps 123 of the workload's 123456 microseconds
+  (within the default `ts_us` tolerance), and `d` — there being no DATE type — is a
+  midnight timestamp, which the workload also already allows.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down mongodbbi
+# or, if started standalone:
+docker rm -f adbcbridge-mongodbbi
+```

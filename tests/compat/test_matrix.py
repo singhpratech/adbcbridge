@@ -36,6 +36,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DREMIO_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, TDENGINE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SPANNER_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MONGODBBI_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -504,6 +505,71 @@ DBS = {
         # spending eight minutes on it.
         big_rows=2000,
         setup=["CREATE DATABASE IF NOT EXISTS adbc", "USE adbc"]),
+    "mongodbbi": dict(
+        # MongoDB behind the MongoDB BI Connector: `mongosqld` reads a MongoDB instance
+        # and serves the *MySQL wire protocol* over it, presenting each collection as a
+        # relational table, so MySQL Connector/ODBC drives it (see the `mysql` entry for
+        # the driver download and the LD_PRELOAD pyarrow needs).  It announces itself as
+        # "5.7.12 mongosqld v2.14.22".  The server side -- the tarball, the DRDL schema
+        # that maps the collections and the mongosh seed -- is in tests/compat/README.md.
+        env="MONGODBBI_ODBC_DRIVER",
+        # NO_SSPS=1 is what makes the parameterised query work: mongosqld answers
+        # COM_STMT_PREPARE with error 1295, "This command is not supported in the prepared
+        # statement protocol yet", exactly as Databend's MySQL handler does.  With NO_SSPS
+        # the connector substitutes bound parameters into the SQL text and every statement
+        # goes as a plain query.
+        # {plugin_dir}: mongosqld offers only mysql_native_password, whose client-side
+        # plugin Connector/ODBC 9 loads at run time -- and here it does not fail cleanly
+        # without it, it *segfaults* in the handshake.  See conn_uri() and README.md.
+        conn="Driver={drv};Server=127.0.0.1;Port=13315;Database=adbc;User=adbc;"
+             "NO_SSPS=1;{plugin_dir}",
+        # read_only: mongosqld is a query engine only -- it has no DDL and no DML at all
+        # ("unsupported statement") -- and a table there is a MongoDB collection plus a
+        # column mapping in mongosqld's DRDL schema, so neither the entry's `ddl` nor
+        # adbc_ingest's generated CREATE TABLE has anywhere to go.  Both tables are loaded
+        # into MongoDB out of band with mongosh, as the `influxdb3` entry's are over the
+        # HTTP write API; see README.md.
+        read_only=True,
+        # ddl is documentation here (nothing executes it): the SQL shape the DRDL schema in
+        # README.md gives the adbc_t collection.
+        ddl="CREATE TABLE adbc_t (_id VARCHAR(24), i BIGINT, f DOUBLE, s VARCHAR(65535),"
+            " b VARCHAR(65535), d DATETIME, ts DATETIME, n DECIMAL(65,20), bo BOOLEAN)",
+        # Every MongoDB document carries an _id and the BI Connector maps it as an ordinary
+        # column, so "SELECT *" returns a ninth, always-populated column -- the same shape
+        # as ArcadeDB's @rid, and skipped the same way.
+        pseudo_columns=("_id",),
+        # mongosqld reports a table's columns in its own (alphabetical) order, in the
+        # catalog and in a SELECT * alike.
+        catalog_cols=("b", "bo", "d", "f", "i", "n", "s", "ts"),
+        # A MySQL dialect with no sql_mode to set (mongosqld has no SET SESSION), so a
+        # "..." is a string literal and identifiers are backtick-quoted, as GreptimeDB's.
+        quote="`",
+        # The BI Connector has no binary type at all: bson.Binary cannot be named in a DRDL
+        # schema ("unsupported Mongo type: bson.Binary") and a sampled binData field reads
+        # back NULL, so the two bytes are stored as text and read back as text, exactly as
+        # for the `cratedb` and `influxdb3` entries.
+        # MongoDB's boolean goes over the MySQL wire as TINYINT(1), which Connector/ODBC
+        # reports as SQL_TINYINT -> int8, as MySQL's own BOOLEAN does.
+        bool_type="int8",
+        # mongosqld describes every decimal as DECIMAL(65,20) whatever the values in it --
+        # 65 digits is more than an Arrow decimal128 can hold -- so the column comes back
+        # as its exact text, as it does for the `databend` and `flightsql` entries.
+        decimal_type="string",
+        # A BSON date is milliseconds since the epoch, so `ts` keeps 123 of ROW1's 123456
+        # microseconds (the default tolerance already allows it) and `d`, which has no DATE
+        # type to land in either, is a midnight timestamp.
+        # adbc_big holds 100,000 documents -- the table check_big() reads and the one
+        # bench/matrix_bench.py times a fetch of on a read_only entry.
+        big_rows=100000,
+        extra=[
+            # What only this stack does: SQL that mongosqld translates into a MongoDB
+            # aggregation pipeline and runs inside the server -- a filtered count, a
+            # GROUP BY on a boolean field, and a DISTINCT over the ObjectId `_id` that
+            # every document carries.
+            ("SELECT count(*) FROM `adbc_big` WHERE `a` > 50000", (49999,)),
+            ("SELECT `e`, count(*) FROM `adbc_big` GROUP BY `e` ORDER BY `e`", (0, 50000)),
+            ("SELECT count(DISTINCT `_id`) FROM `adbc_t`", (2,)),
+        ]),
     "db2": dict(
         env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",

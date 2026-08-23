@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# DRDL schema for the `mongodbbi` matrix entry: the mapping mongosqld (the MongoDB BI
+# Connector) serves the two collections load_mongodbbi.js writes as SQL tables.
+#
+#   mongosqld --addr 0.0.0.0:3307 --mongo-uri mongodb://127.0.0.1:27017 --schema <this>
+#
+# mongosqld can also sample the collections for a schema of its own (that is what it does
+# with no --schema), but sampling is what makes the mapping unpredictable: it types a
+# field from the values it happens to see, so `c` in adbc_big comes out `int` because its
+# first values are whole, and a binData field comes out `varchar` and then reads back
+# NULL.  A written schema pins every column instead, which is also how the BI Connector
+# is meant to be run in production (mongodrdl generates a starting point).
+#
+# The type names are the BI Connector's own: there is no binary SQL type and no
+# bson.Binary Mongo type at all -- both are rejected with "unsupported ... type" -- which
+# is why `b` carries the workload's two bytes as text.
+schema:
+- db: adbc
+  tables:
+  - table: adbc_t
+    collection: adbc_t
+    pipeline: []
+    columns:
+    # _id is on every MongoDB document and the BI Connector maps it as an ordinary
+    # column, so it is the ninth column of "SELECT *"; the matrix entry lists it in
+    # pseudo_columns.
+    - {Name: _id, MongoType: bson.ObjectId,   SqlName: _id, SqlType: objectid}
+    - {Name: i,   MongoType: int,             SqlName: i,   SqlType: int}
+    - {Name: f,   MongoType: float64,         SqlName: f,   SqlType: float}
+    - {Name: s,   MongoType: string,          SqlName: s,   SqlType: varchar}
+    - {Name: b,   MongoType: string,          SqlName: b,   SqlType: varchar}
+    - {Name: d,   MongoType: date,            SqlName: d,   SqlType: timestamp}
+    - {Name: ts,  MongoType: date,            SqlName: ts,  SqlType: timestamp}
+    - {Name: "n", MongoType: bson.Decimal128, SqlName: "n", SqlType: decimal}
+    - {Name: bo,  MongoType: bool,            SqlName: bo,  SqlType: boolean}
+  - table: adbc_big
+    collection: adbc_big
+    pipeline: []
+    columns:
+    - {Name: _id, MongoType: bson.ObjectId, SqlName: _id, SqlType: objectid}
+    - {Name: a,   MongoType: int,           SqlName: a,   SqlType: int}
+    - {Name: b,   MongoType: string,        SqlName: b,   SqlType: varchar}
+    - {Name: c,   MongoType: float64,       SqlName: c,   SqlType: float}
+    - {Name: d,   MongoType: date,          SqlName: d,   SqlType: timestamp}
+    - {Name: e,   MongoType: bool,          SqlName: e,   SqlType: boolean}
