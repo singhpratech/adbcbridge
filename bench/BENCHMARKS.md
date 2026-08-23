@@ -558,9 +558,104 @@ and then quietly execute only part of the array, so they opt out in
 Numbers were taken while the same containers were serving other work, so treat
 them as orders of magnitude rather than to three significant figures.
 
-The remaining floor is the driver's own per-statement cost. clickhouse-odbc is
-the outlier: it speaks HTTP, has no transactions to batch and no usable parameter
-arrays, so its ingest rate stays at the driver's request-per-row rate.
+The remaining floor is the driver's own per-statement cost, one execute per row on
+every driver with no usable parameter arrays. That floor is what the next section
+removes.
+
+### Multi-row INSERT batching
+
+Parameter arrays are an ODBC feature, and five of the drivers in the matrix get them
+wrong (DuckDB, MonetDB, clickhouse-odbc, Firebird's OdbcFb, psqlodbc against QuestDB)
+while a sixth, MySQL Connector/ODBC, accepts an array and then walks it row by row
+inside the driver. All six were left at one `SQLExecute` — for a client/server database
+one network round trip — per row.
+
+Multi-row `INSERT` needs no ODBC feature at all. Bulk ingest writes its own `INSERT`,
+so instead of executing
+
+```sql
+INSERT INTO t ("a", "b", "c", "d") VALUES (?, ?, ?, ?)          -- N times
+```
+
+it prepares
+
+```sql
+INSERT INTO t ("a", "b", "c", "d") VALUES (?,?,?,?), (?,?,?,?), …   -- K row-groups
+```
+
+and binds K rows' worth of ordinary scalar parameters per execute: parameter
+`r * ncols + c + 1` is row `r`, column `c`. Every per-driver parameter rule
+(`bool_param_as_int`, `decimal_param_as_varchar`, `bigint_param_as_string`,
+`null_param_as_varchar`, `wchar_as_utf8`, …) applies to each row-group exactly as it
+does to a single row, because it is the same `SlotFromArrow` + `SQLBindParameter` code.
+Round trips drop by a factor of K.
+
+It turned out to be faster than parameter arrays on nearly every driver where arrays
+work too, so it is the default for ingest; arrays stay ahead of it only for MariaDB
+Connector/ODBC, which sends a bound array as one `COM_STMT_BULK_EXECUTE`. Only the
+`INSERT` bulk ingest generates is rewritten — a query the caller wrote is executed as
+written.
+
+**Choosing K.** ODBC has no `SQLGetInfo` for "how many parameters will you take"; the
+nearest thing is `SQL_MAX_STATEMENT_LEN`, and most drivers answer 0 = unknown even for
+that. So K starts from a budget and is probed downwards:
+
+* 2000 parameters, at most 1000 row-groups — SQL Server's own limits are 2100
+  parameters and 1000 `VALUES` row constructors, and every other tested backend takes
+  more. Four columns therefore give K = 500.
+* clipped by `SQL_MAX_STATEMENT_LEN` where the driver gives one (sqliteodbc says 16 KB,
+  which caps a 121-column table at 42 row-groups) and by a 16 MB parameter-scratch
+  budget.
+* then `SQLPrepare`d. A refusal halves K and asks again, down to 2; so does a refusal
+  from the *first* `SQLExecute`, before anything has been written. The ceiling that
+  survives is remembered on the connection, so the search is paid once.
+* `adbc.odbc.rows_per_insert` overrides the budget (0 = automatic, 1 = off).
+
+**Falling back.** Before the ingest transaction opens, a two-row `SQLPrepare` asks
+whether the server has the form at all. Three answers:
+
+| server | probe result |
+|---|---|
+| Oracle | `VALUES (…),(…)` is `ORA-00933`; the probe re-asks with `INSERT ALL INTO t VALUES (…) INTO t VALUES (…) SELECT 1 FROM dual` (a keyed quirk on `sqora`, consulted only after the standard form has actually been refused) and uses that |
+| SQLite | 2000 parameters is over a 999-variable build's limit; K halves until it prepares |
+| ClickHouse | clickhouse-odbc prepares 500 row-groups and refuses to execute them; K halves to 125 |
+| Firebird 5 (OdbcFb) | no multi-row `VALUES`, and a `UNION ALL` of `SELECT ? … FROM RDB$DATABASE` will not prepare either (the placeholders need an explicit `CAST`, which would change truncation semantics on append). The probe fails, the connection remembers, and ingest carries on one row at a time |
+
+The whole ingest is still one transaction, so a row the server refuses part way through
+rolls the lot back and leaves no half table.
+
+Ingesting `(int32, float64, string, date32)` into a table the benchmark created, on a
+connection in autocommit; **before** is `adbc.odbc.rows_per_insert=1`, which takes
+exactly the previous code path, **after** is the default. Median of three, the two arms
+interleaved so that host load hits both equally. Rows per second:
+
+| Database | 10,000 rows before | after | 50,000 rows before | after |
+|---|---:|---:|---:|---:|
+| SQLite 3.45 | 400,705 | 459,961 | 634,417 | 866,080 |
+| DuckDB | 24,057 | **344,597** | 20,342 | **403,228** |
+| PostgreSQL 16 | 102,508 | 312,025 | 104,609 | 417,866 |
+| MariaDB 11 | 67,256 | 63,864 | 426,110 | 437,503 |
+| MySQL 8.4 | 16,857 | 36,824 | 20,784 | **200,247** |
+| SQL Server 2022 | 106,176 | 106,830 | 110,135 | 199,216 |
+| MonetDB 11.55 | 12,190 | **138,902** | 11,010 | **206,382** |
+| Oracle 23ai | 475 | **23,628** | 514 | **44,008** |
+| IBM Db2 12.1 | 670 | 1,010 | — | — |
+| Firebird 5 | 4,420 | 4,477 | — | — |
+| ClickHouse 26 (300 rows) | 16 | **911** | — | — |
+| CockroachDB 26 | 1,205 | 14,259 | — | — |
+
+The biggest wins are exactly the drivers the change was for: DuckDB 14x, MonetDB 11x,
+ClickHouse 57x, MySQL 10x at 50,000 rows, Oracle 50–86x (Oracle's parameter arrays are
+accepted and then abandoned part way through a batch, so it had been paying close to
+one execute per row). PostgreSQL and SQL Server gain 2–4x by preferring the multi-row
+form over their working parameter arrays; MariaDB keeps its arrays and is unchanged;
+Firebird has no multi-row form to use and is unchanged. Db2's clidriver is not
+round-trip bound on this workload, so it gains little.
+
+At 10,000 rows the fixed cost of the `CREATE TABLE` and the first prepare is a visible
+share of the total, which is why SQL Server and MySQL look flatter there than at 50,000.
+These were taken while the same host was serving other containers; treat them as
+ratios, not as three significant figures.
 
 ## Files
 
@@ -571,3 +666,7 @@ arrays, so its ingest rate stays at the driver's request-per-row rate.
 - `bench/ingest_bench.py`, `bench/matrix_bench.py` — the write path.
 - `bench/verify_array_binding.py` — differential check that array binding and the
   row-at-a-time fallback produce identical data and identical rows-affected.
+- `tests/c/test_multirow.c`, `test_multirow_ingest` in `tests/test_sqlite.py` — the
+  multi-row `INSERT` text and its behaviour (NULLs in every row-group position, a batch
+  that is not a multiple of K, a single-row batch, a failure that must leave no rows,
+  and the parameter-ceiling search).

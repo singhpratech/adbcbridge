@@ -273,7 +273,7 @@ endif()
 # --- C unit tests (ctest) ---
 if(ADBC_ODBC_BUILD_TESTS)
   enable_testing()
-  foreach(test_name IN ITEMS test_utf16 test_types test_sqllen32 test_objects test_errors)
+  foreach(test_name IN ITEMS test_utf16 test_types test_sqllen32 test_objects test_errors test_multirow)
     add_executable(${test_name}
       tests/c/${test_name}.c
       src/utils.c
