@@ -1294,7 +1294,6 @@ def run(name, cfg):
         for sql in cfg.get("setup", []):
             cur.execute(sql)
         if not ro:
-            for t in (t_name, ing_name, q(cfg, ing_name)):  # ingest quotes names (exact case)
             for t in (t_name, ing_name, qi(cfg, ing_name)):  # ingest quotes names (exact case)
                 try:
                     cur.execute("DROP TABLE " + t)
@@ -1363,7 +1362,7 @@ def run(name, cfg):
         # a read_only one does, and covers bulk ingest through its `extra` steps instead.
         if ro or not cfg.get("ingest_create", True):
             check_big(cur, cfg, "SELECT %s, %s FROM %s"
-                                % (q(cfg, "a"), q(cfg, "b"), q(cfg, "adbc_big")))
+                                % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "adbc_big")))
             check_big(cur, cfg, "SELECT %s, %s FROM %s" % (
                 qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "adbc_big")))
         else:
@@ -1420,19 +1419,6 @@ def run(name, cfg):
     return "PASS  (%s %s)" % (info["vendor_name"], info["vendor_version"])
 
 
-def q(cfg, name):
-    """`name` quoted the way this server quotes an identifier.
-
-    The double quote is SQL's and every other entry's; GreptimeDB is a MySQL dialect
-    with no ANSI_QUOTES to switch to, so a "..." there is a string literal and its
-    identifiers are backtick-quoted (`quote` in the entry).  adbc_ingest quotes with
-    whatever SQL_IDENTIFIER_QUOTE_CHAR the driver reports, so only this file's own SQL
-    needs telling.
-    """
-    c = cfg.get("quote", '"')
-    return c + name + c
-
-
 def qi(cfg, name):
     """Quote an identifier the way this server spells a quoted name.
 
@@ -1442,7 +1428,9 @@ def qi(cfg, name):
     quote -- MySQL and MariaDB reach it through the `ANSI_QUOTES` sql_mode their entries
     set in `setup`.  `quote` overrides it for a server that has no double-quoted-identifier
     mode at all (StarRocks accepts the `ANSI_QUOTES` value but its parser ignores it, so
-    MySQL Connector/ODBC correctly reports the backtick and ingest quotes with that).
+    MySQL Connector/ODBC correctly reports the backtick and ingest quotes with that;
+    GreptimeDB is a MySQL dialect with no ANSI_QUOTES at all, so a "..." there is a
+    string literal).
     """
     q = cfg.get("quote", '"')
     return q + name + q
@@ -1500,8 +1488,8 @@ def check_ingest(cur, cfg, ing_name):
     assert (n1, n2) == (3, 3) or not cfg.get("rowcount", True), (n1, n2)
     refresh(cur, cfg, ing_name)
     cur.execute("SELECT %s, %s, %s, %s FROM %s WHERE %s = 2"
-                % (q(cfg, "a"), q(cfg, "b"), q(cfg, "c"), q(cfg, "d"),
-                   q(cfg, ing_name), q(cfg, "a")))
+                % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "c"), qi(cfg, "d"),
+                   qi(cfg, ing_name), qi(cfg, "a")))
     cur.execute("SELECT %s, %s, %s, %s FROM %s WHERE %s = 2" % (
         qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "c"), qi(cfg, "d"), qi(cfg, ing_name), qi(cfg, "a")))
     got = cur.fetch_arrow_table().to_pylist()
@@ -1519,7 +1507,7 @@ def check_ingest(cur, cfg, ing_name):
                                                    "e": pa.array([i % 2 == 0 for i in range(N)])}), mode="replace")
     refresh(cur, cfg, ing_name)
     check_big(cur, cfg, "SELECT %s, %s FROM %s ORDER BY %s"
-              % (q(cfg, "a"), q(cfg, "b"), q(cfg, ing_name), q(cfg, "a")))
+              % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, ing_name), qi(cfg, "a")))
     check_big(cur, cfg, "SELECT %s, %s FROM %s ORDER BY %s" % (
         qi(cfg, "a"), qi(cfg, "b"), qi(cfg, ing_name), qi(cfg, "a")))
 
