@@ -39,6 +39,7 @@ from the second table to the first.
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
 | Databend | MySQL Connector/ODBC (MySQL wire) | PASS | no prepared statements (`NO_SSPS=1`); `_binary` literals; MySQL type names in ingest DDL |
 | Azure SQL Edge 16.0 | msodbcsql 18 | PASS | SQL Server 2022 engine; no quirks |
+| openGauss 6.0 | psqlodbc (PG wire) | PASS | no quirks: a PostgreSQL 9.2 fork, driven by the `postgres` entry's types unchanged; server-side setup only (`CAP_SYS_NICE` for the MOT engine's `mbind()`, `max_process_memory` >= 2 GB, and a role created after start-up because the initial user cannot log in remotely); ingest 9.5k rows/s (36.9k with array binding), fetch 1.30M rows/s |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 
 ## Driver available, free server available — queued for verification
@@ -49,7 +50,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 |---|---|---|---|
 | RisingWave | psqlodbc | `risingwavelabs/risingwave` | queued |
 | Materialize | psqlodbc | `materialize/materialized` | queued |
-| openGauss | psqlodbc | `enmotech/opengauss` | queued |
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |
 | MatrixOne | MySQL Connector/ODBC | `matrixorigin/matrixone` | queued |
 | MariaDB ColumnStore | MariaDB Connector/ODBC | `mariadb/columnstore` | queued |

@@ -1426,6 +1426,107 @@ implement `SQL_DRIVER_NAME`, that function now falls back to `SQL_DBMS_NAME`
 keyed on it. For the same reason the read-only option `adbc.odbc.driver_name` returns an
 error on this driver rather than a name.
 
+## openGauss 6.0
+
+openGauss is Huawei's fork of PostgreSQL 9.2, so it speaks the PostgreSQL wire protocol
+and the same `psqlodbc` build the `postgres` entry uses drives it unchanged — there is no
+openGauss ODBC driver to fetch. It reports itself as `PostgreSQL` 9.2.4 over the wire.
+Everything unusual about this entry is the *server*, not the driver.
+
+### Get the ODBC driver without root
+
+The same `psqlodbc` as `postgres`; if you already have `POSTGRES_ODBC_DRIVER` set, just
+point the openGauss variable at it:
+
+```sh
+export OPENGAUSS_ODBC_DRIVER=$POSTGRES_ODBC_DRIVER
+# or, from scratch:
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export OPENGAUSS_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d opengauss
+# or standalone:
+docker run -d --name adbcbridge-opengauss --memory=3g --shm-size=1g --cap-add=SYS_NICE \
+  -p 127.0.0.1:15438:5432 -e GS_PASSWORD='Adbc@2026' enmotech/opengauss:latest \
+  -c shared_buffers=256MB -c max_process_memory=2GB -c max_connections=50
+```
+
+Two flags are not optional:
+
+* **`--cap-add=SYS_NICE`**. openGauss's MOT (memory-optimized table) engine allocates its
+  recovery-manager arena with `mbind()`, which Docker's default seccomp profile rejects
+  with `EPERM` unless the container holds `CAP_SYS_NICE`. Without it the postmaster dies
+  a second into start-up and the container exits 1; `docker logs` shows only
+  `gs_ctl: could not start server`, and the reason is in
+  `/var/lib/opengauss/data/pg_log/postgresql-*.log`:
+  `[Memory] mbind: Operation not permitted` → `Failed to allocate memory of 104857600
+  size` → `[System] Failed to Initialize the Recovery Manager`.
+* **the `-c` overrides and `--memory=3g`**. `gs_initdb` sizes the instance from *host*
+  RAM: on a 31 GB box it writes `shared_buffers=1024MB` and takes `max_process_memory`
+  to 12 GB, which a small container cannot back. `max_process_memory` has a hard lower
+  bound of 2 GB (`1536000 is outside the valid range for parameter "max_process_memory"
+  (2097152 .. 2147483647)`), so 3 GB is the smallest workable `--memory`; the server
+  actually resides in about 550 MB.
+
+Then create the role and database the matrix connects as — openGauss **refuses a remote
+login for the initial user** (`gaussdb`), so `GS_PASSWORD` alone gets you nothing over
+TCP:
+
+```sh
+docker exec -u omm adbcbridge-opengauss bash -lc "
+  export GAUSSHOME=/usr/local/opengauss PATH=/usr/local/opengauss/bin:\$PATH
+  export LD_LIBRARY_PATH=/usr/local/opengauss/lib:\$LD_LIBRARY_PATH
+  gsql -d postgres -p 5432 -c \"CREATE USER adbc WITH SYSADMIN PASSWORD 'Adbc@2026';\"
+  gsql -d postgres -p 5432 -c \"CREATE DATABASE adbc OWNER adbc DBCOMPATIBILITY 'PG';\"
+"
+```
+
+* The password must satisfy openGauss's complexity rule (8+ characters from at least
+  three of upper/lower/digit/special), hence `Adbc@2026`.
+* `DBCOMPATIBILITY 'PG'` pins the SQL dialect. It is this image's default
+  (`SHOW sql_compatibility` says `PG`) but worth spelling out, because openGauss's other
+  mode, `A` (Oracle), redefines `DATE` as `timestamp(0) without time zone` — the entry's
+  `d` column would then come back as a timestamp rather than a date.
+* Authentication works because this image ships `password_encryption_type = 1`, which
+  stores an MD5 verifier beside openGauss's own SHA-256 one, and its `pg_hba.conf` asks
+  remote clients for `md5` — psqlodbc speaks MD5 and PostgreSQL's SCRAM, neither of
+  which is openGauss's native SHA-256 scheme. A server set to
+  `password_encryption_type = 2` cannot be reached by psqlodbc at all.
+
+### Run the entry
+
+```sh
+export OPENGAUSS_ODBC_DRIVER=$POSTGRES_ODBC_DRIVER
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+python tests/compat/test_matrix.py opengauss
+# opengauss PASS  (PostgreSQL (via ODBC) 9.2.4)
+```
+
+### Quirks
+
+None. No driver quirk, no tolerance flag, and no `db_kwargs`: the entry is the `postgres`
+entry with a different port and login. `INTEGER`, `DOUBLE PRECISION`, `VARCHAR`, `BYTEA`,
+`DATE`, `TIMESTAMP`, `NUMERIC(10,3)` and `BOOLEAN` all round-trip, including the emoji,
+the all-NULL row, typed parameters, microsecond timestamps, affected-row counts, 5000-row
+batched reads, `GetObjects`/`GetTableSchema`, and the error text (`relation
+"adbc_no_such_table" does not exist on gaussdb`). Parameter arrays work, so `adbc.odbc.array_binding=true` is roughly 4x faster on
+ingest (see `bench/MATRIX_BENCHMARKS.md`).
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down opengauss
+# or, if started standalone:
+docker rm -f adbcbridge-opengauss
+```
+
 ## H2 (PostgreSQL mode) — does not work with psqlodbc
 
 H2 has no ODBC driver of its own. Its server mode can speak the PostgreSQL v3 wire
