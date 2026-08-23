@@ -98,6 +98,13 @@ against the [`odbc-api`](https://crates.io/crates/odbc-api) and
 [`arrow-odbc`](https://crates.io/crates/arrow-odbc) crates talking to the same ODBC driver.
 Per-database results are in [`bench/RUST_BENCHMARKS.md`](bench/RUST_BENCHMARKS.md).
 
+### Every language
+
+`bench/csharp/`, `bench/java/` and `bench/go/` run that same ingest-and-fetch workload from
+C#, Java and Go. [`bench/LANGUAGE_BENCHMARKS.md`](bench/LANGUAGE_BENCHMARKS.md) puts all five
+bindings — Python, Rust, C#, Java and Go — side by side on the same table, so you can see how
+much of the cost is the driver and how much is the language's driver manager.
+
 ## Compatibility matrix
 
 adbcbridge can reach anything with an ODBC driver — the ODBC ecosystem covers a few
@@ -623,6 +630,7 @@ that runs it.
   <version>19.0.0</version>
   <scope>runtime</scope>
 </dependency>
+```
 
 `adbc-driver-jni` bundles the native ADBC driver manager, so Java loads the
 `.so` the same way every other binding does:
@@ -645,6 +653,8 @@ try (BufferAllocator allocator = new RootAllocator();
       System.out.println(root.getRowCount() + " rows");
     }
   }
+}
+```
 
 `PARAM_DRIVER` also accepts a bare library name or a driver-manifest name
 (`"odbc"`, see above). Parameters are bound as a `VectorSchemaRoot`, one column

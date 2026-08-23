@@ -19,6 +19,11 @@ plus any `unicode_env` the database needs (Oracle's NLS_LANG).  The file-based
 entries (sqlite) get a fresh temporary directory from `test_matrix`, so each
 invocation names a database file of its own.
 
+The table is named `$ADBC_BENCH_TABLE$ADBC_MATRIX_SUFFIX`, defaulting to
+`adbc_bench_rs`; the C#, Java and Go benchmarks under `bench/` set
+`ADBC_BENCH_TABLE` to a name of their own so they can share a server without
+tripping over each other's table.
+
 Exits 1 with a message on stderr if the database's `*_ODBC_DRIVER` variable is unset.
 """
 import os, pathlib, shlex, sys
@@ -26,7 +31,7 @@ import os, pathlib, shlex, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tests" / "compat"))
 import test_matrix as m  # noqa: E402
 
-TABLE = "adbc_bench_rs" + os.environ.get("ADBC_MATRIX_SUFFIX", "")
+TABLE = os.environ.get("ADBC_BENCH_TABLE", "adbc_bench_rs") + os.environ.get("ADBC_MATRIX_SUFFIX", "")
 
 
 def main(name):

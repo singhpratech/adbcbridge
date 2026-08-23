@@ -13,3 +13,7 @@ tests/java/target/
 bench/.matrix_bench.json
 build-*/
 bench/rust/target/
+bench/java/target/
+bench/csharp/bin/
+bench/csharp/obj/
+bench/go/bench_go
