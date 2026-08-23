@@ -526,7 +526,13 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
       char tname[300];
       status = ColumnTypeSql(conn->hdbc, &sv, tname, sizeof(tname), error);
       const char* name = schema.children[i]->name ? schema.children[i]->name : "";
-      InternalAdbcStringBuilderAppend(&sb, "%s%s%s%s %s", i ? ", " : "", q, name, q, tname);
+      if (conn->reader_opts.nullable_type_format && (schema.children[i]->flags & ARROW_FLAG_NULLABLE)) {
+        char wrapped[340];
+        snprintf(wrapped, sizeof(wrapped), conn->reader_opts.nullable_type_format, tname);
+        InternalAdbcStringBuilderAppend(&sb, "%s%s%s%s %s", i ? ", " : "", q, name, q, wrapped);
+      } else {
+        InternalAdbcStringBuilderAppend(&sb, "%s%s%s%s %s", i ? ", " : "", q, name, q, tname);
+      }
     }
     InternalAdbcStringBuilderAppend(&sb, ")");
     if (status == ADBC_STATUS_OK) {

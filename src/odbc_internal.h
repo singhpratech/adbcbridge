@@ -85,6 +85,8 @@ struct OdbcReaderOptions {
   // Driver quirk: bind NULL parameters as a NULL VARCHAR regardless of Arrow type
   // (clickhouse-odbc cannot encode typed NULLs for numeric parameters).
   bool null_param_as_varchar;
+  // Driver quirk: DDL type wrapper for nullable columns, e.g. "Nullable(%s)" (ClickHouse).
+  const char* nullable_type_format;
 };
 
 struct OdbcDatabase;

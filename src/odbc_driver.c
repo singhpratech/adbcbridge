@@ -226,6 +226,7 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   }
   if (strstr((const char*)name, "clickhouse")) {
     conn->reader_opts.null_param_as_varchar = true;
+    conn->reader_opts.nullable_type_format = "Nullable(%s)";
   }
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
