@@ -25,6 +25,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, GREPTIMEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, ARCADEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFLUXDB3_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, OCEANBASE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -264,6 +265,26 @@ DBS = {
         ingest_types={pa.bool_(): pa.int8()},
         setup=["CREATE DATABASE IF NOT EXISTS adbc", "USE adbc",
                "SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "oceanbase": dict(
+        # OceanBase CE is a distributed HTAP database whose MySQL mode speaks the MySQL
+        # wire protocol -- it announces itself as "5.7.25-OceanBase_CE-v4.4.2.1" -- so
+        # MySQL Connector/ODBC drives it and the `mysql` entry's DDL and tolerances apply
+        # unchanged: BOOLEAN is TINYINT(1) -> int8, and the double-quoted identifiers
+        # adbc_ingest emits need ANSI_QUOTES.
+        #   The user is `root@test`, not `root`: OceanBase is multi-tenant and the login
+        # name carries the tenant.  `test` is the MySQL-mode business tenant the image's
+        # boot creates (OB_TENANT_NAME) and the one OB_DATABASE=adbc creates the database
+        # in; root@sys is the cluster's own administrative tenant, which holds no user
+        # databases.  The "@" is only a login name to the driver, which passes it through.
+        # {plugin_dir}: OceanBase offers only mysql_native_password, whose *client-side*
+        # plugin Connector/ODBC 9 loads at run time -- see conn_uri() below.
+        env="OCEANBASE_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=12881;Database=adbc;User=root@test;"
+             "Password=adbc;{plugin_dir}",
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE,"
+            " ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
+        bool_type="int8",
+        setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
     "greptimedb": dict(
         # GreptimeDB is a time-series database that serves *both* the PostgreSQL wire
         # (4003) and the MySQL wire (4002).  This entry uses the MySQL one, driven by

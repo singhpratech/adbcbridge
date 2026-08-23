@@ -3122,3 +3122,173 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down influxdb3
 # or, if started standalone:
 docker rm -f adbcbridge-influxdb3
 ```
+
+## OceanBase CE 4.4.2 (MySQL 5.7.25 wire)
+
+[OceanBase](https://github.com/oceanbase/oceanbase) is a distributed, multi-tenant HTAP
+database. Its MySQL mode serves the MySQL wire protocol — it announces itself as
+`5.7.25-OceanBase_CE-v4.4.2.1` — so it needs no ODBC driver of its own: the same MySQL
+Connector/ODBC build used for the `mysql` entry drives it (see [MySQL 8](#mysql-8) above
+for the root-free tarball, and for the `LD_PRELOAD` that `import pyarrow` makes
+necessary).
+
+```sh
+export OCEANBASE_ODBC_DRIVER=$MYSQL_ODBC_DRIVER   # the tarball's libmyodbc9w.so
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d oceanbase
+# or standalone:
+docker run -d --name adbcbridge-oceanbase --memory=6g \
+  --ulimit nofile=20000:20000 --ulimit stack=-1:-1 \
+  -p 127.0.0.1:12881:2881 \
+  -e MODE=SLIM -e OB_TENANT_NAME=test -e OB_TENANT_PASSWORD=adbc -e OB_DATABASE=adbc \
+  oceanbase/oceanbase-ce:latest
+```
+
+Wait for the log line, not for the port — the MySQL listener answers minutes before the
+tenant behind it does:
+
+```sh
+until docker logs adbcbridge-oceanbase 2>&1 | grep -q "boot success"; do sleep 5; done
+```
+
+That takes about a minute from an already-pulled image, and the container settles at
+~2.6 GiB, peaking at ~4.0 GiB during the benchmark — comfortably inside the 6 GB cap.
+The image itself is ~4 GB, so the first `docker pull` is the long part.
+
+Three things about the container are worth spelling out, because two of them are the
+difference between a server and a failed boot.
+
+**`--ulimit nofile=20000`.** `obd`, the deployer the image drives everything through,
+refuses to work below 20,000 open files:
+
+```
+[ERROR] OBD-1007: The value of the ulimit parameter "open files" must not be less
+        than 20000 (Current value: 1024)
+```
+
+Docker's default is 1024, so without the flag the boot stops there. It is settable
+per-container and needs no root on the host.
+
+**`MODE=SLIM`, and why not the default `MODE=MINI`.** This is not a size knob. The
+entrypoint has two paths: `MINI` (the default) has `obd` deploy a cluster and then
+*create* the `test` tenant, while `SLIM` unpacks a **prebuilt** single-node cluster
+(squashfs images of the data and clog directories, `/root/demo/store.img` and
+`etc.img`) and starts that. On this box the `MINI` path does not finish. Tenant creation
+ends in
+
+```
+ALTER SYSTEM LOAD MODULE DATA module = timezone tenant = 'test' infile = 'etc/'
+```
+
+which loads the 118,610 rows of `etc/timezone_V1.log` into `mysql.time_zone_transition`.
+Measured, that ran at ~4 rows/s — hours of work against the 1000-second
+`ob_query_timeout` `obd` sets for it, so the tenant create times out, `deploy_failed`
+runs and the container exits. `SLIM` never runs it: the prebuilt store already holds the
+tenant *and* its populated timezone tables. (`MINI` also needs its memory and log-disk
+sizes overridden as a set — `OB_MEMORY_LIMIT` defaults to 6 GB, which does not fit under
+a 6 GB cap, and the MINI `OB_LOG_DISK_SIZE` leaves the tenant with "not enough log_disk.
+(Available: 0, Need: ...)". None of that is needed on the SLIM path, whose sizes are
+baked into the prebuilt config: `memory_limit` 6144M, `system_memory` 1024M.)
+
+**`OB_TENANT_NAME` / `OB_TENANT_PASSWORD` / `OB_DATABASE` are honoured on the SLIM path
+too.** Once the cluster is up the entrypoint waits for the tenant to answer, runs
+`CREATE DATABASE IF NOT EXISTS adbc` in it, and then `ALTER USER root IDENTIFIED BY
+'adbc'` — the last three lines of the log before `boot success`.
+
+### Run the entry
+
+```sh
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+ADBC_MATRIX_SUFFIX=_oceanbase ADBC_ODBC_DELEGATE=never \
+  .venv/bin/python tests/compat/test_matrix.py oceanbase
+# oceanbase PASS  (MySQL (via ODBC) 5.7.25)
+```
+
+### The user name carries the tenant: `root@test`
+
+OceanBase is multi-tenant, and a login name is `user@tenant`. The connection string
+therefore says `User=root@test`, not `User=root`. `test` is the business tenant — the one
+the image creates (`OB_TENANT_NAME`) and the one `OB_DATABASE=adbc` creates the database
+in. `root@sys` is the *cluster's* administrative tenant: it is where `ALTER SYSTEM` and
+the `gv$` views live, not where user databases belong, and its `oceanbase` schema is not
+what this workload wants to be pointed at. The `@` means nothing to Connector/ODBC —
+it passes the whole string through as the MySQL user name — so no escaping is involved.
+
+`PLUGIN_DIR` is needed here for the same reason as for TiDB, Dolt and MatrixOne:
+OceanBase offers only `mysql_native_password`, whose *client-side* plugin Connector/ODBC 9
+loads at run time from its compiled-in `/usr/local/mysql/lib/plugin`. The entry's
+connection string ends in `{plugin_dir}`, which `conn_uri()` expands to the tarball's own
+`lib/plugin` when that directory exists — see [TiDB](#tidb-75) for the full story.
+
+### Quirks: none
+
+There is no `oceanbase` key in `OdbcDetectQuirks`, and the entry needs no tolerance flag
+that the `mysql` entry does not. The whole standard workload runs on the generic path on
+the first try: the emoji round-trip, `VARBINARY(10)`, `DATETIME(6)` microseconds,
+`DECIMAL(10,3)`, NULL parameters, affected-row counts, `GetObjects`/`GetTableSchema`, and
+the 5000-row batched ingest and read. The entry is the `mysql` entry's DDL with the
+`mysql` entry's two tolerances, for the same two reasons:
+
+* `bool_type="int8"` — `BOOLEAN` is `TINYINT(1)`, which the driver reports as
+  `SQL_TINYINT`.
+* `setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]` — the
+  double-quoted identifiers `adbc_ingest` emits. OceanBase's MySQL mode implements
+  `ANSI_QUOTES` exactly as MySQL does; its stock `sql_mode` is
+  `STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_AUTO_CREATE_USER`.
+
+Unlike MatrixOne, a table declared without a `PRIMARY KEY` grows no hidden column here,
+so `adbc_t` needs no key and `GetObjects` reports exactly the eight columns.
+
+### One noise line that is not a problem
+
+Every connection prints this to stderr, once, before it succeeds:
+
+```
+Character set '45' is not a compiled character set and is not specified in the
+'/usr/local/mysql/share/charsets/Index.xml' file
+```
+
+It is `libmysqlclient` inside Connector/ODBC, not adbcbridge, and it is cosmetic. 45 is
+`utf8mb4_general_ci`, OceanBase's default collation; the client library has no compiled-in
+entry for that id and looks for the charset index at the path the *generic tarball* was
+built with, which an unpacked-elsewhere tarball does not have. The connection is
+negotiated as UTF-8 regardless — checked directly rather than assumed:
+
+```
+SELECT @@character_set_client, @@character_set_connection, @@character_set_results,
+       @@collation_connection
+-- ('utf8mb4', 'utf8mb4', 'utf8mb4', 'utf8mb4_general_ci')
+SELECT HEX('🚀')   -- F09F9A80
+```
+
+so the emoji round-trips byte for byte and the matrix's `astral` assertion passes. MySQL 8
+does not print it because its default collation (`utf8mb4_0900_ai_ci`, 255) *is* compiled
+in.
+
+### Benchmark
+
+```
+ADBC_MATRIX_SUFFIX=_oceanbase .venv/bin/python bench/matrix_bench.py \
+  --rows 10000 --fetch-rows 100000 --pyodbc-timeout 300 oceanbase
+# fetch=1,217,853/s (pyodbc 689,517/s)  ingest=81,912/s array=66,921/s pyodbc=16,328/s
+```
+
+Ingest is the fastest of the MySQL-wire entries by a wide margin: 82k rows/s, against
+MySQL 8.4's own 8.5k and MatrixOne's 4.4k through the same driver. The multi-row `INSERT`
+the ingest path builds is what earns it — the same payload through pyodbc `executemany`,
+which sends one statement per row, runs at 16.3k. Parameter arrays are *slower* than the
+multi-row form here (67k rows/s), because Connector/ODBC executes a bound array row by
+row, so the default is already the right choice and `prefer_param_arrays` is not wanted.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down oceanbase
+# or, if started standalone:
+docker rm -f adbcbridge-oceanbase
+```
