@@ -8,7 +8,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER,
     DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER,
-    ACCESS_ODBC_DRIVER
+    ACCESS_ODBC_DRIVER, PERCONA_ODBC_DRIVER
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
@@ -69,6 +69,15 @@ DBS = {
         # MySQL BOOLEAN is TINYINT(1), reported as SQL_TINYINT -> int8; double-quoted
         # identifiers (used by ingest) need ANSI_QUOTES. See tests/compat/README.md for
         # the LD_PRELOAD needed by MySQL Connector/ODBC under pyarrow.
+        bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "percona": dict(
+        # Percona Server is a drop-in MySQL fork (same wire protocol, same client
+        # libraries), so MySQL Connector/ODBC drives it and the `mysql` entry applies
+        # unchanged: ANSI_QUOTES for the double-quoted identifiers adbc_ingest emits,
+        # and BOOLEAN reported as SQL_TINYINT -> int8.  See tests/compat/README.md for
+        # the LD_PRELOAD that MySQL Connector/ODBC needs under pyarrow.
+        env="PERCONA_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=13312;Database=adbc;User=adbc;Password=adbc;",
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
     "db2": dict(
         env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",

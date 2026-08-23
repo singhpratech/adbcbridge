@@ -27,6 +27,7 @@ from the second table to the first.
 | IBM Db2 12.1 | Db2 clidriver | PASS | 32-bit `SQLLEN` |
 | ClickHouse 26 | clickhouse-odbc | PASS | one HTTP request per row on ingest |
 | CockroachDB 26 | psqlodbc (PG wire) | PASS | |
+| Percona Server 8.4 | MySQL Connector/ODBC (MySQL wire) | PASS | drop-in MySQL fork: same entry as MySQL, no quirks; ingest 21.1k rows/s, fetch 1.18M rows/s |
 | YugabyteDB 2026.1 | psqlodbc (PG wire) | PASS | |
 | TimescaleDB 2.29 | psqlodbc (PG wire) | PASS | |
 | CrateDB 6.4 | psqlodbc (PG wire) | PASS | eventually consistent (`REFRESH TABLE`); no binary or `DATE` column type; ingest 626 rows/s, fetch 767k rows/s |
@@ -49,7 +50,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |
 | TiDB | MySQL Connector/ODBC | `pingcap/tidb` | queued |
 | Dolt | MySQL Connector/ODBC | `dolthub/dolt-sql-server` | queued |
-| Percona Server | MySQL Connector/ODBC | `percona` | queued |
 | Databend | MySQL Connector/ODBC | `datafuselabs/databend` | queued |
 | MatrixOne | MySQL Connector/ODBC | `matrixorigin/matrixone` | queued |
 | MariaDB ColumnStore | MariaDB Connector/ODBC | `mariadb/columnstore` | queued |
