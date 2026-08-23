@@ -972,3 +972,92 @@ implement `SQL_DRIVER_NAME`, that function now falls back to `SQL_DBMS_NAME`
 (`MDBTOOLS`) when `SQL_DRIVER_NAME` is unavailable; drivers that answer it are still
 keyed on it. For the same reason the read-only option `adbc.odbc.driver_name` returns an
 error on this driver rather than a name.
+
+## H2 (PostgreSQL mode) — does not work with psqlodbc
+
+H2 has no ODBC driver of its own. Its server mode can speak the PostgreSQL v3 wire
+protocol (`org.h2.tools.Server -pg`), so on paper the same `psqlodbc` build that drives
+the `postgres`, `cockroachdb`, `yugabyte` and `timescaledb` entries should drive it too.
+It does not: **psqlodbc cannot complete `SQLDriverConnect` against H2**, so there is no
+`h2` entry in `test_matrix.py`. The details are below so the result can be re-checked
+when either side changes.
+
+### Start the server (no Docker, no root)
+
+```sh
+mkdir -p /tmp/dbs/h2/data && cd /tmp/dbs/h2
+curl -LO https://repo1.maven.org/maven2/com/h2database/h2/2.4.240/h2-2.4.240.jar
+java -Xmx1g -cp h2-2.4.240.jar org.h2.tools.Server \
+  -pg -pgPort 15435 -ifNotExists -baseDir /tmp/dbs/h2/data
+# PG server running at pg://127.0.0.1:15435 (only local connections)
+```
+
+`-ifNotExists` lets the first connection create the database named in the startup packet
+(`adbc` below) under `-baseDir`. Without `-pgAllowOthers` H2 refuses non-loopback
+clients, which is what the matrix wants. Port 15435 keeps it clear of the `postgres`
+(15432), `yugabyte` (15433) and `timescaledb` (15434) entries.
+
+### What fails
+
+```sh
+python - <<'EOF'
+import os, pyodbc
+pyodbc.connect("Driver=%s;Server=127.0.0.1;Port=15435;Database=adbc;Uid=adbc;Pwd=adbc;"
+               % os.environ["POSTGRES_ODBC_DRIVER"])
+EOF
+# pyodbc.ProgrammingError: ('42001', '[42001] ERROR: Syntax error in SQL statement
+#   "SET [*]extra_float_digits = 2" ... (110) (SQLDriverConnect)')
+```
+
+psqlodbc 16 sends one fixed batch as part of its connect handshake, before
+`SQLDriverConnect` returns (the literal is in the driver binary):
+
+```
+SET DateStyle = 'ISO';SET extra_float_digits = 2;show transaction_isolation
+```
+
+H2's SQL parser accepts the first statement and rejects the other two — in **every** H2
+`MODE`, PostgreSQL included:
+
+| Statement | H2 2.4.240 |
+|---|---|
+| `SET DateStyle = 'ISO'` | OK |
+| `SET extra_float_digits = 2` | `42001` syntax error — `SET` takes only H2's own setting names |
+| `SHOW transaction_isolation` | `42000` syntax error — H2 2.x has no `SHOW` |
+
+Nothing intercepts them: `PgServerThread.getSQL()` rewrites exactly two statements,
+`show max_identifier_length` (to `CALL 63`) and `set client_encoding to …` (to
+`set DATESTYLE ISO`); everything else goes straight to the H2 parser. And the failure is
+fatal on the driver side — psqlodbc accepts only a successful result from that batch and
+otherwise takes the error path out of the connect routine.
+
+The server itself is fine, which is the point worth recording. A ~90-line raw
+PostgreSQL v3 client (startup packet, cleartext auth, simple `Q` messages) talks to it
+happily and reproduces the two errors in isolation:
+
+```
+OK   'SELECT 1'                      [['1']]
+OK   'SELECT H2VERSION()'             [['2.4.240']]
+FAIL 'SET extra_float_digits = 2'     42001 Syntax error in SQL statement …
+FAIL 'SHOW transaction_isolation'     42000 Syntax error in SQL statement …
+```
+
+### Why there is no quirk for it
+
+The repo's usual answer to a misbehaving driver is a keyed entry in `OdbcDetectQuirks`
+(`src/odbc_driver.c`). That cannot apply here: the handshake runs *inside*
+`SQLDriverConnect`, so adbcbridge never gets a connection handle to detect anything on,
+and no `reader_opts` flag is reachable. Nor is it tunable from either end:
+
+- psqlodbc has no option to skip or alter that batch. `Protocol=6.2/6.4/7.4`,
+  `pqopt={options='-c extra_float_digits=2'}`, `ConnSettings`, `UseServerSidePrepare=0`
+  and `Ksqo=0` were all tried and all fail identically. H2 announces `server_version`
+  `8.2.23`, so psqlodbc always takes its ≥ 7.4 path.
+- H2's PG server has only `-pgPort`, `-pgAllowOthers` and `-pgVirtualThreads`; there is
+  no "ignore unknown settings" switch (`IGNORE_UNKNOWN_SETTINGS` does not exist in
+  H2 2.x, and `MODE=PostgreSQL` does not change `SET`/`SHOW` parsing).
+
+So this is a genuine H2-plus-psqlodbc incompatibility, not an adbcbridge gap. It becomes
+testable if H2 teaches `PgServerThread.getSQL()` to swallow unknown `SET`/`SHOW` GUCs, or
+if psqlodbc learns to tolerate a failure of that batch. Tested with H2 2.4.240 and
+2.3.232 (identical `getSQL`) against psqlodbc 16.00.0000.
