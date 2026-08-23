@@ -749,6 +749,38 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // and only for this one driver.
     char version[256];
     OdbcServerVersionString(conn->hdbc, version, sizeof(version));
+    // Bulk ingest may send one array parameter per column instead of K*ncols bound cells
+    // (reader_opts.pg_array_ingest).  PostgreSQL itself is the only server here that
+    // form is claimed for: it is PostgreSQL's multi-argument unnest, PostgreSQL's array
+    // literal syntax and PostgreSQL's assignment casts all at once, and a server that
+    // merely speaks the wire protocol owes us none of them.  So: version() must be a
+    // PostgreSQL banner ("postgresql <n>...") and must not carry a fork's own marker.
+    // TimescaleDB and Citus are extensions on stock PostgreSQL and name themselves
+    // nowhere in version(), which is right -- the server underneath is PostgreSQL.
+    // Anything else -- CockroachDB, CrateDB, GreptimeDB, Databend, a server not tried
+    // here at all -- fails the test and keeps the multi-row INSERT path.
+    if (strncmp(version, "postgresql ", 11) == 0) {
+      static const char* const kForks[] = {
+          "-yb-",        // YugabyteDB ("postgresql 11.2-yb-2.20.1.3-b0 on ...")
+          "yugabyte",    //
+          "cloudberry",  // Apache Cloudberry, and Greenplum which it forks
+          "greenplum",   //
+          "opengauss",   // openGauss ("postgresql 9.2.4 (opengauss 5.0.0 ...)")
+          "risingwave",  // RisingWave ("postgresql 13.14.0-risingwave-2.0.0 ...")
+          "questdb",     // handled below as well; listed so the order does not matter
+          "arcadedb",    //
+          "materialize", // Materialize
+          "cockroach",   // CockroachDB, in case it ever fronts a PostgreSQL banner
+          "crate",       // CrateDB
+          "greptime",    // GreptimeDB
+          "ydb",         // YDB, which otherwise answers with a plain PostgreSQL banner
+      };
+      bool fork = false;
+      for (size_t i = 0; i < sizeof(kForks) / sizeof(*kForks); i++) {
+        if (strstr(version, kForks[i])) fork = true;
+      }
+      conn->reader_opts.pg_array_ingest = !fork;
+    }
     if (strstr(version, "questdb")) {
       // QuestDB speaks the PostgreSQL wire protocol over its own time-series engine and
       // its own type system.  psqlodbc answers SQLGetTypeInfo with PostgreSQL's internal
@@ -797,6 +829,9 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
         // GreptimeDB's mandatory TIME INDEX column is added below; the ingested columns
         // are left exactly as they were.
         conn->reader_opts.ddl_extra_column = "adbc_pk SERIAL PRIMARY KEY";
+        // Its version() banner is a plain PostgreSQL's, so the array-ingest test above
+        // passed it; it is not PostgreSQL and does not get the form.
+        conn->reader_opts.pg_array_ingest = false;
         // YDB lists its tables in pg_catalog.pg_class but leaves pg_catalog.pg_attribute
         // empty, so psqlodbc's SQLColumns -- which joins the two -- answers SQL_SUCCESS
         // with a zero-row result set and every table looks like it has no columns.  Same
@@ -814,6 +849,10 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     OdbcServerScalarString(conn->hdbc, "SELECT current_setting('spanner.ddl_transaction_mode', true)",
                            ddl_mode, sizeof(ddl_mode));
     if (ddl_mode[0] != '\0') {
+      // PGAdapter's version() is its own claim ("postgresql 14.1"), which the
+      // array-ingest test above cannot tell from a real PostgreSQL's; Spanner is not
+      // PostgreSQL and does not get the form.
+      conn->reader_opts.pg_array_ingest = false;
       // Spanner has no TIMESTAMP WITHOUT TIME ZONE -- its one timestamp type is
       // timestamptz -- and psqlodbc executes a parameter array by inlining the values
       // into one string, where a SQL_TYPE_TIMESTAMP parameter becomes

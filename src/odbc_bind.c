@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1852,6 +1853,537 @@ static AdbcStatusCode MultiRowExecuteBatch(struct MultiRowInsert* mr,
   return ADBC_STATUS_OK;
 }
 
+// ---------------------------------------------------------------------------
+// Array ingest (PostgreSQL)
+//
+// The multi-row INSERT above still spends one SQLBindParameter per *cell*, and the
+// server still parses one placeholder per cell.  PostgreSQL will instead take a whole
+// column of a batch as a single array parameter and expand it itself:
+//
+//     INSERT INTO t ("a", "b") SELECT * FROM unnest(?::bigint[], ?::text[])
+//
+// That is ncols parameters per statement however many rows it carries, and the values
+// cross the wire as one array literal per column rather than as thousands of separately
+// bound cells.  Measured against PostgreSQL 16 over psqlodbc, one million four-column
+// rows on one connection: 1.34 s against 1.79 s for the same rows as a 1000-row INSERT,
+// with client CPU down from 0.70 to 0.33 CPU-s and server CPU unchanged -- see the
+// "PostgreSQL array ingest" section of bench/BENCHMARKS.md, which also records what this
+// does *not* fix (an INSERT writes twice the WAL a COPY does, whatever shape it takes).
+//
+// Everything here is gated three ways.  reader_opts.pg_array_ingest says the server
+// identified itself as PostgreSQL (OdbcDetectQuirks); ArrayIngestServerOk asks that
+// server to prove it expands the form the way PostgreSQL does, once per connection; and
+// ArrayIngestElemType refuses any Arrow type this path cannot spell exactly, which
+// leaves the whole ingest on the multi-row INSERT path.  A value that turns out not to
+// be spellable (a string with an embedded NUL, a date outside 0001..9999) stops the
+// array path mid-stream without applying anything twice: the caller is told how many
+// leading rows went in and finishes the batch by its other paths.
+
+struct ArrayIngest {
+  struct OdbcStatement* stmt;
+  bool enabled;  // the ingest path, the option and the server quirk all allow it
+  bool ready;    // the setup below has run
+  bool active;   // ... and produced a usable prepared statement
+  int64_t ncols;
+  int64_t rows;  // rows carried by one execute
+  SQLHSTMT hstmt;
+  struct ArrowBuffer* bufs;  // ncols array literals, reused by every execute
+  struct ArrowBuffer scratch;  // one value at a time, for the decimal renderer
+  SQLLEN* inds;
+};
+
+// The PostgreSQL array element type an Arrow column's values are spelled in, or NULL
+// when this path cannot spell them exactly and the column keeps the ordinary path.
+//
+// The spelling is derived from the Arrow type, never from the target column: an
+// `INSERT ... SELECT` assignment-casts each expression to its column, so a bigint array
+// lands correctly in an int, smallint or numeric column.  Where PostgreSQL has no
+// assignment cast at all (an Arrow date column against a text column, say) the prepared
+// statement is refused outright at SQLPrepare and the ingest falls back with nothing
+// applied.
+static const char* ArrayIngestElemType(const struct ArrowSchemaView* sv) {
+  switch (sv->type) {
+    case NANOARROW_TYPE_BOOL:
+      return "boolean";
+    case NANOARROW_TYPE_INT8:
+    case NANOARROW_TYPE_INT16:
+    case NANOARROW_TYPE_INT32:
+    case NANOARROW_TYPE_INT64:
+    case NANOARROW_TYPE_UINT8:
+    case NANOARROW_TYPE_UINT16:
+    case NANOARROW_TYPE_UINT32:
+      return "bigint";
+    case NANOARROW_TYPE_UINT64:
+      // 2^63 .. 2^64-1 is not a bigint; numeric carries every uint64 exactly.
+      return "numeric";
+    case NANOARROW_TYPE_HALF_FLOAT:
+    case NANOARROW_TYPE_FLOAT:
+    case NANOARROW_TYPE_DOUBLE:
+      // The ordinary path widens all three to SQL_C_DOUBLE, so float8 is the same wire
+      // value; PostgreSQL rounds it back on the way into a real column.
+      return "float8";
+    case NANOARROW_TYPE_DECIMAL128:
+    case NANOARROW_TYPE_DECIMAL256:
+      return "numeric";
+    case NANOARROW_TYPE_STRING:
+    case NANOARROW_TYPE_LARGE_STRING:
+    case NANOARROW_TYPE_STRING_VIEW:
+      return "text";
+    case NANOARROW_TYPE_DATE32:
+      return "date";
+    case NANOARROW_TYPE_TIME32:
+    case NANOARROW_TYPE_TIME64:
+      return "time";
+    case NANOARROW_TYPE_TIMESTAMP:
+      // As the ordinary path: the value is rendered without a zone, and a timestamptz
+      // column applies the session zone to it exactly as it would to the literal
+      // psqlodbc sends for a bound SQL_TYPE_TIMESTAMP.
+      return "timestamp";
+    default:
+      // Binary (a bytea element would have to be escaped twice), interval, list, struct,
+      // map, dictionary, the null type: not spelled here.
+      return NULL;
+  }
+}
+
+// Does this server expand the form the way PostgreSQL does?  One statement, run once per
+// connection on its first bulk ingest, whose answer pins down positional pairing of the
+// two arrays, a NULL element, an empty element, a separator and a brace inside a quoted
+// element, an escaped quote and an escaped backslash -- everything the renderer below
+// relies on.  A server that answers anything else keeps the multi-row INSERT path.
+static bool ArrayIngestServerOk(struct OdbcConnection* conn) {
+  static const char* kProbe =
+      "SELECT count(*) || '|' || coalesce(sum(a)::text, '?') || '|' ||"
+      " coalesce(string_agg(coalesce('[' || b || ']', '<null>'), '' ORDER BY a), '?')"
+      " FROM unnest('{1,2,3,4,5}'::bigint[],"
+      " '{\"a,b}\",\"\",NULL,\"x\\\"y\",\"p\\\\q\"}'::text[]) AS t(a, b)";
+  static const char* kExpected = "5|15|[a,b}][]<null>[x\"y][p\\q]";
+  char answer[128] = {0};
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt))) return false;
+  bool ok = false;
+  if (SQL_SUCCEEDED(SQLExecDirect(hstmt, (SQLCHAR*)kProbe, SQL_NTS)) &&
+      SQL_SUCCEEDED(SQLFetch(hstmt))) {
+    SQLLEN ind = 0;
+    if (SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_CHAR, answer, (SQLLEN)sizeof(answer), &ind)) &&
+        ind != SQL_NULL_DATA) {
+      ok = strcmp(answer, kExpected) == 0;
+    }
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+  return ok;
+}
+
+static void ArrayIngestInit(struct ArrayIngest* ai, struct OdbcStatement* stmt, int64_t ncols) {
+  memset(ai, 0, sizeof(*ai));
+  ai->stmt = stmt;
+  ai->ncols = ncols;
+  ArrowBufferInit(&ai->scratch);
+  ai->enabled = stmt->ingest_into != NULL && ncols > 0 && stmt->rows_per_insert != 1 &&
+                stmt->conn != NULL && stmt->conn->connected &&
+                stmt->conn->reader_opts.pg_array_ingest;
+}
+
+static void ArrayIngestReset(struct ArrayIngest* ai) {
+  if (ai->hstmt) SQLFreeHandle(SQL_HANDLE_STMT, ai->hstmt);
+  ai->hstmt = NULL;
+  if (ai->bufs) {
+    for (int64_t i = 0; i < ai->ncols; i++) ArrowBufferReset(&ai->bufs[i]);
+    free(ai->bufs);
+    ai->bufs = NULL;
+  }
+  ArrowBufferReset(&ai->scratch);
+  free(ai->inds);
+  ai->inds = NULL;
+  ai->active = false;
+}
+
+// Build and prepare the statement.  Runs once, on the first batch worth batching and
+// before the ingest transaction opens: a refused SQLPrepare must not be able to poison a
+// transaction on a server that aborts one on any error.
+static void ArrayIngestSetup(struct ArrayIngest* ai, const struct ArrowSchemaView* svs) {
+  ai->ready = true;
+  struct OdbcConnection* conn = ai->stmt->conn;
+  if (conn->array_ingest_unsupported) return;
+  if (!conn->array_ingest_probed) {
+    conn->array_ingest_probed = true;
+    if (!ArrayIngestServerOk(conn)) {
+      conn->array_ingest_unsupported = true;
+      return;
+    }
+  }
+  struct InternalAdbcStringBuilder sb;
+  if (InternalAdbcStringBuilderInit(&sb, 256) != 0) return;
+  InternalAdbcStringBuilderAppend(&sb, "INSERT INTO %s SELECT * FROM unnest(",
+                                  ai->stmt->ingest_into);
+  bool spellable = true;
+  for (int64_t i = 0; i < ai->ncols; i++) {
+    const char* elem = ArrayIngestElemType(&svs[i]);
+    if (!elem) {
+      spellable = false;
+      break;
+    }
+    InternalAdbcStringBuilderAppend(&sb, "%s?::%s[]", i ? ", " : "", elem);
+  }
+  InternalAdbcStringBuilderAppend(&sb, ")");
+  if (!spellable || !sb.buffer) {
+    InternalAdbcStringBuilderReset(&sb);
+    return;
+  }
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt))) {
+    InternalAdbcStringBuilderReset(&sb);
+    return;
+  }
+  // A refusal here is about this table -- a column PostgreSQL has no assignment cast to
+  // from the Arrow type -- not about the server, so it is not remembered on the
+  // connection; the ingest simply keeps the multi-row INSERT path.
+  if (!SQL_SUCCEEDED(SQLPrepare(hstmt, (SQLCHAR*)sb.buffer, SQL_NTS))) {
+    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+    InternalAdbcStringBuilderReset(&sb);
+    return;
+  }
+  InternalAdbcStringBuilderReset(&sb);
+  ai->bufs = calloc((size_t)ai->ncols, sizeof(*ai->bufs));
+  ai->inds = calloc((size_t)ai->ncols, sizeof(*ai->inds));
+  if (!ai->bufs || !ai->inds) {
+    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+    free(ai->bufs);
+    ai->bufs = NULL;
+    free(ai->inds);
+    ai->inds = NULL;
+    return;
+  }
+  for (int64_t i = 0; i < ai->ncols; i++) ArrowBufferInit(&ai->bufs[i]);
+  ai->hstmt = hstmt;
+  ai->rows = ai->stmt->rows_per_insert > 1 ? ai->stmt->rows_per_insert
+                                           : ADBC_ODBC_ARRAY_INGEST_ROWS;
+  ai->active = true;
+}
+
+// Append one text element, always quoted.  Quoting unconditionally is what makes the
+// renderer total: an unquoted element could be read back as the word NULL, could lose
+// leading or trailing whitespace, could not be empty at all, and would have to be
+// scanned for `{`, `}`, `,` and the delimiter anyway.
+static void ArrayIngestAppendQuoted(struct ArrowBuffer* b, const char* s, int64_t n) {
+  char* p = (char*)b->data + b->size_bytes;
+  *p++ = '"';
+  for (int64_t i = 0; i < n; i++) {
+    if (s[i] == '"' || s[i] == '\\') *p++ = '\\';
+    *p++ = s[i];
+  }
+  *p++ = '"';
+  b->size_bytes = p - (char*)b->data;
+}
+
+// Render rows [row0, row0 + n) of one column as a PostgreSQL array literal.
+// *fit receives how many of those rows the literal actually carries: fewer than n when a
+// value cannot be spelled here (an embedded NUL, a date or timestamp outside the year
+// range this renders) or when the literal reached its byte ceiling.  The caller narrows
+// every column to the smallest answer and re-renders, so all of them stay the same
+// length -- which is what makes the multi-argument unnest line the rows up.
+static AdbcStatusCode ArrayIngestFillColumn(struct ArrayIngest* ai, struct ArrowBuffer* b,
+                                            const struct ArrowSchemaView* sv,
+                                            const struct ArrowArrayView* av, int64_t row0,
+                                            int64_t n, int64_t* fit, struct AdbcError* error) {
+  const int64_t cap = ADBC_ODBC_ARRAY_INGEST_MAX_BYTES;
+  b->size_bytes = 0;
+  CHECK_NA(INTERNAL, ArrowBufferReserve(b, 2), error);
+  ((char*)b->data)[0] = '{';
+  b->size_bytes = 1;
+  *fit = n;
+
+// The element separator and the NULL element, in the buffer `b` every branch below
+// renders into.  Each branch has already reserved room for them.
+#define ARRAY_INGEST_SEP(idx)                          \
+  do {                                                 \
+    if ((idx) > 0) {                                   \
+      ((char*)b->data)[b->size_bytes] = ',';           \
+      b->size_bytes++;                                 \
+    }                                                  \
+  } while (0)
+#define ARRAY_INGEST_NULL()                            \
+  do {                                                 \
+    memcpy((char*)b->data + b->size_bytes, "NULL", 4); \
+    b->size_bytes += 4;                                \
+  } while (0)
+
+  switch (sv->type) {
+    case NANOARROW_TYPE_BOOL: {
+      CHECK_NA(INTERNAL, ArrowBufferReserve(b, n * 6 + 2), error);
+      for (int64_t i = 0; i < n; i++) {
+        ARRAY_INGEST_SEP(i);
+        if (ArrowArrayViewIsNull(av, row0 + i)) {
+          ARRAY_INGEST_NULL();
+        } else {
+          ((char*)b->data)[b->size_bytes++] =
+              ArrowArrayViewGetIntUnsafe(av, row0 + i) ? 't' : 'f';
+        }
+      }
+      break;
+    }
+    case NANOARROW_TYPE_INT8:
+    case NANOARROW_TYPE_INT16:
+    case NANOARROW_TYPE_INT32:
+    case NANOARROW_TYPE_INT64: {
+      CHECK_NA(INTERNAL, ArrowBufferReserve(b, n * 22 + 2), error);
+      for (int64_t i = 0; i < n; i++) {
+        ARRAY_INGEST_SEP(i);
+        if (ArrowArrayViewIsNull(av, row0 + i)) {
+          ARRAY_INGEST_NULL();
+        } else {
+          b->size_bytes += snprintf((char*)b->data + b->size_bytes, 22, "%" PRId64,
+                                    ArrowArrayViewGetIntUnsafe(av, row0 + i));
+        }
+      }
+      break;
+    }
+    case NANOARROW_TYPE_UINT8:
+    case NANOARROW_TYPE_UINT16:
+    case NANOARROW_TYPE_UINT32:
+    case NANOARROW_TYPE_UINT64: {
+      CHECK_NA(INTERNAL, ArrowBufferReserve(b, n * 22 + 2), error);
+      for (int64_t i = 0; i < n; i++) {
+        ARRAY_INGEST_SEP(i);
+        if (ArrowArrayViewIsNull(av, row0 + i)) {
+          ARRAY_INGEST_NULL();
+        } else {
+          b->size_bytes += snprintf((char*)b->data + b->size_bytes, 22, "%" PRIu64,
+                                    ArrowArrayViewGetUIntUnsafe(av, row0 + i));
+        }
+      }
+      break;
+    }
+    case NANOARROW_TYPE_HALF_FLOAT:
+    case NANOARROW_TYPE_FLOAT:
+    case NANOARROW_TYPE_DOUBLE: {
+      CHECK_NA(INTERNAL, ArrowBufferReserve(b, n * 28 + 2), error);
+      for (int64_t i = 0; i < n; i++) {
+        ARRAY_INGEST_SEP(i);
+        if (ArrowArrayViewIsNull(av, row0 + i)) {
+          ARRAY_INGEST_NULL();
+          continue;
+        }
+        const double v = ArrowArrayViewGetDoubleUnsafe(av, row0 + i);
+        char* p = (char*)b->data + b->size_bytes;
+        if (isnan(v)) {
+          memcpy(p, "NaN", 3);
+          b->size_bytes += 3;
+        } else if (isinf(v)) {
+          const char* word = v > 0 ? "Infinity" : "-Infinity";
+          const size_t len = strlen(word);
+          memcpy(p, word, len);
+          b->size_bytes += (int64_t)len;
+        } else {
+          // 17 significant digits round-trip every double exactly, which is what the
+          // ordinary path's SQL_C_DOUBLE binding promises too.
+          b->size_bytes += snprintf(p, 28, "%.17g", v);
+        }
+      }
+      break;
+    }
+    case NANOARROW_TYPE_DECIMAL128:
+    case NANOARROW_TYPE_DECIMAL256: {
+      for (int64_t i = 0; i < n; i++) {
+        CHECK_NA(INTERNAL, ArrowBufferReserve(b, 96), error);
+        ARRAY_INGEST_SEP(i);
+        if (ArrowArrayViewIsNull(av, row0 + i)) {
+          ARRAY_INGEST_NULL();
+          continue;
+        }
+        struct ArrowDecimal dec;
+        ArrowDecimalInit(&dec, sv->type == NANOARROW_TYPE_DECIMAL128 ? 128 : 256,
+                         sv->decimal_precision, sv->decimal_scale);
+        ArrowArrayViewGetDecimalUnsafe(av, row0 + i, &dec);
+        // ArrowDecimalAppendStringToBuffer reads the sign from offset 0 of the buffer it
+        // appends to, so it only renders correctly into an empty one.
+        ai->scratch.size_bytes = 0;
+        CHECK_NA(INTERNAL, ArrowDecimalAppendStringToBuffer(&dec, &ai->scratch), error);
+        CHECK_NA(INTERNAL, ArrowBufferReserve(b, ai->scratch.size_bytes + 2), error);
+        memcpy((char*)b->data + b->size_bytes, ai->scratch.data, (size_t)ai->scratch.size_bytes);
+        b->size_bytes += ai->scratch.size_bytes;
+      }
+      break;
+    }
+    case NANOARROW_TYPE_DATE32: {
+      CHECK_NA(INTERNAL, ArrowBufferReserve(b, n * 13 + 2), error);
+      for (int64_t i = 0; i < n; i++) {
+        ARRAY_INGEST_SEP(i);
+        if (ArrowArrayViewIsNull(av, row0 + i)) {
+          ARRAY_INGEST_NULL();
+          continue;
+        }
+        int y;
+        unsigned m, d;
+        CivilFromDays(ArrowArrayViewGetIntUnsafe(av, row0 + i), &y, &m, &d);
+        if (y < 1 || y > 9999) {
+          // "0000-01-01" and "10000-01-01" are not dates PostgreSQL reads back as
+          // written (the first needs a BC suffix, the second a wider year).  Stop here
+          // and let the caller apply this row and the rest by its other paths.
+          *fit = i;
+          b->size_bytes -= (i > 0 ? 1 : 0);
+          goto done;
+        }
+        b->size_bytes += snprintf((char*)b->data + b->size_bytes, 13, "%04d-%02u-%02u", y, m, d);
+      }
+      break;
+    }
+    case NANOARROW_TYPE_TIME32:
+    case NANOARROW_TYPE_TIME64: {
+      CHECK_NA(INTERNAL, ArrowBufferReserve(b, n * 20 + 2), error);
+      for (int64_t i = 0; i < n; i++) {
+        ARRAY_INGEST_SEP(i);
+        if (ArrowArrayViewIsNull(av, row0 + i)) {
+          ARRAY_INGEST_NULL();
+          continue;
+        }
+        // Same renderer, and the same wrap-into-a-day, as the ordinary path.
+        b->size_bytes += TimeTextFromArrow(ArrowArrayViewGetIntUnsafe(av, row0 + i), sv->time_unit,
+                                           (char*)b->data + b->size_bytes, 20);
+      }
+      break;
+    }
+    case NANOARROW_TYPE_TIMESTAMP: {
+      const int64_t per_sec = TicksPerSecond(sv->time_unit);
+      CHECK_NA(INTERNAL, ArrowBufferReserve(b, n * 32 + 2), error);
+      for (int64_t i = 0; i < n; i++) {
+        ARRAY_INGEST_SEP(i);
+        if (ArrowArrayViewIsNull(av, row0 + i)) {
+          ARRAY_INGEST_NULL();
+          continue;
+        }
+        const int64_t v = ArrowArrayViewGetIntUnsafe(av, row0 + i);
+        int64_t secs = v / per_sec;
+        if (v % per_sec < 0) secs -= 1;
+        // 0001-01-01T00:00:00Z .. 9999-12-31T23:59:59Z, the range TimestampTextFromStruct
+        // renders unambiguously (its year field is a signed 16-bit ODBC one).
+        if (secs < -62135596800LL || secs > 253402300799LL) {
+          *fit = i;
+          b->size_bytes -= (i > 0 ? 1 : 0);
+          goto done;
+        }
+        TIMESTAMP_STRUCT ts;
+        TimestampFromArrow(v, sv->time_unit, &ts);
+        b->size_bytes += TimestampTextFromStruct(&ts, sv->time_unit,
+                                                 (char*)b->data + b->size_bytes, 32);
+      }
+      break;
+    }
+    case NANOARROW_TYPE_STRING:
+    case NANOARROW_TYPE_LARGE_STRING:
+    case NANOARROW_TYPE_STRING_VIEW: {
+      for (int64_t i = 0; i < n; i++) {
+        CHECK_NA(INTERNAL, ArrowBufferReserve(b, 8), error);
+        ARRAY_INGEST_SEP(i);
+        if (ArrowArrayViewIsNull(av, row0 + i)) {
+          ARRAY_INGEST_NULL();
+          continue;
+        }
+        struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(av, row0 + i);
+        // A NUL is not a character PostgreSQL text can hold, and the array literal is
+        // handed to the driver as a counted C string; refuse the value rather than send
+        // a literal that ends early.
+        if (memchr(s.data, '\0', (size_t)s.size_bytes) != NULL) {
+          *fit = i;
+          b->size_bytes -= (i > 0 ? 1 : 0);
+          goto done;
+        }
+        if (b->size_bytes + s.size_bytes * 2 + 4 > cap && i > 0) {
+          *fit = i;
+          b->size_bytes -= 1;
+          goto done;
+        }
+        CHECK_NA(INTERNAL, ArrowBufferReserve(b, s.size_bytes * 2 + 4), error);
+        ArrayIngestAppendQuoted(b, s.data, s.size_bytes);
+      }
+      break;
+    }
+    default:
+      // ArrayIngestElemType refused every type not handled above, so the statement was
+      // never prepared and this is unreachable.
+      *fit = 0;
+      break;
+  }
+done:
+#undef ARRAY_INGEST_SEP
+#undef ARRAY_INGEST_NULL
+  ((char*)b->data)[b->size_bytes] = '}';
+  b->size_bytes++;
+  return ADBC_STATUS_OK;
+}
+
+// Ingest as much of one Arrow batch as the array form can carry, in chunks of ai->rows.
+// The contract is MultiRowExecuteBatch's: *rows_done receives how many leading rows went
+// in, and *fell_back says the form was refused with nothing applied anywhere, so the
+// caller may replay the whole batch by its other paths.
+static AdbcStatusCode ArrayIngestExecuteBatch(struct ArrayIngest* ai,
+                                              const struct ArrowSchemaView* svs,
+                                              const struct ArrowArrayView* view, int64_t row0,
+                                              int64_t nrows, bool virgin, int64_t* rows_done,
+                                              int64_t* total, bool* fell_back,
+                                              struct AdbcError* error) {
+  const int64_t ncols = ai->ncols;
+  int64_t row = 0;
+  while (nrows - row >= 1) {
+    int64_t n = nrows - row;
+    if (n > ai->rows) n = ai->rows;
+    // Render every column, then narrow all of them to the shortest that came back and
+    // render again, so that the arrays are the same length and the rows line up.
+    for (;;) {
+      int64_t smallest = n;
+      for (int64_t c = 0; c < ncols; c++) {
+        int64_t fit = n;
+        RAISE_ADBC(ArrayIngestFillColumn(ai, &ai->bufs[c], &svs[c], view->children[c], row0 + row,
+                                         n, &fit, error));
+        if (fit < smallest) smallest = fit;
+      }
+      if (smallest == n) break;
+      if (smallest <= 0) {
+        // Not even one row can be spelled here.  Stop the form for the rest of the
+        // ingest; the caller applies this row and everything after it as it would have
+        // without the form at all.
+        ai->active = false;
+        *rows_done = row;
+        return ADBC_STATUS_OK;
+      }
+      n = smallest;
+    }
+    SQLFreeStmt(ai->hstmt, SQL_CLOSE);
+    for (int64_t c = 0; c < ncols; c++) {
+      ai->inds[c] = (SQLLEN)ai->bufs[c].size_bytes;
+      if (!SQL_SUCCEEDED(SQLBindParameter(ai->hstmt, (SQLUSMALLINT)(c + 1), SQL_PARAM_INPUT,
+                                          SQL_C_CHAR, SQL_LONGVARCHAR,
+                                          (SQLULEN)ai->bufs[c].size_bytes, 0,
+                                          (SQLPOINTER)ai->bufs[c].data,
+                                          (SQLLEN)ai->bufs[c].size_bytes, &ai->inds[c]))) {
+        return OdbcSetError(SQL_HANDLE_STMT, ai->hstmt, "SQLBindParameter", error);
+      }
+    }
+    SQLRETURN ret = SQLExecute(ai->hstmt);
+    if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) {
+      if (!virgin || row != 0) {
+        return OdbcSetError(SQL_HANDLE_STMT, ai->hstmt, "SQLExecute", error);
+      }
+      // Nothing has been applied anywhere yet, so this is still a probe: give the form
+      // up for this ingest and let the caller replay the batch.  A real data error is
+      // reported again, with the offending row's diagnostics, by the paths that follow.
+      ai->active = false;
+      *fell_back = true;
+      *rows_done = 0;
+      return ADBC_STATUS_OK;
+    }
+    // An INSERT that did not raise applied every row it was given; the driver's own
+    // SQLRowCount is not consulted for the same reason MultiRowExecGroup does not.
+    *total += n;
+    SQLSMALLINT nres = 0;
+    SQLNumResultCols(ai->hstmt, &nres);
+    if (nres > 0) SQLFreeStmt(ai->hstmt, SQL_CLOSE);
+    row += n;
+  }
+  *rows_done = row;
+  return ADBC_STATUS_OK;
+}
+
 static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affected,
                                   struct AdbcError* error) {
   SQLHSTMT hstmt = stmt->ref->hstmt;
@@ -1885,6 +2417,12 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
   // where they work.
   struct MultiRowInsert mr;
   MultiRowInit(&mr, stmt, svs, ncols);
+  // PostgreSQL takes a whole column of a batch as one array parameter instead, which is
+  // ncols parameters per statement however many rows it carries.  Ahead of the multi-row
+  // INSERT where it is available; the multi-row form stays the fallback for every row it
+  // cannot carry.
+  struct ArrayIngest ai;
+  ArrayIngestInit(&ai, stmt, ncols);
   // Ahead of parameter arrays, not behind them: on every server measured, one INSERT
   // carrying K row-groups beats the same rows submitted as an array (PostgreSQL 221k
   // rows/s against 97k, SQL Server 157k against 85k, Oracle 40k against 1.8k, MariaDB
@@ -1918,11 +2456,29 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
     // probe that decides whether this server has the form at all, and a statement
     // refused inside a transaction aborts the transaction on some servers.
     if (multirow_first && !mr.ready && batch.length > 1) MultiRowSetup(&mr);
+    // Same reasoning, and the same moment: the array form's SQLPrepare -- and the
+    // one-off check that this server really is a PostgreSQL -- happen outside the
+    // transaction, so a refusal cannot abort one.
+    if (ai.enabled && !ai.ready && batch.length > 1) ArrayIngestSetup(&ai, svs);
     // Once more than one row is in play, one commit for the lot beats one per row.
     seen += batch.length;
     if (seen > 1) OdbcAutoTxnBegin(&txn);
     int64_t row = 0;
-    if (multirow_first && mr.active && batch.length > 1) {
+    if (ai.active && batch.length > 1) {
+      int64_t done = 0;
+      bool fell_back = false;
+      status = ArrayIngestExecuteBatch(&ai, svs, &view, 0, batch.length, !applied, &done, &total,
+                                       &fell_back, error);
+      row = done;
+      if (fell_back) {
+        // The probe applied nothing, exactly as for the multi-row form below: start the
+        // transaction over so the replay runs on a clean one.
+        OdbcAutoTxnEnd(&txn, false, NULL);
+        if (seen > 1) OdbcAutoTxnBegin(&txn);
+      }
+    }
+    if (multirow_first && mr.active && row == 0 && batch.length > 1 &&
+        status == ADBC_STATUS_OK) {
       int64_t done = 0;
       bool fell_back = false;
       status = MultiRowExecuteBatch(&mr, svs, &view, 0, batch.length, !applied, &done, &total,
@@ -1974,6 +2530,7 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
     if (status == ADBC_STATUS_OK) status = txn_status;
   }
   MultiRowReset(&mr);
+  ArrayIngestReset(&ai);
   ArrowArrayViewReset(&view);
   free(svs);
   if (schema.release) schema.release(&schema);
@@ -3028,6 +3585,11 @@ static AdbcStatusCode IngestParallel(struct OdbcStatement* stmt, int64_t nconn,
     w->conn.multirow_unsupported = conn->multirow_unsupported;
     w->conn.multirow_form = conn->multirow_form;
     w->conn.multirow_max_params = conn->multirow_max_params;
+    // Likewise for the array form: whether this server expands a multi-argument unnest
+    // the way PostgreSQL does is a property of the server, so a worker inherits the
+    // answer rather than asking again on its own connection.
+    w->conn.array_ingest_probed = conn->array_ingest_probed;
+    w->conn.array_ingest_unsupported = conn->array_ingest_unsupported;
 
     w->stmt.conn = &w->conn;
     w->stmt.reader_opts = stmt->reader_opts;

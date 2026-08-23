@@ -1384,20 +1384,28 @@ psqlodbc, `adbc_driver_postgresql` and `adbc_driver_sqlite` from the same venv. 
 columns: `bigint, double precision, text, date`. **The host was not quiet**: two other
 builds were running throughout and the one-minute load average sat between 5 and 11 on 20
 cores. That inflates the spread on both sides but not the ratio between them, and every
-figure below is the mean of three interleaved runs with the min and max shown.
+figure below is the mean of three interleaved runs with the min and max shown. The ingest
+rows were re-measured when the array form landed, on the same host and no quieter — a
+desktop compositor sat at 2.7 cores for the whole session and the one-minute load average
+moved between 1.7 and 10.
 
 ### PostgreSQL
+
+Ingest here is the **array form** described in
+[PostgreSQL array ingest](#postgresql-array-ingest-what-it-buys-and-what-it-does-not);
+the figures the multi-row `INSERT` reached before it are in that section.
 
 | rows | axis | ours (mean) | native (mean) | spread ours | spread native | ratio | verdict |
 |---:|---|---:|---:|---|---|---:|---|
 | 1 M | fetch, 8 partitions | 0.186 s | 0.339 s | 0.168–0.200 | 0.334–0.346 | **1.83x faster** | **PASS** |
-| 1 M | ingest, 1 connection | 2.199 s | 0.347 s | 2.131–2.233 | 0.333–0.363 | 0.16x (6.3x slower) | **FAIL** |
-| 1 M | ingest, 16 connections | 0.505 s | 0.364 s | 0.470–0.553 | 0.351–0.386 | 0.72x (1.39x slower) | **FAIL** |
-| 10 M | fetch, 12 partitions | 1.378 s | 2.162 s | 1.354–1.411 | 2.121–2.190 | **1.57x faster** | **PASS** |
-| 10 M | ingest, 1 connection | 24.446 s | 2.892 s | 22.693–25.997 | 2.683–3.105 | 0.12x (8.5x slower) | **FAIL** |
-| 10 M | ingest, 16 connections | 4.328 s | 2.986 s | 3.948–4.572 | 2.913–3.106 | 0.69x (1.45x slower) | **FAIL** |
+| 1 M | ingest, 1 connection | 1.264 s | 0.357 s | 1.208–1.321 | 0.341–0.372 | 0.28x (3.5x slower) | **FAIL** |
+| 1 M | ingest, 12 connections | 0.354 s | 0.331 s | 0.328–0.372 | 0.325–0.342 | 0.94x | **FAIL** |
+| 1 M | ingest, 16 connections | 0.317 s | 0.322 s | 0.309–0.331 | 0.317–0.325 | 1.02x (0.9–1.0x over repeats) | **FAIL** |
+| 10 M | fetch, 12 partitions | 1.265 s | 2.074 s | 1.263–1.268 | 2.059–2.089 | **1.64x faster** | **PASS** |
+| 10 M | ingest, 16 connections | 3.486 s | 2.417 s | 3.193–3.751 | 2.366–2.478 | 0.69x (1.44x slower) | **FAIL** |
 
-Fetch clears the bar at both sizes. Ingest does not, at any connection count.
+Fetch clears the bar at both sizes. Ingest does not, at any connection count — it reaches
+parity at 1 M rows and stays about 1.4x behind at 10 M.
 
 ### SQLite
 
@@ -1440,44 +1448,191 @@ Splitting the workers across separate target tables instead of one made no diffe
 (0.437 s against 0.525 s at N=16, inside the noise), so this is not PostgreSQL's relation
 extension lock — it is contention and scheduling cost against a box that is already busy.
 
-**What clearing 1.2x would actually take.** At 1 M rows the target is 0.364/1.2 = **0.303 s**
-against the 0.505 s we reach at N=16 — a further **1.67x**. Parallelism alone will not
-find it: the plateau is at 0.47 s and more workers make it worse. The per-row CPU has to
-come down, and the only lever big enough is to stop sending row values as SQL text. Two
-candidates, neither implemented here:
-
-1. **`INSERT INTO t SELECT * FROM unnest(?::bigint[], ?::float8[], ?::text[], ?::date[])`** —
-   four parameters per batch instead of K×4, so the per-cell `SQLBindParameter` disappears
-   and the server parses four array literals rather than a K-row `VALUES` clause. This is
-   the largest saving available over ODBC and would likely close most of the 1.67x, but it
-   is PostgreSQL-specific SQL and would need a per-dialect path.
-2. **Reaching `COPY` itself**, which ODBC gives no way to do: `SQLExecDirect("COPY t FROM
-   STDIN")` has nowhere to put the stream. Only a driver-specific escape (psqlodbc does not
-   expose one) or bypassing ODBC for libpq — which is what the native driver already is —
-   would get there.
-
 Raising the parameter ceiling is worth a little on its own but nothing like enough: at
 K=1000 instead of the default 500 (`ADBC_ODBC_MULTIROW_MAX_PARAMS`, 2000, divided by four
 columns) the single-connection load goes from 2.23 s to 1.98 s, about 12%. Going the other
 way confirms the multi-row form is the right one: `adbc.odbc.rows_per_insert=1`, which
 falls back to parameter arrays and row-at-a-time, takes 9.73 s.
 
-So: **fetch passes, ingest fails.** The parallel-ingest option is kept because a 4.6x
-speed-up on the write path is worth having on its own terms, not because it reaches the
-bar.
+The one lever big enough to matter is to stop sending row values as SQL text at all. That
+is the array form below. It is now implemented, it is worth a lot, and it still does not
+reach the bar.
 
 ### Parallel ingest: scaling
 
-1 M rows, PostgreSQL, `adbc.odbc.ingest_connections`, checksum-verified at every N:
+1 M rows, PostgreSQL, `adbc.odbc.ingest_connections`, checksum-verified at every N. The
+first two rows are the multi-row `INSERT` form; the third is the same driver with the
+array form of the next section, which is what runs against PostgreSQL now:
 
-| connections | 1 | 4 | 8 | 12 | 16 | 20 |
-|---|---:|---:|---:|---:|---:|---:|
-| wall (s) | 2.33 | 0.98 | 0.90 | 0.53 | 0.58 | — |
-| 10 M rows, wall (s) | 24.45 | — | 5.01 | 4.51 | **4.26** | 4.52 |
+| connections | 1 | 4 | 8 | 10 | 12 | 16 | 20 | 24 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| multi-row, wall (s) | 2.33 | 0.98 | 0.90 | — | 0.53 | 0.58 | — | — |
+| multi-row, 10 M rows, wall (s) | 24.45 | — | 5.01 | — | 4.51 | **4.26** | 4.52 | — |
+| array form, wall (s) | 1.40 | 0.49 | 0.51 | 0.37 | 0.33 | **0.34** | — | 0.36 |
+
+The array-form row is means of 3–5 interleaved runs taken over about twenty minutes on a
+host whose one-minute load average moved between 1.7 and 10 (a desktop compositor pinned
+at 2.7 cores throughout); the spread within an N is comparable to the difference between
+N=10 and N=16, so read it as "flat from 12 onwards", not as a ranking. The shape is the
+same as before — the curve flattens where the server, not the client, becomes the limit —
+but it flattens lower and it gets there with about a third less total CPU.
 
 A stream of a single 1 M-row batch fans out just as well as one of many batches (0.487 s
 at N=12), because the driver slices batches longer than
 `ADBC_ODBC_INGEST_SLICE_ROWS` before queueing them.
+
+## PostgreSQL array ingest: what it buys, and what it does not
+
+Against PostgreSQL the driver sends a whole column of a batch as **one array parameter**
+and lets the server expand it, instead of binding K×ncols separate cells:
+
+```sql
+INSERT INTO t ("a", "b", "c", "d")
+  SELECT * FROM unnest(?::bigint[], ?::float8[], ?::text[], ?::date[])
+```
+
+That is `ncols` parameters per statement however many rows it carries. See
+[Bulk ingest](../README.md#bulk-ingest) for the guard (it is a PostgreSQL-only quirk, and
+several servers speak the PostgreSQL wire protocol without being PostgreSQL) and for the
+Arrow types it covers. Everything below is 1,000,000 rows of
+`(bigint, float8, text, date)` into PostgreSQL 16.15 in Docker, over psqlodbc 16.
+
+### The floor, measured without the driver in the way
+
+A standalone C program against psqlodbc — no adbcbridge, no Arrow, values generated in a
+loop — writing 1,000,000 rows of `(bigint, float8, text, date)` into a fresh table on one
+connection. Wall clock, client CPU by `getrusage`, server CPU from the container's
+`cpu.stat`:
+
+| shape | rows per statement | wall | client CPU | server CPU | total CPU |
+|---|---:|---:|---:|---:|---:|
+| multi-row `INSERT` | 250 | 2.113 s | 0.837 s | 1.063 s | 1.90 s |
+| multi-row `INSERT` | 1000 | 1.789 s | 0.696 s | 0.900 s | 1.60 s |
+| `unnest` arrays | 1000 | 1.487 s | 0.366 s | 0.983 s | 1.35 s |
+| `unnest` arrays | 10000 | **1.337 s** | **0.325 s** | 0.920 s | **1.25 s** |
+| `unnest` arrays | 100000 | 1.371 s | 0.314 s | 0.986 s | 1.30 s |
+| native `COPY` binary (reference) | — | 0.359 s | 0.185 s | 0.248 s | **0.43 s** |
+
+The array form does exactly what it was supposed to do on **our** side: client CPU falls
+from 0.70 to 0.33 CPU-s, and 0.26 of the 0.33 that is left is nothing but rendering the
+values as text (a formatting-only run of the same loop, with no server at all, costs
+0.259 CPU-s). Round trips fall by a factor of 10–100. What it does *not* touch is the
+server: 0.92 CPU-s against 0.90 for the multi-row form. Ten thousand rows per statement is
+the sweet spot and is what `ADBC_ODBC_ARRAY_INGEST_ROWS` is set to; 1,000 gives most of it
+and 100,000 gives nothing more.
+
+### Where the server's 0.92 CPU-s goes
+
+Same probe, with the statement replaced so that each stage can be measured on its own
+(1 M rows, four arrays, 10,000 rows per statement):
+
+| statement | server CPU |
+|---|---:|
+| `SELECT array_length(?::bigint[],1) + …` — parse the four array literals only | 0.315 s |
+| `SELECT count(*) FROM unnest(?::bigint[], …)` — and expand them | 0.501 s |
+| `INSERT INTO t SELECT * FROM unnest(…)` — and insert the rows | 0.920 s |
+
+So parsing is 0.32, expansion 0.19, and the insert itself 0.42 — against `COPY`'s **0.248
+for the whole job, insert included**. Making the parse cheaper cannot close that; the
+insert alone is already 1.7x `COPY`'s total.
+
+### The wall the insert hits: WAL
+
+`COPY` does not write rows through the executor. It batches them into `heap_multi_insert`,
+which emits one WAL record per page-batch of tuples; `INSERT` emits one per row, whatever
+shape the statement has. WAL bytes generated by 1,000,000 rows of identical data into an
+identical table, from `pg_current_wal_lsn()` before and after:
+
+| | WAL bytes |
+|---|---:|
+| multi-row `INSERT` | 96,406,344 |
+| `unnest` array `INSERT` | 96,305,696 |
+| native `COPY` binary | 48,765,856 |
+
+**Exactly 2x**, and the array form does not change it by 0.1%. (`CREATE TABLE AS SELECT`
+is no different: 88.3 MB against 88.3 MB for the same `INSERT … SELECT`.)
+
+That is also why parallelism stops paying. Sampling `pg_stat_activity` 25 times during a
+16-way array ingest, 357 active-backend observations:
+
+| state | share |
+|---|---:|
+| running on CPU | 46% |
+| `LWLock` / `WALInsert` | 20% |
+| `LWLock` / `BufferContent` | 18% |
+| `LWLock` / `WALWrite` | 10% |
+| `Lock` / `extend`, other | 6% |
+
+Over half the backends' time is spent waiting on WAL and buffer locks, and every extra
+worker makes that worse rather than better. Twice the WAL records and twice the WAL bytes
+is a property of `INSERT` in PostgreSQL 16, not of how the statement is written, so no
+statement an ODBC driver can send gets underneath it.
+
+### And `COPY` really is out of reach
+
+`SQLExecDirect(hstmt, "COPY t FROM STDIN")` through psqlodbc does not fail — it **hangs**.
+libpq puts the connection into `PGRES_COPY_IN` and psqlodbc has no API through which an
+application could call `PQputCopyData`, so the call never returns and the process has to be
+killed. Embedding the data in the statement text (`COPY … FROM STDIN;\n1\ta\n\\.\n`, which
+is psql's `\copy`, not the wire protocol) does not reach the server as data either.
+
+### End to end, through the driver
+
+Interleaved A/B of two builds of this driver that differ only in whether the quirk is
+set, plus the native driver, one timed ingest per process, 1 M rows, PostgreSQL 16.15:
+
+| | 1 M, N=1 (3 runs) | 1 M, N=16 (5 runs) | 10 M, N=16 (3 runs) |
+|---|---:|---:|---:|
+| multi-row `INSERT` | 2.745 s | 0.446 s | 7.035 s (5.18–8.49) |
+| `unnest` arrays | **1.397 s** | **0.340 s** | **4.024 s** (3.34–5.11) |
+| native `COPY` binary | 0.409 s | 0.334 s | 2.878 s (2.80–2.92) |
+| array form against multi-row | **1.97x faster** | **1.31x faster** | **1.75x faster** |
+| array form against native | 0.29x | **1.02x** | 0.72x |
+
+And through `bench/native_threshold.py` itself, mean of three, checksum-verified. "Before"
+is the same harness against a build with the quirk forced off, run within the hour:
+
+| N | ours before | ours after | native | ratio before | ratio after |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 2.215 s | 1.264 s | 0.357 s | 0.16x | 0.28x |
+| 12 | — | 0.354 s | 0.331 s | — | 0.94x |
+| 16 | 0.416 s | 0.317 s | 0.322 s | 0.77x | **1.02x** |
+| 16, 10 M rows | — | 3.486 s | 2.417 s | — | 0.69x |
+
+**Verdict: still `FAIL`.** At 1 M rows the array form takes ingest from 0.77x of the
+native driver to parity. Three whole-harness runs at N=16 over the session gave 1.02x
+(load 5.0), 0.94x (load 6.9) and 0.86x (load 4-6 with a 10 M benchmark finishing
+alongside); the multi-row form measured 0.77x under the same conditions and never came
+near 1x. Call it **0.9-1.0x**, and note that we are the side that needs eight cores while
+the native driver needs one and a half, so a busy host costs us more than it costs the
+reference. The bar is 1.2x, which needs 0.268 s against the 0.317 s of the best run. At 10 M rows it improves the absolute time by 1.75x but stays
+at 0.69–0.72x: the native driver's `COPY` amortises better at that size, so the ratio does
+not move. **The 10 M figures are the least trustworthy on this page** — the same build
+measured 3.34 s, 3.49 s, 3.62 s and 5.11 s across four runs of the same load within half an
+hour, and the multi-row build swung from 5.18 s to 8.49 s. A 10 M-row ingest writes about
+a gigabyte of WAL and the host's checkpointing and page cache dominate the spread. The
+1 M-row numbers repeat to within a few percent and are the ones to read.
+
+Where the remaining 1.2x would have to come from, and why none of it is available:
+
+- **Not from more workers.** N=24 is no better than N=16 (0.361 s against 0.340 s), and the
+  wait-event sample above says why.
+- **Not from a cheaper statement.** The insert phase alone (0.42 CPU-s) already exceeds
+  `COPY`'s whole cost (0.248), because of the WAL asymmetry.
+- **Not from a cheaper client.** Everything the client still spends — 0.33 CPU-s at N=1 —
+  is 16-way parallel at N=16, i.e. about 20 ms of the 317 ms.
+- **The fixed cost is now a visible share.** Opening the connections, the `CREATE TABLE`
+  and the commit cost 82–114 ms at N=16 against 12 ms at N=1 (measured by ingesting 64
+  rows), roughly a third of the 317 ms. That is PostgreSQL forking sixteen backends, it is
+  inside the clock because a caller waits for it, and the driver already opens the sixteen
+  connections concurrently on the worker threads.
+
+So the array form is kept for what it is — a 1.97x on the default single-connection
+ingest, a 1.31x at N=16, and 35% less total CPU — and not because it reaches the bar. A
+caller who needs native ingest speed against PostgreSQL should let the driver
+[delegate](../README.md#native-delegation) to `adbc_driver_postgresql`, which is what
+`adbc.odbc.delegate=auto` does with a `postgresql://` URI; the benchmarks here set
+`delegate=never` on purpose, to measure the ODBC path.
 
 ## Files
 
@@ -1508,6 +1663,12 @@ at N=12), because the driver slices batches longer than
   single-connection path, one huge batch sliced across workers, an empty stream, fewer
   batches than connections, a failure injected mid-stream, and `NOT NULL`/`PRIMARY KEY`
   violations by one worker.
+- `tests/test_pg_array_ingest.py` — the PostgreSQL array form: that it is what runs (a
+  statement trigger records `current_query()`), that every awkward value round-trips
+  (empty strings, the word `NULL`, braces, commas, quotes, backslashes, newlines, emoji),
+  a randomised differential against the row-at-a-time path, the fallbacks (an unsupported
+  column type, a target column with no assignment cast, a date the renderer will not
+  spell), values wide enough to narrow a statement, and composition with parallel ingest.
 - `tests/c/test_multirow.c`, `test_multirow_ingest` in `tests/test_sqlite.py` — the
   multi-row `INSERT` text and its behaviour (NULLs in every row-group position, a batch
   that is not a multiple of K, a single-row batch, a failure that must leave no rows,

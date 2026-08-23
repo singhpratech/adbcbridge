@@ -124,14 +124,60 @@ arrays, and `adbc.odbc.rows_per_insert` overrides the choice. 10,000 rows, rows/
 | CrateDB 6.4 | 820 | **49,986** |
 | GreptimeDB 1.1.4 | 5,171 | **180,760** |
 
+#### PostgreSQL: one array parameter per column
+
+Against PostgreSQL the driver goes one step further and sends a whole *column* of a batch
+as a single array parameter, letting the server expand it:
+
+```sql
+INSERT INTO t ("a", "b", "c", "d")
+  SELECT * FROM unnest(?::bigint[], ?::float8[], ?::text[], ?::date[])
+```
+
+That is one parameter per column however many rows the statement carries (10,000 by
+default), instead of one bound cell per value. On 1,000,000 four-column rows it takes the
+single-connection ingest from 2.75 s to 1.40 s and the sixteen-connection ingest from
+0.45 s to 0.34 s, with about a third less CPU on both sides. It is on by default and needs
+no option.
+
+It is deliberately narrow, because a wrongly quoted array literal is a data-corruption bug
+rather than a slow one:
+
+* **Only PostgreSQL.** psqlodbc drives every PostgreSQL-wire server, so the quirk is keyed
+  on what the server says it is, not on the driver: `version()` has to be a PostgreSQL
+  banner and must not carry a fork's marker. Checked against live servers: on for
+  PostgreSQL itself, TimescaleDB and Citus (both of which *are* PostgreSQL, with an
+  extension); off for CockroachDB, YugabyteDB, CrateDB, RisingWave, Materialize, openGauss
+  and Apache Cloudberry. QuestDB, ArcadeDB, YDB and Cloud Spanner via PGAdapter are
+  excluded by the same rule without having been tried. Before the form is used on a
+  connection the server is also asked to prove it: one statement whose answer pins down
+  NULL elements, empty elements, and `,`, `{`, `}`, `"` and `\` inside a quoted element.
+  (That check on its own is not enough — CockroachDB passes it — which is why the identity
+  test comes first and unknown servers default to off.)
+* **Only the types it can spell exactly**: the integers, `float16/32/64`, `decimal128/256`,
+  `bool`, `date32`, `time32/64`, `timestamp` and the string types (including
+  `large_string` and `string_view`). A batch with a binary, interval, list, struct, map,
+  dictionary or null-typed column keeps the multi-row `INSERT` path in full.
+* **It falls back rather than guessing.** A target column PostgreSQL will not
+  assignment-cast to (an Arrow `date` against a `text` column, say) is refused at
+  `SQLPrepare`, before anything has been applied, and the ingest replays on the multi-row
+  path. A single value the renderer cannot spell — a string with an embedded NUL, a date or
+  timestamp outside years 0001–9999 — stops the array form at that row: the rows before it
+  are already in, and the rest of the ingest goes the ordinary way. Nothing is written
+  twice and nothing is dropped.
+
+`adbc.odbc.rows_per_insert=1` turns it off along with the multi-row form.
+
 
 #### Parallel ingest: trading atomicity for speed
 
 `adbc.odbc.ingest_connections` spreads one ingest over several connections. One thread
 drains the bound stream and hands batches to `N` workers, each with its own connection,
-statement handle and transaction, each running the ordinary multi-row `INSERT` path into
-the same table. On PostgreSQL this takes 1,000,000 rows from 2.20 s to 0.505 s (4.6x) and
-10,000,000 rows from 24.4 s to 4.26 s; the curve flattens at 12–16 workers.
+statement handle and transaction, each running the ordinary ingest path into the same
+table — the array form above where the server is PostgreSQL, the multi-row `INSERT`
+everywhere else. On PostgreSQL it takes 1,000,000 rows from 1.40 s to 0.34 s; the curve
+flattens at 12–16 workers. (With the multi-row form, which is what every other server
+gets, the same load went from 2.20 s to 0.505 s.)
 
 **It is opt-in because it is not atomic, and it defaults to `1`.** `N` connections are `N`
 transactions. A worker that fails trips the queue, so every worker still running fails its
@@ -152,10 +198,17 @@ goes from 0.224 s to 0.273 s on four connections, the workers contending for the
 lock.
 
 Even at its best this does not catch the native PostgreSQL driver, which ingests with
-`COPY … (FORMAT binary)`: that costs about 0.43 µs of CPU per row against our 2.0 µs, and
-parallelism converts CPU into wall time without making the work smaller. See
-[bench/BENCHMARKS.md](bench/BENCHMARKS.md) for the numbers and for what closing the gap
-would take.
+`COPY … (FORMAT binary)`. The array form closes most of the gap — at 1,000,000 rows and
+sixteen connections the two are within noise of each other (0.9–1.0x over repeated runs,
+best 0.317 s against 0.322 s), up from 0.77x — but not all of it, and at 10,000,000 rows it stays about 1.4x behind. The
+reason is not the statement shape: an `INSERT` writes **twice the WAL** a `COPY` does
+(96.4 MB against 48.8 MB for the same million rows), because `COPY` batches tuples into
+one WAL record per page and `INSERT` writes one per row. That is what caps the parallel
+curve — over half of the backends' time at N=16 is spent waiting on WAL and buffer locks —
+and no statement an ODBC driver can send gets underneath it, `COPY` itself being
+unreachable through the ODBC API. See [bench/BENCHMARKS.md](bench/BENCHMARKS.md) for the
+measurements. A caller who needs native ingest speed against PostgreSQL should let the
+driver [delegate](#native-delegation) to `adbc_driver_postgresql`.
 
 MariaDB and Vertica keep ODBC parameter arrays, which are faster there. Firebird has no
 multi-row `VALUES` in its dialect and takes a `UNION ALL` of typed one-row `SELECT`s
@@ -626,7 +679,7 @@ Options (set on the statement):
 
 | key | meaning |
 |---|---|
-| `adbc.odbc.rows_per_insert` | rows of parameters per `INSERT` for **bulk ingest** — `0` (default) picks a group size automatically, `1` turns the rewrite off, any other value asks for that many. Instead of executing `INSERT INTO t VALUES (?,?)` once per row, ingest prepares `INSERT INTO t VALUES (?,?),(?,?),…` with K row-groups and binds K rows' worth of ordinary parameters per execute, which divides the round trips by K. See [Multi-row INSERT batching](#multi-row-insert-batching). |
+| `adbc.odbc.rows_per_insert` | rows of parameters per `INSERT` for **bulk ingest** — `0` (default) picks a group size automatically, `1` turns the rewrite off, any other value asks for that many. Instead of executing `INSERT INTO t VALUES (?,?)` once per row, ingest prepares `INSERT INTO t VALUES (?,?),(?,?),…` with K row-groups and binds K rows' worth of ordinary parameters per execute, which divides the round trips by K. Against PostgreSQL, where a batch instead goes as one array parameter per column, the same value sets the rows one such statement carries (default 10,000) and `1` turns that off too. See [Multi-row INSERT batching](#multi-row-insert-batching) and [PostgreSQL: one array parameter per column](#postgresql-one-array-parameter-per-column). |
 | `adbc.odbc.ingest_connections` | connections a **bulk ingest** may spread itself over — `1` (default) keeps it on the caller's own connection in a single transaction. `N > 1` opens `N` further connections, hands each a share of the bound stream's batches and lets each run the multi-row `INSERT` path into the same table. **This trades atomicity for speed**: `N` connections are `N` transactions, so a failure can leave some batches committed. See [Parallel ingest](#parallel-ingest-trading-atomicity-for-speed). |
 | `adbc.odbc.array_binding` | `true` (default) — binds each Arrow batch as a column-wise ODBC parameter array, so `executemany` (and ingest on a driver where arrays are the faster of the two) issues one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE`, or that cannot account for every parameter set they were handed, fall back automatically; DuckDB and clickhouse-odbc, whose parameter arrays silently drop values, default to `false` and can be forced back on with this option. Reported rows-affected is identical in both modes. |
 
@@ -655,6 +708,11 @@ whose arrays go out as a single `COM_STMT_BULK_EXECUTE`.
 
 Only the `INSERT` that bulk ingest generates is ever rewritten. A query you wrote is
 executed as written, whatever is bound to it.
+
+PostgreSQL is a step ahead of this: there a batch goes as one array parameter per column
+rather than as K row-groups of cells, and the multi-row form is what the ingest falls back
+to. See [PostgreSQL: one array parameter per
+column](#postgresql-one-array-parameter-per-column).
 
 K is chosen from a parameter budget (2000 parameters, at most 1000 row-groups — SQL
 Server's limits are 2100 and 1000) and clipped by the driver's `SQL_MAX_STATEMENT_LEN`.
