@@ -100,8 +100,14 @@ Per-database results are in [`bench/RUST_BENCHMARKS.md`](bench/RUST_BENCHMARKS.m
 
 ## Compatibility matrix
 
-Same workload (types, NULLs, Unicode incl. emoji, parameters, bulk ingest, batched
-reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
+adbcbridge can reach anything with an ODBC driver — the ODBC ecosystem covers a few
+hundred data sources — but that is reachability, not verification. What has actually
+been verified is the table below: the same workload (types, NULLs, Unicode incl. emoji,
+parameters, bulk ingest, batched reads, GetObjects, error mapping) run through
+`tests/compat/test_matrix.py` against a real server or file. Every one of these drivers
+needed at least one workaround, so expect an unlisted driver to work on the generic path
+and to have a quirk waiting; [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) tracks what
+is verified, what is queued, and what only exists as a hosted service.
 
 | Database | ODBC driver | Status |
 |---|---|---|
