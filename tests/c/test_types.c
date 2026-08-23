@@ -44,17 +44,27 @@ static void TestClassifyTime(void) {
   CHECK_I64(c.kind, FETCH_TIME);
 
   // Fractional seconds: TIME_STRUCT has no sub-second field, so the value has
-  // to be fetched as text and parsed into time64[us].
+  // to be fetched as text and parsed into time64.  1-6 digits -> time64[us].
   c = Classify(SQL_TYPE_TIME, 15, 6, NULL);
   CHECK_I64(c.kind, FETCH_TIME64);
   CHECK_I64(c.c_type, SQL_C_CHAR);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
   CHECK_TRUE(c.bound);
   CHECK_TRUE(c.elem_size >= 40);
 
-  // SQL Server's SQL_SS_TIME2 (-154) behaves the same way.
+  c = Classify(SQL_TYPE_TIME, 12, 3, NULL);
+  CHECK_I64(c.kind, FETCH_TIME64);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
+
+  // SQL Server's SQL_SS_TIME2 (-154) behaves the same way, and its TIME(7)
+  // needs more resolution than microseconds -> time64[ns].
   c = Classify(SQL_SS_TIME2, 16, 7, NULL);
   CHECK_I64(c.kind, FETCH_TIME64);
   CHECK_I64(c.c_type, SQL_C_CHAR);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_NANO);
+
+  c = Classify(SQL_TYPE_TIME, 18, 9, NULL);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_NANO);
   c = Classify(SQL_SS_TIME2, 8, 0, NULL);
   CHECK_I64(c.kind, FETCH_TIME);
   CHECK_I64(c.c_type, SQL_C_TYPE_TIME);
@@ -66,10 +76,31 @@ static void TestClassifyTime(void) {
 }
 
 static void TestClassifyTimestamp(void) {
-  struct OdbcColumn c = Classify(SQL_TYPE_TIMESTAMP, 23, 3, NULL);
+  // The reported fractional-seconds scale picks the Arrow unit:
+  // 1-3 -> [ms], 4-6 -> [us], 7-9 -> [ns].  A reported 0 is only believed when the
+  // column size (20 + digits) confirms it; a bare 0/19 stays at the lossless
+  // microsecond default (MySQL Connector/ODBC reports 0/19 for DATETIME(6)).
+  struct OdbcColumn c = Classify(SQL_TYPE_TIMESTAMP, 19, 0, NULL);
   CHECK_I64(c.kind, FETCH_TIMESTAMP);
   CHECK_I64(c.c_type, SQL_C_TYPE_TIMESTAMP);
   CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
+
+  c = Classify(SQL_TYPE_TIMESTAMP, 21, 1, NULL);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MILLI);
+
+  c = Classify(SQL_TYPE_TIMESTAMP, 23, 3, NULL);
+  CHECK_I64(c.kind, FETCH_TIMESTAMP);
+  CHECK_I64(c.c_type, SQL_C_TYPE_TIMESTAMP);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MILLI);
+
+  c = Classify(SQL_TYPE_TIMESTAMP, 24, 4, NULL);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
+
+  c = Classify(SQL_TYPE_TIMESTAMP, 26, 6, NULL);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
+
+  c = Classify(SQL_TYPE_TIMESTAMP, 27, 7, NULL);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_NANO);
 
   c = Classify(SQL_TYPE_TIMESTAMP, 30, 9, NULL);
   CHECK_I64(c.unit, NANOARROW_TIME_UNIT_NANO);
@@ -170,8 +201,10 @@ static void CheckFormat(SQLSMALLINT sql_type, SQLULEN column_size, SQLSMALLINT d
 static void TestSchemaFormats(void) {
   CheckFormat(SQL_TYPE_TIME, 8, 0, "tts");                     // time32[s]
   CheckFormat(SQL_TYPE_TIME, 15, 6, "ttu");                    // time64[us]
-  CheckFormat(SQL_SS_TIME2, 16, 7, "ttu");                     // time64[us]
-  CheckFormat(SQL_TYPE_TIMESTAMP, 23, 3, "tsu:");              // timestamp[us]
+  CheckFormat(SQL_SS_TIME2, 16, 7, "ttn");                     // time64[ns]
+  CheckFormat(SQL_TYPE_TIMESTAMP, 19, 0, "tsu:");              // timestamp[s]
+  CheckFormat(SQL_TYPE_TIMESTAMP, 23, 3, "tsm:");              // timestamp[ms]
+  CheckFormat(SQL_TYPE_TIMESTAMP, 26, 6, "tsu:");              // timestamp[us]
   CheckFormat(SQL_TYPE_TIMESTAMP, 30, 9, "tsn:");              // timestamp[ns]
   CheckFormat(SQL_SS_TIMESTAMPOFFSET, 34, 7, "tsu:UTC");       // timestamp[us, UTC]
   CheckFormat(SQL_TYPE_TIMESTAMP_WITH_TIMEZONE, 35, 6, "tsu:UTC");
@@ -185,7 +218,7 @@ static void TestSchemaFormats(void) {
 
 static void CheckTime(const char* s, int64_t expected) {
   int64_t v = -1;
-  if (!ParseTimeMicros(s, strlen(s), &v)) {
+  if (!ParseTimeScaled(s, strlen(s), 6, &v)) {
     fprintf(stderr, "FAIL: could not parse time '%s'\n", s);
     adbc_test_failures++;
     return;
@@ -195,7 +228,7 @@ static void CheckTime(const char* s, int64_t expected) {
 
 static void CheckTimeInvalid(const char* s) {
   int64_t v = 0;
-  if (ParseTimeMicros(s, strlen(s), &v)) {
+  if (ParseTimeScaled(s, strlen(s), 6, &v)) {
     fprintf(stderr, "FAIL: accepted bad time '%s' (-> %lld)\n", s, (long long)v);
     adbc_test_failures++;
   }
@@ -221,6 +254,31 @@ static void TestParseTime(void) {
   CheckTimeInvalid("12:60:00");
   CheckTimeInvalid("12:34:60");
   CheckTimeInvalid("12:34:56xyz");
+}
+
+static void CheckTimeNanos(const char* s, int64_t expected) {
+  int64_t v = -1;
+  if (!ParseTimeScaled(s, strlen(s), 9, &v)) {
+    fprintf(stderr, "FAIL: could not parse time '%s' as nanos\n", s);
+    adbc_test_failures++;
+    return;
+  }
+  CHECK_I64(v, expected);
+}
+
+// A TIME(7..9) column is fetched as text and parsed straight into time64[ns];
+// the microsecond scale would throw the extra digits away.
+static void TestParseTimeNanos(void) {
+  CheckTimeNanos("00:00:00", 0);
+  CheckTimeNanos("12:34:56", 45296000000000LL);
+  CheckTimeNanos("12:34:56.789012345", 45296789012345LL);
+  // SQL Server renders time(7) with exactly 7 digits: the rest is zero-padded.
+  CheckTimeNanos("12:34:56.7890123", 45296789012300LL);
+  CheckTimeNanos("12:34:56.5", 45296500000000LL);
+  CheckTimeNanos("00:00:00.000000001", 1);
+  CheckTimeNanos("23:59:59.999999999", 86399999999999LL);
+  // A tenth digit is beyond nanosecond resolution and is truncated.
+  CheckTimeNanos("23:59:59.9999999991", 86399999999999LL);
 }
 
 static void CheckTimestamp(const char* s, int64_t expected) {
@@ -276,6 +334,7 @@ int main(void) {
   TestClassifyDecimal();
   TestSchemaFormats();
   TestParseTime();
+  TestParseTimeNanos();
   TestParseTimestamp();
   return TEST_MAIN_RESULT();
 }

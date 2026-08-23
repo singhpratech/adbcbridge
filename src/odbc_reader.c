@@ -181,8 +181,8 @@ enum OdbcFetchKind {
   FETCH_BINARY,   // SQL_C_BINARY -> binary
   FETCH_DATE,     // DATE_STRUCT -> date32
   FETCH_TIME,     // TIME_STRUCT -> time32[s]
-  FETCH_TIME64,   // SQL_C_CHAR "HH:MM:SS[.frac]" -> time64[us]
-  FETCH_TIMESTAMP,// TIMESTAMP_STRUCT -> timestamp[us|ns]
+  FETCH_TIME64,   // SQL_C_CHAR "HH:MM:SS[.frac]" -> time64[us|ns]
+  FETCH_TIMESTAMP,// TIMESTAMP_STRUCT -> timestamp[s|ms|us|ns]
   FETCH_TIMESTAMP_TZ,  // SQL_C_CHAR ISO-8601 with offset -> timestamp[us, UTC]
   FETCH_DECIMAL,  // SQL_C_CHAR -> decimal128
   FETCH_BOOL_STR, // SQL_C_CHAR ('t'/'1'/'true') -> bool (PostgreSQL, DuckDB report bool as char)
@@ -274,6 +274,42 @@ static void UseTextBuffer(struct OdbcColumn* c, const struct OdbcReaderOptions* 
   if (c->elem_size > opts->max_bind_bytes) c->bound = false;
 }
 
+// The Arrow unit implied by what SQLDescribeCol says about a timestamp column:
+// TIMESTAMP(0) is whole seconds, TIMESTAMP(3) milliseconds, and so on.
+//
+// `decimal_digits` is the column's fractional-seconds precision and is
+// authoritative whenever a driver reports one.  Several drivers always report 0
+// there, so a reported 0 is cross-checked against the column size, which ODBC
+// defines as 19 for a timestamp with no fractional seconds and 20 + precision
+// otherwise: Oracle's SQORA reports scale 0 with size 20/23/26/29 for
+// TIMESTAMP(0)/(3)/(6)/(9) and size 19 for DATE, and clickhouse-odbc reports
+// size 19 for DateTime and 29 for every DateTime64.
+//
+// When neither answers -- or the driver reports scale 0 with the no-fraction size,
+// which MySQL Connector/ODBC does for DATETIME(6) -- microseconds remain the
+// default: SQLiteODBC reports
+// scale 0 and size 32 for every TIMESTAMP column whatever its declared
+// precision, and truncating those to whole seconds would throw away the
+// milliseconds it does store.
+static enum ArrowTimeUnit TimestampUnitForColumn(SQLSMALLINT decimal_digits,
+                                                 SQLULEN column_size) {
+  int digits = decimal_digits;
+  if (digits <= 0) {
+    if (column_size > 20 && column_size <= 29) {
+      digits = (int)column_size - 20;
+    } else {
+      // Scale 0 with the plain "no fraction" size is not trustworthy either: MySQL
+      // Connector/ODBC reports 0 / 19 for DATETIME(6).  Microseconds lose nothing;
+      // whole seconds would.
+      return NANOARROW_TIME_UNIT_MICRO;
+    }
+  }
+  if (digits <= 0) return NANOARROW_TIME_UNIT_SECOND;
+  if (digits <= 3) return NANOARROW_TIME_UNIT_MILLI;
+  if (digits <= 6) return NANOARROW_TIME_UNIT_MICRO;
+  return NANOARROW_TIME_UNIT_NANO;
+}
+
 static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn* c,
                            const struct OdbcReaderOptions* opts) {
   c->bound = true;
@@ -336,9 +372,13 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_TIME:
     case SQL_SS_TIME2:
       // TIME_STRUCT has no sub-second field, so a column with fractional
-      // seconds has to come across as text.
+      // seconds has to come across as text.  The reported scale picks the
+      // Arrow unit: 0 -> time32[s], 1-6 -> time64[us], 7-9 -> time64[ns].
       if (c->decimal_digits > 0) {
         c->kind = FETCH_TIME64;
+        // time64 has no second or millisecond unit, so anything under a second
+        // rounds up to microseconds.
+        c->unit = c->decimal_digits > 6 ? NANOARROW_TIME_UNIT_NANO : NANOARROW_TIME_UNIT_MICRO;
         UseTextBuffer(c, opts, 40);
       } else {
         c->kind = FETCH_TIME; c->c_type = SQL_C_TYPE_TIME; c->elem_size = sizeof(TIME_STRUCT);
@@ -365,7 +405,7 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       }
       c->kind = FETCH_TIMESTAMP; c->c_type = SQL_C_TYPE_TIMESTAMP;
       c->elem_size = sizeof(TIMESTAMP_STRUCT);
-      c->unit = c->decimal_digits > 6 ? NANOARROW_TIME_UNIT_NANO : NANOARROW_TIME_UNIT_MICRO;
+      c->unit = TimestampUnitForColumn(c->decimal_digits, c->column_size);
       break;
     case SQL_GUID:
       // 36 characters, or 38 with the braces some drivers add.
@@ -528,8 +568,7 @@ static AdbcStatusCode BuildSchema(const struct OdbcColumn* cols, SQLSMALLINT n,
         goto named;
       case FETCH_TIME64:
         CHECK_NA(INTERNAL,
-                 ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIME64,
-                                            NANOARROW_TIME_UNIT_MICRO, NULL),
+                 ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIME64, c->unit, NULL),
                  error);
         goto named;
       case FETCH_TIMESTAMP:
@@ -646,31 +685,38 @@ static bool ScanUInt(const char* s, size_t len, size_t* pos, int max_digits, int
   return true;
 }
 
-// Scan ".ffffff" (or ",ffffff") into microseconds, truncating extra digits.
-static void ScanFraction(const char* s, size_t len, size_t* pos, int64_t* out_micros) {
-  *out_micros = 0;
+// Scan ".ffffff" (or ",ffffff") into exactly `want` fractional digits: extra
+// digits are truncated, missing ones are right-padded with zeros.
+static void ScanFractionDigits(const char* s, size_t len, size_t* pos, int want, int64_t* out) {
+  *out = 0;
   if (*pos >= len || (s[*pos] != '.' && s[*pos] != ',')) return;
   (*pos)++;
   int digits = 0;
   while (*pos < len && s[*pos] >= '0' && s[*pos] <= '9') {
-    if (digits < 6) {
-      *out_micros = *out_micros * 10 + (s[*pos] - '0');
+    if (digits < want) {
+      *out = *out * 10 + (s[*pos] - '0');
       digits++;
     }
     (*pos)++;
   }
-  while (digits < 6) {
-    *out_micros *= 10;
+  while (digits < want) {
+    *out *= 10;
     digits++;
   }
+}
+
+// Scan ".ffffff" (or ",ffffff") into microseconds, truncating extra digits.
+static void ScanFraction(const char* s, size_t len, size_t* pos, int64_t* out_micros) {
+  ScanFractionDigits(s, len, pos, 6, out_micros);
 }
 
 static void SkipBlanks(const char* s, size_t len, size_t* pos) {
   while (*pos < len && (s[*pos] == ' ' || s[*pos] == '\t' || s[*pos] == '\0')) (*pos)++;
 }
 
-// "HH:MM[:SS[.frac]]" -> microseconds since midnight.
-static bool ParseTimeMicros(const char* s, size_t len, int64_t* out) {
+// "HH:MM[:SS[.frac]]" -> time since midnight in units of 10^-`frac_digits`
+// seconds (`frac_digits` is 6 for time64[us], 9 for time64[ns]).
+static bool ParseTimeScaled(const char* s, size_t len, int frac_digits, int64_t* out) {
   size_t p = 0;
   int64_t h = 0, m = 0, sec = 0, frac = 0;
   SkipBlanks(s, len, &p);
@@ -682,11 +728,13 @@ static bool ParseTimeMicros(const char* s, size_t len, int64_t* out) {
     p++;
     if (!ScanUInt(s, len, &p, 2, &sec)) return false;
   }
-  ScanFraction(s, len, &p, &frac);
+  ScanFractionDigits(s, len, &p, frac_digits, &frac);
   SkipBlanks(s, len, &p);
   if (p != len) return false;
   if (h > 23 || m > 59 || sec > 59) return false;
-  *out = ((h * 60 + m) * 60 + sec) * 1000000LL + frac;
+  int64_t scale = 1;
+  for (int i = 0; i < frac_digits; i++) scale *= 10;
+  *out = ((h * 60 + m) * 60 + sec) * scale + frac;
   return true;
 }
 
@@ -1071,7 +1119,8 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
     }
     case FETCH_TIME64: {
       int64_t v = 0;
-      if (!ParseTimeMicros((const char*)data, len, &v)) {
+      if (!ParseTimeScaled((const char*)data, len,
+                           c->unit == NANOARROW_TIME_UNIT_NANO ? 9 : 6, &v)) {
         InternalAdbcSetError(error, "Could not parse time value '%.*s' for column %s", (int)len,
                              (const char*)data, c->name);
         return ADBC_STATUS_INVALID_DATA;
@@ -1093,9 +1142,14 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
       const TIMESTAMP_STRUCT* t = (const TIMESTAMP_STRUCT*)data;
       int64_t secs = DaysFromCivil(t->year, t->month, t->day) * 86400 + t->hour * 3600 +
                      t->minute * 60 + t->second;
-      int64_t v = (c->unit == NANOARROW_TIME_UNIT_NANO)
-                      ? secs * 1000000000LL + (int64_t)t->fraction
-                      : secs * 1000000LL + (int64_t)t->fraction / 1000;
+      // TIMESTAMP_STRUCT::fraction is always in nanoseconds.
+      int64_t v;
+      switch (c->unit) {
+        case NANOARROW_TIME_UNIT_SECOND: v = secs; break;
+        case NANOARROW_TIME_UNIT_MILLI: v = secs * 1000LL + (int64_t)t->fraction / 1000000; break;
+        case NANOARROW_TIME_UNIT_MICRO: v = secs * 1000000LL + (int64_t)t->fraction / 1000; break;
+        default: v = secs * 1000000000LL + (int64_t)t->fraction; break;
+      }
       CHECK_NA(INTERNAL, ArrowArrayAppendInt(arr, v), error);
       break;
     }
@@ -1276,14 +1330,20 @@ static AdbcStatusCode BulkAppendColumn(struct OdbcReader* r, SQLSMALLINT i, SQLU
     struct ArrowBuffer* dat = ArrowArrayBuffer(arr, 1);
     CHECK_NA(INTERNAL, ArrowBufferReserve(dat, n * 8), error);
     int64_t* o = (int64_t*)(dat->data + dat->size_bytes);
-    const bool nano = c->unit == NANOARROW_TIME_UNIT_NANO;
+    // Must agree with the per-value FETCH_TIMESTAMP arm: ClassifyColumn picks the
+    // unit from the column's fractional-seconds precision, so all four are reachable.
+    // TIMESTAMP_STRUCT::fraction is always in nanoseconds.
+    const int64_t mul = c->unit == NANOARROW_TIME_UNIT_SECOND   ? 1
+                        : c->unit == NANOARROW_TIME_UNIT_MILLI  ? 1000LL
+                        : c->unit == NANOARROW_TIME_UNIT_MICRO  ? 1000000LL
+                                                                : 1000000000LL;
+    const int64_t div = 1000000000LL / mul;
     for (int64_t row = 0; row < n; row++) {
       if (ind[row] == SQL_NULL_DATA) { o[row] = 0; continue; }
       const TIMESTAMP_STRUCT* t = (const TIMESTAMP_STRUCT*)(base + (size_t)row * stride);
       int64_t secs = DaysFromCivil(t->year, t->month, t->day) * 86400 + t->hour * 3600 +
                      t->minute * 60 + t->second;
-      o[row] = nano ? secs * 1000000000LL + (int64_t)t->fraction
-                    : secs * 1000000LL + (int64_t)t->fraction / 1000;
+      o[row] = secs * mul + (int64_t)t->fraction / div;
     }
     dat->size_bytes += n * 8;
   } else if (c->kind == FETCH_BOOL || c->kind == FETCH_BOOL_STR) {

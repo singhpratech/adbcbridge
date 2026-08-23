@@ -142,6 +142,13 @@ struct OdbcReaderOptions {
   bool wchar_as_utf8;
   // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
   bool no_describe_param;
+  // Driver quirk: DDL type for a TIME column with fractional seconds, e.g. "Time64(%d)";
+  // the %d takes the fractional digit count.  Used for drivers whose SQLGetTypeInfo TIME
+  // type is whole-second and takes no CREATE_PARAMS, so nothing in the ODBC metadata can
+  // ask for a sub-second column.  NULL means "use SQLGetTypeInfo".
+  const char* fractional_time_type_format;
+  // Largest fractional digit count fractional_time_type_format accepts (0 = no limit).
+  int fractional_time_max_digits;
 };
 
 // --- 32-bit-SQLLEN driver quirk accessors -----------------------------------

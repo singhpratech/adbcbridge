@@ -255,8 +255,129 @@ def test_types():
     print("TYPES OK")
 
 
+def test_bind_types():
+    """Arrow parameter/ingest types added for validation findings D10-D13.
+
+    Every case runs twice: once as a two-row batch (which takes the column-wise
+    parameter-array path in ExecuteBatchArray) and once row-at-a-time (which
+    takes SlotFromArrow), so both binding paths are covered.
+
+    SQLiteODBC reports decimal_digits 0 for every TIME and TIMESTAMP column, so
+    what comes back here is always time32[s] / timestamp[us]; the units a
+    scale-reporting driver produces are covered by tests/c/test_types.c.
+    """
+    import datetime
+
+    import pyarrow as pa
+
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "bind.db")
+
+    def bind(cur, sql, table, rows_per_batch):
+        """Bind `table` through `sql`, rows_per_batch rows per batch."""
+        for start in range(0, table.num_rows, rows_per_batch):
+            batch = table.slice(start, rows_per_batch).combine_chunks().to_batches()[0]
+            cur.adbc_statement.set_sql_query(sql)
+            cur.adbc_statement.bind(batch)
+            cur.adbc_statement.execute_update()
+
+    with connect(db) as conn:
+        with conn.cursor() as cur:
+            # --- time32/time64 parameters and ingest (D10) ----------------
+            # Whole seconds go across as a TIME_STRUCT, sub-second units as
+            # "HH:MM:SS.ffffff" text; SQLite stores the text verbatim, so the
+            # string the driver produced is observable.
+            cases = [
+                (pa.time32("s"), [45296, None], "12:34:56"),
+                (pa.time32("ms"), [45296789, None], "12:34:56.789"),
+                (pa.time64("us"), [45296789012, None], "12:34:56.789012"),
+                (pa.time64("ns"), [45296789012345, None], "12:34:56.7890123"),
+            ]
+            for i, (arrow_type, values, expected_text) in enumerate(cases):
+                name = "tp%d" % i
+                cur.execute("CREATE TABLE %s (idx INTEGER, v TIME)" % name)
+                data = pa.table({
+                    "idx": pa.array([0, 1], pa.int32()),
+                    "v": pa.array(values, arrow_type),
+                })
+                for rows in (2, 1):  # array-bound batch, then row-at-a-time
+                    bind(cur, "INSERT INTO %s VALUES (?, ?)" % name, data, rows)
+                cur.execute("SELECT v FROM %s ORDER BY rowid" % name)
+                got = cur.fetch_arrow_table().column("v").to_pylist()
+                assert len(got) == 4, got
+                assert got[1] is None and got[3] is None, got
+                # Nanosecond times are rendered with 7 digits, the largest
+                # fractional scale SQL Server's TIME accepts.
+                cur.execute("SELECT CAST(v AS TEXT) FROM %s WHERE v IS NOT NULL" % name)
+                texts = cur.fetch_arrow_table().column(0).to_pylist()
+                assert texts == [expected_text, expected_text], (arrow_type, texts)
+                # ...and ingest picks a TIME column type for the same input.
+                assert cur.adbc_ingest("ing%d" % i, data, mode="create") == 2
+                cur.execute("SELECT v FROM ing%d ORDER BY idx" % i)
+                assert cur.fetch_arrow_table().column("v").to_pylist()[1] is None
+
+            # --- dictionary-encoded parameters (D11) ----------------------
+            # What a pandas categorical column becomes: the index is resolved
+            # and the dictionary's value bound in its place.
+            cur.execute("CREATE TABLE dict_t (s TEXT, i INTEGER)")
+            plain = pa.table({
+                "s": pa.array(["a", "bb", None, "a"], pa.string()),
+                "i": pa.array([10, 20, 30, None], pa.int32()),
+            })
+            encoded = pa.table(
+                [c.combine_chunks().dictionary_encode() for c in plain.columns],
+                names=plain.schema.names,
+            )
+            for rows in (2, 1):
+                bind(cur, "INSERT INTO dict_t VALUES (?, ?)", encoded, rows)
+            got = None
+            cur.execute("SELECT s, i FROM dict_t ORDER BY rowid")
+            got = cur.fetch_arrow_table().to_pydict()
+            assert got["s"] == ["a", "bb", None, "a"] * 2, got
+            assert got["i"] == [10, 20, 30, None] * 2, got
+            # Ingest creates the column from the dictionary's value type.
+            assert cur.adbc_ingest("dict_ing", encoded, mode="create") == 4
+            cur.execute("SELECT s, i FROM dict_ing")
+            back = cur.fetch_arrow_table()
+            assert back.schema.field("s").type == pa.string(), back.schema
+            assert sorted(x for x in back.column("i").to_pylist() if x is not None) == [10, 20, 30]
+
+            # --- string_view / binary_view parameters (D11) ---------------
+            # Values above 12 bytes live out of line in a view layout, so both
+            # the inline and the out-of-line case are exercised.
+            cur.execute("CREATE TABLE view_t (s TEXT, b BLOB)")
+            views = pa.table({
+                "s": pa.array(["short", "a much longer value than twelve bytes", None],
+                              pa.string_view()),
+                "b": pa.array([b"\x00\x01", None, b"x" * 40], pa.binary_view()),
+            })
+            for rows in (2, 1):
+                bind(cur, "INSERT INTO view_t VALUES (?, ?)", views, rows)
+            cur.execute("SELECT s, b FROM view_t ORDER BY rowid")
+            got = cur.fetch_arrow_table().to_pydict()
+            assert got["s"] == ["short", "a much longer value than twelve bytes", None] * 2, got
+            assert got["b"] == [b"\x00\x01", None, b"x" * 40] * 2, got
+            assert cur.adbc_ingest("view_ing", views, mode="create") == 3
+
+            # --- timestamps of every Arrow unit still bind (D13) ----------
+            for unit, value in (("s", 1709214310), ("ms", 1709214310123),
+                                ("us", 1709214310123456), ("ns", 1709214310123456789)):
+                cur.execute("CREATE TABLE ts_%s (v TIMESTAMP)" % unit)
+                data = pa.table({"v": pa.array([value, None], pa.timestamp(unit))})
+                for rows in (2, 1):
+                    bind(cur, "INSERT INTO ts_%s VALUES (?)" % unit, data, rows)
+                cur.execute("SELECT v FROM ts_%s WHERE v IS NOT NULL" % unit)
+                got = cur.fetch_arrow_table().column("v").to_pylist()
+                assert len(got) == 2, got
+                assert got[0].replace(microsecond=0) == datetime.datetime(
+                    2024, 2, 29, 13, 45, 10
+                ), (unit, got)
+    print("BIND TYPES OK")
+
+
 if __name__ == "__main__":
     test_types()
+    test_bind_types()
 
 
 def test_metadata():

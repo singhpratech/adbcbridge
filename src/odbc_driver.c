@@ -297,6 +297,18 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   if (strstr((const char*)name, "clickhouse")) {
     conn->reader_opts.null_param_as_varchar = true;
     conn->reader_opts.nullable_type_format = "Nullable(%s)";
+    // clickhouse-odbc reports only the whole-second Time for SQL_TYPE_TIME, with no
+    // CREATE_PARAMS; a "13:45:10.123456" parameter bound into such a column is stored as
+    // NULL without a diagnostic.  Time64(n) holds the fractional seconds (maximum 9).
+    conn->reader_opts.fractional_time_type_format = "Time64(%d)";
+    conn->reader_opts.fractional_time_max_digits = 9;
+  }
+  if (strstr((const char*)name, "maodbc")) {
+    // MariaDB Connector/ODBC reports TIME for SQL_TYPE_TIME with no CREATE_PARAMS, and a
+    // bare TIME column is TIME(0): fractional seconds are silently truncated on insert.
+    // MariaDB's maximum TIME scale is 6.
+    conn->reader_opts.fractional_time_type_format = "TIME(%d)";
+    conn->reader_opts.fractional_time_max_digits = 6;
   }
   if (strstr((const char*)name, "odbcfb")) {
     // Firebird's OdbcFb sizes SQL_C_WCHAR buffers in wchar_t (4 bytes) while unixODBC

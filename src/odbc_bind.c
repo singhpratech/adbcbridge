@@ -37,6 +37,9 @@ struct ParamSlot {
   SQLLEN buffer_length;
   const void* data;  // points into fixed or into Arrow buffers
   struct ArrowBuffer wbuf;  // UTF-16 conversion of string parameters
+  // Value schema of a dictionary-encoded column, parsed once for the whole bind.
+  struct ArrowSchemaView dict_sv;
+  bool dict_ready;
   union {
     unsigned char bit;
     SQLINTEGER i32;
@@ -93,15 +96,80 @@ static ArrowErrorCode Utf8ToUtf16(struct ArrowBuffer* buf, const char* s, int64_
   return NANOARROW_OK;
 }
 
-// Column size / fractional digits for a timestamp parameter of `unit`; digits capped at 7
-// (SQL Server's DATETIME2 maximum, which rejects larger values with HY104).
+// Fractional-second digits an Arrow time/timestamp unit needs.  Nanoseconds are capped
+// at 7 because SQL Server's TIME and DATETIME2 top out at scale 7 and reject anything
+// larger with HY104; the same cap keeps parameter scale and created column scale equal.
+static int FractionalDigits(enum ArrowTimeUnit unit) {
+  switch (unit) {
+    case NANOARROW_TIME_UNIT_SECOND: return 0;
+    case NANOARROW_TIME_UNIT_MILLI: return 3;
+    case NANOARROW_TIME_UNIT_MICRO: return 6;
+    default: return 7;
+  }
+}
+
+// Column size / fractional digits for a timestamp parameter of `unit`.
 static void TimestampParamSize(enum ArrowTimeUnit unit, SQLULEN* column_size,
                                SQLSMALLINT* decimal_digits) {
-  int digits = unit == NANOARROW_TIME_UNIT_SECOND ? 0
-               : unit == NANOARROW_TIME_UNIT_MILLI ? 3
-               : unit == NANOARROW_TIME_UNIT_MICRO ? 6 : 7;
+  const int digits = FractionalDigits(unit);
   *decimal_digits = (SQLSMALLINT)digits;
   *column_size = (SQLULEN)(digits ? 20 + digits : 19);
+}
+
+// Ticks per second of an Arrow date/time unit.
+static int64_t TicksPerSecond(enum ArrowTimeUnit unit) {
+  switch (unit) {
+    case NANOARROW_TIME_UNIT_SECOND: return 1;
+    case NANOARROW_TIME_UNIT_MILLI: return 1000;
+    case NANOARROW_TIME_UNIT_MICRO: return 1000000;
+    default: return 1000000000;
+  }
+}
+
+// Split an Arrow time-of-day value in `unit` into whole seconds since midnight
+// and the leftover ticks.  Values outside a day wrap, so a corrupt or unread
+// (null) slot can never produce an out-of-range hour.
+static void TimeOfDayFromArrow(int64_t v, enum ArrowTimeUnit unit, int64_t* secs,
+                               int64_t* frac) {
+  const int64_t per_sec = TicksPerSecond(unit);
+  int64_t s = v / per_sec, f = v % per_sec;
+  if (f < 0) { f += per_sec; s -= 1; }
+  s %= 86400;
+  if (s < 0) s += 86400;
+  *secs = s;
+  *frac = f;
+}
+
+// Convert an Arrow time32[s]/time32[ms] value to an ODBC TIME_STRUCT (which has
+// no fractional field, so sub-second ticks are dropped).
+static void TimeStructFromArrow(int64_t v, enum ArrowTimeUnit unit, TIME_STRUCT* t) {
+  int64_t secs, frac;
+  TimeOfDayFromArrow(v, unit, &secs, &frac);
+  t->hour = (SQLUSMALLINT)(secs / 3600);
+  t->minute = (SQLUSMALLINT)((secs % 3600) / 60);
+  t->second = (SQLUSMALLINT)(secs % 60);
+}
+
+// Render an Arrow time value in `unit` as "HH:MM:SS.ffffff"; returns its length.
+// TIME_STRUCT cannot carry fractional seconds, so sub-second times are bound as
+// this text instead.
+static int TimeTextFromArrow(int64_t v, enum ArrowTimeUnit unit, char* out, size_t out_size) {
+  int64_t secs, frac;
+  TimeOfDayFromArrow(v, unit, &secs, &frac);
+  const int hh = (int)(secs / 3600), mm = (int)((secs % 3600) / 60), ss = (int)(secs % 60);
+  const int digits = FractionalDigits(unit);
+  if (digits == 0) return snprintf(out, out_size, "%02d:%02d:%02d", hh, mm, ss);
+  int64_t scale = 1;
+  for (int i = 0; i < digits; i++) scale *= 10;
+  // frac < 10^9 and scale <= 10^7, so the product stays well inside int64.
+  const long long f = (long long)(frac * scale / TicksPerSecond(unit));
+  return snprintf(out, out_size, "%02d:%02d:%02d.%0*lld", hh, mm, ss, digits, f);
+}
+
+// Column size (characters) of the textual form TimeTextFromArrow produces.
+static SQLULEN TimeParamColumnSize(enum ArrowTimeUnit unit) {
+  const int digits = FractionalDigits(unit);
+  return (SQLULEN)(digits ? 9 + digits : 8);
 }
 
 // Convert an Arrow timestamp value in `unit` to an ODBC TIMESTAMP_STRUCT.
@@ -124,11 +192,11 @@ static void TimestampFromArrow(int64_t v, enum ArrowTimeUnit unit, TIMESTAMP_STR
   ts->second = (SQLUSMALLINT)(sod % 60); ts->fraction = (SQLUINTEGER)(frac * frac_mul);
 }
 
-static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchemaView* sv,
-                                    const struct ArrowArrayView* av, int64_t row,
-                                    const struct OdbcReaderOptions* opts,
-                                    struct AdbcError* error) {
-  if (ArrowArrayViewIsNull(av, row)) {
+static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct ArrowSchemaView* sv,
+                                         const struct ArrowArrayView* av, int64_t row,
+                                         bool is_null, const struct OdbcReaderOptions* opts,
+                                         struct AdbcError* error) {
+  if (is_null) {
     p->indicator = SQL_NULL_DATA;
     p->data = &p->fixed;
     p->buffer_length = 0;
@@ -195,7 +263,8 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
       p->fixed.f64 = ArrowArrayViewGetDoubleUnsafe(av, row);
       p->data = &p->fixed.f64; p->buffer_length = sizeof(SQLDOUBLE);
       break;
-    case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING: {
+    case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING:
+    case NANOARROW_TYPE_STRING_VIEW: {
       int64_t units = 0;
       if (opts->wchar_as_utf8) {  // see OdbcReaderOptions::wchar_as_utf8
         struct ArrowStringView s = {NULL, 0};
@@ -222,7 +291,7 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
       break;
     }
     case NANOARROW_TYPE_BINARY: case NANOARROW_TYPE_LARGE_BINARY:
-    case NANOARROW_TYPE_FIXED_SIZE_BINARY: {
+    case NANOARROW_TYPE_FIXED_SIZE_BINARY: case NANOARROW_TYPE_BINARY_VIEW: {
       struct ArrowBufferView b = {{NULL}, 0};
       if (p->indicator != SQL_NULL_DATA) b = ArrowArrayViewGetBytesUnsafe(av, row);
       p->c_type = SQL_C_BINARY;
@@ -239,6 +308,30 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
       p->fixed.date.day = (SQLUSMALLINT)d;
       p->c_type = SQL_C_TYPE_DATE; p->sql_type = SQL_TYPE_DATE;
       p->data = &p->fixed.date; p->buffer_length = sizeof(DATE_STRUCT);
+      break;
+    }
+    case NANOARROW_TYPE_TIME32:
+    case NANOARROW_TYPE_TIME64: {
+      const int64_t v = ArrowArrayViewGetIntUnsafe(av, row);
+      if (sv->time_unit == NANOARROW_TIME_UNIT_SECOND) {
+        TimeStructFromArrow(v, sv->time_unit, &p->fixed.time);
+        p->c_type = SQL_C_TYPE_TIME; p->sql_type = SQL_TYPE_TIME;
+        p->column_size = TimeParamColumnSize(sv->time_unit); p->decimal_digits = 0;
+        p->data = &p->fixed.time; p->buffer_length = sizeof(TIME_STRUCT);
+      } else {
+        // TIME_STRUCT has no fractional field, so sub-second times go across as
+        // "HH:MM:SS.ffffff" text.  It is bound as SQL_VARCHAR and left to the
+        // server's own literal parsing rather than as SQL_TYPE_TIME: DuckDB's
+        // ODBC driver aborts the process on an SQL_C_CHAR -> SQL_TYPE_TIME
+        // parameter ("Invalid unicode ... in value construction") and MariaDB's
+        // rejects it with 22008 "Datetime field overflow", while every driver
+        // tested accepts the same string as a VARCHAR parameter.
+        int n = TimeTextFromArrow(v, sv->time_unit, p->fixed.text, sizeof(p->fixed.text));
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR;
+        p->column_size = TimeParamColumnSize(sv->time_unit); p->decimal_digits = 0;
+        p->data = p->fixed.text; p->buffer_length = n + 1;
+        if (p->indicator != SQL_NULL_DATA) p->indicator = n;
+      }
       break;
     }
     case NANOARROW_TYPE_TIMESTAMP: {
@@ -282,6 +375,46 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
   return ADBC_STATUS_OK;
 }
 
+// Bind one parameter from row `row` of an Arrow column.  Dictionary-encoded
+// columns are decoded here: the index is resolved against the dictionary and
+// the value it points at is bound in its place, so a pandas categorical binds
+// exactly like the plain column it encodes.
+static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchemaView* sv,
+                                    const struct ArrowArrayView* av, int64_t row,
+                                    const struct OdbcReaderOptions* opts,
+                                    struct AdbcError* error) {
+  bool is_null = ArrowArrayViewIsNull(av, row);
+  if (sv->type != NANOARROW_TYPE_DICTIONARY) {
+    return SlotFromArrowValue(p, sv, av, row, is_null, opts, error);
+  }
+  if (!sv->schema || !sv->schema->dictionary || !av->dictionary) {
+    InternalAdbcSetError(error, "Dictionary-encoded parameter has no dictionary");
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (!p->dict_ready) {
+    struct ArrowError na_error;
+    CHECK_NA_DETAIL(INTERNAL, ArrowSchemaViewInit(&p->dict_sv, sv->schema->dictionary, &na_error),
+                    &na_error, error);
+    p->dict_ready = true;
+  }
+  const struct ArrowArrayView* values = av->dictionary;
+  int64_t idx = is_null ? 0 : ArrowArrayViewGetIntUnsafe(av, row);
+  if (idx < 0 || idx >= values->length) {
+    if (!is_null) {
+      InternalAdbcSetError(error, "Dictionary index %lld is out of range (dictionary has %lld values)",
+                           (long long)idx, (long long)values->length);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    // A null index and nothing to look it up in: bind an untyped NULL.
+    p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = 1;
+    p->decimal_digits = 0; p->indicator = SQL_NULL_DATA;
+    p->data = p->fixed.text; p->buffer_length = 0;
+    return ADBC_STATUS_OK;
+  }
+  if (!is_null) is_null = ArrowArrayViewIsNull(values, idx);
+  return SlotFromArrowValue(p, &p->dict_sv, values, idx, is_null, opts, error);
+}
+
 // ---------------------------------------------------------------------------
 // Column-wise array parameter binding
 //
@@ -300,6 +433,8 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
 #define ARRAY_BIND_MAX_CHUNK_BYTES (16 * 1024 * 1024)
 #define ARRAY_BIND_MAX_CHUNK_ROWS 65536
 #define ARRAY_BIND_DECIMAL_CHARS 64
+// "HH:MM:SS.fffffff" plus a NUL, rounded up.
+#define ARRAY_BIND_TIME_CHARS 24
 
 struct ArrayParam {
   SQLSMALLINT c_type;
@@ -312,6 +447,10 @@ struct ArrayParam {
   SQLLEN* indicators;     // NULL when fixed-width and free of nulls
   bool needs_buffer;
   bool needs_indicators;
+  // Dictionary-encoded column: the plan describes the dictionary's value type
+  // and ArrayParamFill resolves each index before staging the value.
+  bool dictionary;
+  struct ArrowSchemaView dict_sv;
 };
 
 // Longest value in a variable-length column, or -1 if it exceeds the cap.
@@ -335,6 +474,25 @@ static int64_t ArrayParamVarLenMax(const struct ArrowArrayView* av, bool binary,
 static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* sv,
                            const struct ArrowArrayView* av, int64_t nrows, bool* supported) {
   memset(p, 0, sizeof(*p));
+  if (sv->type == NANOARROW_TYPE_DICTIONARY) {
+    // Plan against the dictionary's values; ArrayParamFill decodes per row.
+    struct ArrowSchemaView dsv;
+    if (!sv->schema || !sv->schema->dictionary || !av->dictionary ||
+        ArrowSchemaViewInit(&dsv, sv->schema->dictionary, NULL) != NANOARROW_OK ||
+        dsv.type == NANOARROW_TYPE_DICTIONARY) {
+      *supported = false;
+      return;
+    }
+    const bool index_nulls = ArrowArrayViewComputeNullCount(av) > 0;
+    ArrayParamPlan(p, &dsv, av->dictionary, av->dictionary->length, supported);
+    if (!*supported) return;
+    p->dictionary = true;
+    p->dict_sv = dsv;
+    p->direct = NULL;       // indices have to be decoded, so never bind in place
+    p->needs_buffer = true;
+    if (index_nulls) p->needs_indicators = true;
+    return;
+  }
   const uint8_t* data = av->buffer_views[1].data.as_uint8;
   const bool has_nulls = ArrowArrayViewComputeNullCount(av) > 0;
   switch (sv->type) {
@@ -377,6 +535,19 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       p->elem_size = sizeof(TIMESTAMP_STRUCT);
       TimestampParamSize(sv->time_unit, &p->column_size, &p->decimal_digits);
       p->needs_buffer = true; break;
+    case NANOARROW_TYPE_TIME32:
+    case NANOARROW_TYPE_TIME64:
+      p->column_size = TimeParamColumnSize(sv->time_unit);
+      if (sv->time_unit == NANOARROW_TIME_UNIT_SECOND) {
+        p->c_type = SQL_C_TYPE_TIME; p->sql_type = SQL_TYPE_TIME;
+        p->elem_size = sizeof(TIME_STRUCT);
+      } else {
+        // Sub-second times go across as VARCHAR text; see SlotFromArrowValue.
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR;
+        p->elem_size = ARRAY_BIND_TIME_CHARS;
+        p->needs_indicators = true;
+      }
+      p->needs_buffer = true; break;
     case NANOARROW_TYPE_DECIMAL128:
     case NANOARROW_TYPE_DECIMAL256:
       p->c_type = SQL_C_CHAR; p->sql_type = SQL_DECIMAL;
@@ -386,11 +557,14 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       p->needs_buffer = true; p->needs_indicators = true; break;
     case NANOARROW_TYPE_STRING:
     case NANOARROW_TYPE_LARGE_STRING:
+    case NANOARROW_TYPE_STRING_VIEW:
     case NANOARROW_TYPE_BINARY:
     case NANOARROW_TYPE_LARGE_BINARY:
-    case NANOARROW_TYPE_FIXED_SIZE_BINARY: {
+    case NANOARROW_TYPE_FIXED_SIZE_BINARY:
+    case NANOARROW_TYPE_BINARY_VIEW: {
       const bool binary = sv->type != NANOARROW_TYPE_STRING &&
-                          sv->type != NANOARROW_TYPE_LARGE_STRING;
+                          sv->type != NANOARROW_TYPE_LARGE_STRING &&
+                          sv->type != NANOARROW_TYPE_STRING_VIEW;
       int64_t max = ArrayParamVarLenMax(av, binary, nrows);
       if (max < 0) {  // too wide to stage: this batch goes row-at-a-time
         *supported = false;
@@ -441,54 +615,110 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
     return ADBC_STATUS_OK;
   }
   const size_t stride = (size_t)p->elem_size;
+  // A dictionary column stages the dictionary's values, looked up per row.
+  const struct ArrowSchemaView* vsv = p->dictionary ? &p->dict_sv : sv;
+  const struct ArrowArrayView* values = p->dictionary ? av->dictionary : av;
   for (int64_t i = 0; i < n; i++) {
-    const int64_t row = start + i;
+    int64_t row = start + i;
     uint8_t* slot = p->buffer + (size_t)i * stride;
-    if (ArrowArrayViewIsNull(av, row)) {
+    bool is_null = ArrowArrayViewIsNull(av, row);
+    if (p->dictionary && !is_null) {
+      const int64_t idx = ArrowArrayViewGetIntUnsafe(av, row);
+      if (idx < 0 || idx >= values->length) {
+        InternalAdbcSetError(error,
+                             "Dictionary index %lld is out of range (dictionary has %lld values)",
+                             (long long)idx, (long long)values->length);
+        return ADBC_STATUS_INVALID_ARGUMENT;
+      }
+      row = idx;
+      is_null = ArrowArrayViewIsNull(values, idx);
+    }
+    if (is_null) {
       if (ind) OdbcIndicatorSet(ind, (size_t)i, SQL_NULL_DATA, q);
       memset(slot, 0, stride);
       continue;
     }
     if (ind) OdbcIndicatorSet(ind, (size_t)i, 0, q);
-    switch (sv->type) {
+    switch (vsv->type) {
       case NANOARROW_TYPE_BOOL:
-        *slot = (uint8_t)(ArrowArrayViewGetIntUnsafe(av, row) != 0);
+        *slot = (uint8_t)(ArrowArrayViewGetIntUnsafe(values, row) != 0);
         break;
+      // Widths that the non-dictionary plan binds in place still have to be
+      // staged when they arrive dictionary-encoded.
+      case NANOARROW_TYPE_INT32: {
+        SQLINTEGER v = (SQLINTEGER)ArrowArrayViewGetIntUnsafe(values, row);
+        memcpy(slot, &v, sizeof(v));
+        break;
+      }
+      case NANOARROW_TYPE_INT64: {
+        SQLBIGINT v = (SQLBIGINT)ArrowArrayViewGetIntUnsafe(values, row);
+        memcpy(slot, &v, sizeof(v));
+        break;
+      }
+      case NANOARROW_TYPE_UINT64: {
+        SQLUBIGINT v = (SQLUBIGINT)ArrowArrayViewGetUIntUnsafe(values, row);
+        memcpy(slot, &v, sizeof(v));
+        break;
+      }
+      case NANOARROW_TYPE_FLOAT: {
+        SQLREAL v = (SQLREAL)ArrowArrayViewGetDoubleUnsafe(values, row);
+        memcpy(slot, &v, sizeof(v));
+        break;
+      }
+      case NANOARROW_TYPE_DOUBLE: {
+        SQLDOUBLE v = (SQLDOUBLE)ArrowArrayViewGetDoubleUnsafe(values, row);
+        memcpy(slot, &v, sizeof(v));
+        break;
+      }
       case NANOARROW_TYPE_INT8:
       case NANOARROW_TYPE_INT16: {
-        SQLBIGINT v = (SQLBIGINT)ArrowArrayViewGetIntUnsafe(av, row);
+        SQLBIGINT v = (SQLBIGINT)ArrowArrayViewGetIntUnsafe(values, row);
         memcpy(slot, &v, sizeof(v));
         break;
       }
       case NANOARROW_TYPE_UINT8:
       case NANOARROW_TYPE_UINT16:
       case NANOARROW_TYPE_UINT32: {
-        SQLUBIGINT v = (SQLUBIGINT)ArrowArrayViewGetUIntUnsafe(av, row);
+        SQLUBIGINT v = (SQLUBIGINT)ArrowArrayViewGetUIntUnsafe(values, row);
         memcpy(slot, &v, sizeof(v));
         break;
       }
       case NANOARROW_TYPE_HALF_FLOAT: {
-        SQLDOUBLE v = (SQLDOUBLE)ArrowArrayViewGetDoubleUnsafe(av, row);
+        SQLDOUBLE v = (SQLDOUBLE)ArrowArrayViewGetDoubleUnsafe(values, row);
         memcpy(slot, &v, sizeof(v));
         break;
       }
       case NANOARROW_TYPE_DATE32: {
         DATE_STRUCT d;
         int y; unsigned m, dd;
-        CivilFromDays(ArrowArrayViewGetIntUnsafe(av, row), &y, &m, &dd);
+        CivilFromDays(ArrowArrayViewGetIntUnsafe(values, row), &y, &m, &dd);
         d.year = (SQLSMALLINT)y; d.month = (SQLUSMALLINT)m; d.day = (SQLUSMALLINT)dd;
         memcpy(slot, &d, sizeof(d));
         break;
       }
       case NANOARROW_TYPE_TIMESTAMP: {
         TIMESTAMP_STRUCT ts;
-        TimestampFromArrow(ArrowArrayViewGetIntUnsafe(av, row), sv->time_unit, &ts);
+        TimestampFromArrow(ArrowArrayViewGetIntUnsafe(values, row), vsv->time_unit, &ts);
         memcpy(slot, &ts, sizeof(ts));
         break;
       }
+      case NANOARROW_TYPE_TIME32:
+      case NANOARROW_TYPE_TIME64: {
+        const int64_t v = ArrowArrayViewGetIntUnsafe(values, row);
+        if (p->c_type == SQL_C_CHAR) {
+          int len = TimeTextFromArrow(v, vsv->time_unit, (char*)slot, stride);
+          if (ind) ind[i] = (SQLLEN)len;
+        } else {
+          TIME_STRUCT t;
+          TimeStructFromArrow(v, vsv->time_unit, &t);
+          memcpy(slot, &t, sizeof(t));
+        }
+        break;
+      }
       case NANOARROW_TYPE_STRING:
-      case NANOARROW_TYPE_LARGE_STRING: {
-        struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(av, row);
+      case NANOARROW_TYPE_LARGE_STRING:
+      case NANOARROW_TYPE_STRING_VIEW: {
+        struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(values, row);
         if (s.size_bytes > 0) memcpy(slot, s.data, (size_t)s.size_bytes);
         slot[s.size_bytes] = '\0';
         if (ind) OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)s.size_bytes, q);
@@ -496,8 +726,9 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
       }
       case NANOARROW_TYPE_BINARY:
       case NANOARROW_TYPE_LARGE_BINARY:
-      case NANOARROW_TYPE_FIXED_SIZE_BINARY: {
-        struct ArrowBufferView b = ArrowArrayViewGetBytesUnsafe(av, row);
+      case NANOARROW_TYPE_FIXED_SIZE_BINARY:
+      case NANOARROW_TYPE_BINARY_VIEW: {
+        struct ArrowBufferView b = ArrowArrayViewGetBytesUnsafe(values, row);
         if (b.size_bytes > 0) memcpy(slot, b.data.as_uint8, (size_t)b.size_bytes);
         if (ind) OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)b.size_bytes, q);
         break;
@@ -505,9 +736,9 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
       case NANOARROW_TYPE_DECIMAL128:
       case NANOARROW_TYPE_DECIMAL256: {
         struct ArrowDecimal dec;
-        ArrowDecimalInit(&dec, sv->type == NANOARROW_TYPE_DECIMAL128 ? 128 : 256,
-                         sv->decimal_precision, sv->decimal_scale);
-        ArrowArrayViewGetDecimalUnsafe(av, row, &dec);
+        ArrowDecimalInit(&dec, vsv->type == NANOARROW_TYPE_DECIMAL128 ? 128 : 256,
+                         vsv->decimal_precision, vsv->decimal_scale);
+        ArrowArrayViewGetDecimalUnsafe(values, row, &dec);
         struct ArrowBuffer buf;
         ArrowBufferInit(&buf);
         if (ArrowDecimalAppendStringToBuffer(&dec, &buf) != NANOARROW_OK) {
@@ -524,7 +755,7 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
       }
       default:
         InternalAdbcSetError(error, "Unsupported Arrow type for parameter binding: %s",
-                             ArrowTypeString(sv->type));
+                             ArrowTypeString(vsv->type));
         return ADBC_STATUS_NOT_IMPLEMENTED;
     }
   }
@@ -1171,10 +1402,21 @@ AdbcStatusCode OdbcStatementExecuteBound(struct OdbcStatement* stmt, struct Arro
 // ---------------------------------------------------------------------------
 // Bulk ingest
 
+// Parameters to apply to a type name from SQLGetTypeInfo, e.g. VARCHAR(`length`),
+// DECIMAL(`precision`,`scale`), TIME(`frac_digits`).  Only the ones the driver says the
+// type takes (its CREATE_PARAMS) are used.
+struct TypeParams {
+  int64_t length;
+  int32_t precision;
+  int32_t scale;
+  // Fractional-second digits for a datetime type; 0 means "no fractional seconds".
+  int frac_digits;
+};
+
 // Ask the driver for its name of one SQL type via SQLGetTypeInfo. Returns false if the
 // driver has no such type.
-static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, int64_t length, int32_t precision,
-                        int32_t scale, bool q, char* out, size_t out_size) {
+static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, const struct TypeParams* tp, bool q,
+                        char* out, size_t out_size) {
   SQLHSTMT hstmt = NULL;
   bool done = false;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
@@ -1189,10 +1431,25 @@ static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, int64_t length, int3
       char* paren = strchr(name, '(');
       if (paren) *paren = '\0';
       bool has_params = ind2 > 0;
-      if (has_params && strstr(params, "precision") && precision > 0) {
-        snprintf(out, out_size, "%s(%d,%d)", name, precision, scale);
-      } else if (has_params && strstr(params, "length") && length > 0) {
-        snprintf(out, out_size, "%s(%lld)", name, (long long)length);
+      // A datetime type whose only CREATE_PARAMS entry is the fractional-seconds
+      // precision (msodbcsql reports "scale" for time/datetime2, clickhouse-odbc for
+      // DateTime64).  Without it the type is created at its default scale, which is
+      // whole seconds on several backends, and sub-second parameters are silently
+      // truncated (or, on ClickHouse, stored as NULL).
+      if (has_params && tp->frac_digits > 0 && !strchr(params, ',') &&
+          (strstr(params, "scale") || strstr(params, "precision"))) {
+        int digits = tp->frac_digits;
+        SQLSMALLINT max_scale = 0;
+        SQLLEN ind3 = 0;  // MAXIMUM_SCALE; not every driver can return it
+        if (SQL_SUCCEEDED(OdbcGetData(hstmt, 15, SQL_C_SSHORT, &max_scale, 0, &ind3, q)) &&
+            ind3 != SQL_NULL_DATA && max_scale > 0 && digits > (int)max_scale) {
+          digits = (int)max_scale;
+        }
+        snprintf(out, out_size, "%s(%d)", name, digits);
+      } else if (has_params && strstr(params, "precision") && tp->precision > 0) {
+        snprintf(out, out_size, "%s(%d,%d)", name, tp->precision, tp->scale);
+      } else if (has_params && strstr(params, "length") && tp->length > 0) {
+        snprintf(out, out_size, "%s(%lld)", name, (long long)tp->length);
       } else {
         snprintf(out, out_size, "%s", name);
       }
@@ -1204,21 +1461,36 @@ static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, int64_t length, int3
 }
 
 // Try a chain of candidate SQL types (e.g. BIGINT, then NUMERIC(19,0) for Oracle).
-static void TypeNameFor(SQLHDBC hdbc, const SQLSMALLINT* candidates, int n, int64_t length,
-                        int32_t precision, int32_t scale, bool q, const char* fallback, char* out,
+static void TypeNameFor(SQLHDBC hdbc, const SQLSMALLINT* candidates, int n,
+                        const struct TypeParams* tp, bool q, const char* fallback, char* out,
                         size_t out_size) {
   for (int i = 0; i < n; i++) {
-    if (TypeNameOne(hdbc, candidates[i], length, precision, scale, q, out, out_size)) return;
+    if (TypeNameOne(hdbc, candidates[i], tp, q, out, out_size)) return;
   }
   snprintf(out, out_size, "%s", fallback);
 }
 
-static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct ArrowSchemaView* sv, bool q,
-                                    char* out, size_t out_size, struct AdbcError* error) {
+static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions* opts,
+                                    const struct ArrowSchemaView* sv, bool q, char* out,
+                                    size_t out_size, struct AdbcError* error) {
+  if (sv->type == NANOARROW_TYPE_DICTIONARY) {
+    // The values are bound decoded, so the created column takes the
+    // dictionary's value type rather than its index type.
+    struct ArrowSchemaView dsv;
+    struct ArrowError na_error;
+    if (!sv->schema || !sv->schema->dictionary ||
+        ArrowSchemaViewInit(&dsv, sv->schema->dictionary, &na_error) != NANOARROW_OK ||
+        dsv.type == NANOARROW_TYPE_DICTIONARY) {
+      InternalAdbcSetError(error, "Dictionary-encoded column has no usable value type");
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    return ColumnTypeSql(hdbc, opts, &dsv, q, out, out_size, error);
+  }
 #define TYPES(...) ((const SQLSMALLINT[]){__VA_ARGS__})
-#define CHAIN(fallback, ...)                                                              \
+#define CHAIN_P(params, fallback, ...)                                                    \
   TypeNameFor(hdbc, TYPES(__VA_ARGS__), (int)(sizeof(TYPES(__VA_ARGS__)) / sizeof(SQLSMALLINT)), \
-              0, 0, 0, q, fallback, out, out_size)
+              params, q, fallback, out, out_size)
+#define CHAIN(fallback, ...) CHAIN_P(&(const struct TypeParams){0}, fallback, __VA_ARGS__)
   switch (sv->type) {
     case NANOARROW_TYPE_BOOL: CHAIN("BOOLEAN", SQL_BIT, SQL_TINYINT, SQL_SMALLINT); break;
     case NANOARROW_TYPE_INT8: case NANOARROW_TYPE_UINT8:
@@ -1226,9 +1498,11 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct ArrowSchemaView* 
     case NANOARROW_TYPE_UINT16:
     case NANOARROW_TYPE_INT32: CHAIN("INTEGER", SQL_INTEGER, SQL_BIGINT); break;
     case NANOARROW_TYPE_UINT32: case NANOARROW_TYPE_INT64: case NANOARROW_TYPE_UINT64:
-      if (!TypeNameOne(hdbc, SQL_BIGINT, 0, 0, 0, q, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_DECIMAL, 0, 19, 0, q, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_NUMERIC, 0, 19, 0, q, out, out_size)) {
+      if (!TypeNameOne(hdbc, SQL_BIGINT, &(const struct TypeParams){0}, q, out, out_size) &&
+          !TypeNameOne(hdbc, SQL_DECIMAL, &(const struct TypeParams){.precision = 19}, q, out,
+                       out_size) &&
+          !TypeNameOne(hdbc, SQL_NUMERIC, &(const struct TypeParams){.precision = 19}, q, out,
+                       out_size)) {
         snprintf(out, out_size, "BIGINT");
       }
       break;
@@ -1236,22 +1510,51 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct ArrowSchemaView* 
     case NANOARROW_TYPE_FLOAT: CHAIN("REAL", SQL_REAL, SQL_FLOAT, SQL_DOUBLE); break;
     case NANOARROW_TYPE_DOUBLE: CHAIN("DOUBLE PRECISION", SQL_DOUBLE, SQL_FLOAT); break;
     case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING:
+    case NANOARROW_TYPE_STRING_VIEW:
       CHAIN("TEXT", SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_VARCHAR); break;
     case NANOARROW_TYPE_BINARY: case NANOARROW_TYPE_LARGE_BINARY: case NANOARROW_TYPE_FIXED_SIZE_BINARY:
+    case NANOARROW_TYPE_BINARY_VIEW:
       CHAIN("BLOB", SQL_LONGVARBINARY, SQL_VARBINARY); break;
     case NANOARROW_TYPE_DATE32: CHAIN("DATE", SQL_TYPE_DATE, SQL_TYPE_TIMESTAMP); break;
-    case NANOARROW_TYPE_TIMESTAMP: CHAIN("TIMESTAMP", SQL_TYPE_TIMESTAMP); break;
-    case NANOARROW_TYPE_DECIMAL128: case NANOARROW_TYPE_DECIMAL256:
-      if (!TypeNameOne(hdbc, SQL_DECIMAL, 0, sv->decimal_precision, sv->decimal_scale, q, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_NUMERIC, 0, sv->decimal_precision, sv->decimal_scale, q, out, out_size)) {
+    case NANOARROW_TYPE_TIME32: case NANOARROW_TYPE_TIME64: {
+      const int digits = FractionalDigits(sv->time_unit);
+      if (digits > 0 && opts->fractional_time_type_format) {
+        int d = digits;
+        if (opts->fractional_time_max_digits > 0 && d > opts->fractional_time_max_digits) {
+          d = opts->fractional_time_max_digits;
+        }
+        snprintf(out, out_size, opts->fractional_time_type_format, d);
+        break;
+      }
+      char fallback[32];
+      if (digits > 0) {
+        snprintf(fallback, sizeof(fallback), "TIME(%d)", digits);
+      } else {
+        snprintf(fallback, sizeof(fallback), "TIME");
+      }
+      CHAIN_P(&(const struct TypeParams){.frac_digits = digits}, fallback, SQL_TYPE_TIME,
+              SQL_SS_TIME2);
+      break;
+    }
+    case NANOARROW_TYPE_TIMESTAMP:
+      CHAIN_P(&(const struct TypeParams){.frac_digits = FractionalDigits(sv->time_unit)},
+              "TIMESTAMP", SQL_TYPE_TIMESTAMP);
+      break;
+    case NANOARROW_TYPE_DECIMAL128: case NANOARROW_TYPE_DECIMAL256: {
+      const struct TypeParams dec = {.precision = sv->decimal_precision,
+                                     .scale = sv->decimal_scale};
+      if (!TypeNameOne(hdbc, SQL_DECIMAL, &dec, q, out, out_size) &&
+          !TypeNameOne(hdbc, SQL_NUMERIC, &dec, q, out, out_size)) {
         snprintf(out, out_size, "DECIMAL(%d,%d)", sv->decimal_precision, sv->decimal_scale);
       }
       break;
+    }
     default:
       InternalAdbcSetError(error, "Unsupported Arrow type for ingest: %s", ArrowTypeString(sv->type));
       return ADBC_STATUS_NOT_IMPLEMENTED;
   }
 #undef CHAIN
+#undef CHAIN_P
 #undef TYPES
   return ADBC_STATUS_OK;
 }
@@ -1442,8 +1745,8 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
         break;
       }
       char tname[300];
-      status = ColumnTypeSql(conn->hdbc, &sv, stmt->reader_opts.sqllen_32bit, tname, sizeof(tname),
-                             error);
+      status = ColumnTypeSql(conn->hdbc, &conn->reader_opts, &sv, stmt->reader_opts.sqllen_32bit,
+                             tname, sizeof(tname), error);
       const char* name = schema.children[i]->name ? schema.children[i]->name : "";
       if (conn->reader_opts.nullable_type_format && (schema.children[i]->flags & ARROW_FLAG_NULLABLE)) {
         char wrapped[340];
