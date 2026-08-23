@@ -294,9 +294,10 @@ struct OdbcReaderOptions {
   bool multirow_insert_all;
   // Driver quirk: keep ODBC parameter arrays ahead of multi-row INSERT batching for bulk
   // ingest.  Multi-row INSERT is the default because it was faster on every server
-  // measured (see ExecuteRows), including most of the ones whose arrays work; MariaDB
-  // Connector/ODBC, which turns a bound array into one COM_STMT_BULK_EXECUTE, is the
-  // exception and the only thing that sets this.
+  // measured (see ExecuteRows), including most of the ones whose arrays work.  Two
+  // drivers are the exception and are all that set this: MariaDB Connector/ODBC, which
+  // turns a bound array into one COM_STMT_BULK_EXECUTE, and Vertica's own client driver,
+  // which turns one into a native bulk load.
   bool prefer_param_arrays;
   // SQL_MAX_STATEMENT_LEN, in bytes; 0 when the driver will not say.
   int64_t max_statement_len;

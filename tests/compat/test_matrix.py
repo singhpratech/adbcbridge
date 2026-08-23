@@ -25,6 +25,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, GREPTIMEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, ARCADEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFLUXDB3_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, VERTICA_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -357,6 +358,19 @@ DBS = {
     "monetdb": dict(
         env="MONETDB_ODBC_DRIVER", conn="Driver={drv};Host=127.0.0.1;Port=15000;Database=adbc;Uid=monetdb;Pwd=adbc;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b BLOB, d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"),
+    "vertica": dict(
+        # Vertica is a columnar analytics warehouse reached over its own native protocol
+        # on 5433 -- not a PostgreSQL wire, despite the port -- so its own ODBC client
+        # driver drives it (libverticaodbc.so, SQL_DRIVER_NAME "verticaodbcw.so").  That
+        # driver reads a vertica.ini of its own before it will load at all; see
+        # tests/compat/README.md for it and for the root-free client extraction.
+        env="VERTICA_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=15433;Database=VMart;UID=dbadmin;PWD=;",
+        # Plain Vertica types, all of them native.  Its INTEGER is 64-bit (there is no
+        # narrower integer type -- INT, SMALLINT and TINYINT are all aliases of it), so
+        # `i` reads back as int64, and VARBINARY round-trips bytes.
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b VARBINARY(10),"
+            " d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"),
     "cockroachdb": dict(
         # Wire-compatible with PostgreSQL, so it uses psqlodbc; INTEGER is 64-bit here.
         # The PRIMARY KEY is required, not decorative: a CockroachDB table declared without

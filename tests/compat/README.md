@@ -3122,3 +3122,199 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down influxdb3
 # or, if started standalone:
 docker rm -f adbcbridge-influxdb3
 ```
+
+## Vertica 25.3
+
+Vertica is a columnar analytics warehouse (OpenText Analytics Database since the
+acquisition). It is in this matrix because it is one of the few remaining databases with
+a first-party ODBC driver of its own: `libverticaodbc.so` speaks Vertica's native
+protocol on 5433 — despite the port and despite Vertica's PostgreSQL ancestry, this is
+**not** a PostgreSQL wire and psqlodbc cannot drive it.
+
+It is the cleanest entry in the matrix. No tolerance flags, no `ingest_types`, no
+`setup` — every one of the workload's eight types is a native Vertica type that
+round-trips exactly:
+
+```python
+i int64, f double, s string, b binary, d date32[day],
+ts timestamp[us], n decimal128(10, 3), bo bool
+```
+
+(`i` is `int64` because Vertica has exactly one integer type: `INT`, `INTEGER`,
+`BIGINT`, `SMALLINT` and `TINYINT` are all 64-bit aliases of it.)
+
+### Get the ODBC driver without root
+
+The Linux client package is a plain tarball on vertica.com — no account, no
+registration, and it unpacks anywhere:
+
+```sh
+mkdir -p /tmp/dbs/vertica && cd /tmp/dbs/vertica
+curl -sSLO https://www.vertica.com/client_drivers/25.1.x/25.1.0-0/vertica-client-25.1.0-0.x86_64.tar.gz
+tar xzf vertica-client-25.1.0-0.x86_64.tar.gz     # -> opt/vertica/{lib64,bin,en-US,include}
+```
+
+25.1 is the newest client published at that path; it drives the 25.3 server below
+without complaint (and the tarball also carries `vsql`, which is handy for poking at the
+server directly). The driver links only against the system `libstdc++`/`libcrypt`, so it
+needs no `LD_LIBRARY_PATH` entry.
+
+Unlike every other driver here, it will not load until it finds a **`vertica.ini` of its
+own**, located by the `VERTICAINI` environment variable. It is what tells the driver
+which driver manager it is running under and where its message catalogue is:
+
+```sh
+cat > /tmp/dbs/vertica/vertica.ini <<EOF
+[Driver]
+ErrorMessagesPath = /tmp/dbs/vertica/opt/vertica
+ODBCInstLib = /usr/lib/x86_64-linux-gnu/libodbcinst.so
+DriverManagerEncoding = UTF-16
+EOF
+export VERTICAINI=/tmp/dbs/vertica/vertica.ini
+```
+
+`DriverManagerEncoding = UTF-16` is the one line that matters for correctness: unixODBC
+is built with a 2-byte `SQLWCHAR`, and the driver defaults to UTF-32 (the DataDirect
+convention). Get it wrong and every wide string comes back mangled — with UTF-16 set,
+`héllo 🚀` round-trips including the astral-plane emoji. `ErrorMessagesPath` points at
+the directory *containing* `en-US/`, not at `en-US` itself.
+
+### Start the server
+
+There is no `vertica/vertica-ce` image any more. The `vertica` Docker Hub namespace is
+empty, and the `opentext` one that replaced it publishes no CE image — what it does
+publish is `opentext/vertica-k8s`, the full server built for the VerticaDB Kubernetes
+operator. That is what this entry uses, with the Community Edition licence the image
+still ships in `/opt/vertica/config/licensing`.
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d vertica
+tests/compat/fixtures/setup_vertica.sh
+# compat-vertica-1: creating database VMart on 172.21.0.3 (a few minutes)
+# ...
+# Vertica Analytic Database v25.3.0-8
+# compat-vertica-1: ready
+```
+
+The second command is not optional and is the whole awkwardness of this entry: the image
+ships a server with **no database and no way to make one**. The operator normally creates
+it from outside the pod, so there is nothing to hang off an entrypoint. The script does
+the four steps by hand and takes about half a minute; its header comments carry the
+detail, but in short:
+
+1. **Recreate `dbadmin`.** The image's `/etc/passwd` has no such account, yet every file
+   it ships is owned by uid 997 / gid 995 and the server refuses to run as anyone else.
+   This is why the compose service runs as `user: "0"` — root is the only user that can
+   add one — and why the server itself is then started as `dbadmin`.
+2. **Generate TLS certificates.** The node management agent (the local agent `vcluster`
+   drives, in place of the admintools-over-SSH of the pre-24.x images) will not start
+   without a key pair and a CA to chain it to, which the operator would mount in. A
+   self-signed set generated in place is all it wants; nothing outside the container ever
+   presents them and the SQL port does not use them.
+3. **`vcluster create_db`**, which builds the catalog and starts the node.
+4. **Wait on the SQL port ourselves** — see below.
+
+Two settings on the compose service are load-bearing:
+
+* `ulimits: nofile: 65536`. Vertica's start-up check refuses to run under Docker's
+  default 1024: *"Host does not meet minimum requirements: Not enough open file handles
+  allowed (1024 available/32768 required)"*, and the catalog read fails.
+* `image: opentext/vertica-k8s:25.3.0-8-minimal`, pinned rather than `latest`. **Vertica
+  26.1 dropped Community Edition**, and a 26.x server refuses the licence its own image
+  ships:
+
+  ```
+  Community Edition (CE) license is deprecated and no longer supported in
+  OpenText Analytics Database (Vertica) 26.1 and later
+  ```
+
+  That kills the catalog bootstrap outright, so 25.x is the ceiling for a
+  licence-free run.
+
+Host port 15433 is also the `yugabyte` entry's, but neither is in the default compose
+profile and they are never up together.
+
+#### `create_db` reports failure on a database that is running
+
+The last thing `create_db` does is poll the server's **HTTPS** service (8443) to confirm
+the node is up, and that service has no certificate: the image's `httpstls.json` ships
+with an empty `key` and `certificate`. So the poll fails the TLS handshake and the
+command ends with
+
+```
+✘ Wait for 1 node(s) to come up: failed
+Error during execution: execute HTTPSPollNodeStateOp failed, ... reached polling timeout
+```
+
+while `vertica.log` shows the node perfectly healthy (`Task 'RebalanceCluster' enabled`,
+transactions committing) and `vsql` answers on 5433. Only the health check is broken, not
+the database. The script therefore passes `--startup-timeout 30` to stop `create_db`
+spending its default 300 seconds on a poll that cannot succeed, and then waits on the SQL
+port — the only one the matrix uses — itself.
+
+### Run the entry
+
+```sh
+export VERTICA_ODBC_DRIVER=/tmp/dbs/vertica/opt/vertica/lib64/libverticaodbc.so
+export VERTICAINI=/tmp/dbs/vertica/vertica.ini
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so ADBC_ODBC_DELEGATE=never \
+  ADBC_MATRIX_SUFFIX=_vertica python tests/compat/test_matrix.py vertica
+# vertica   PASS  (Vertica Database (via ODBC) 25.03.0000)
+```
+
+The driver answers `SQL_DRIVER_NAME` `verticaodbcw.so` and `SQL_DBMS_NAME`
+`Vertica Database`; `"verticaodbc"` is what the driver's one quirk keys on.
+
+### Driver quirk: parameter arrays beat multi-row INSERT
+
+adbcbridge's default bulk-ingest path packs K rows into one
+`INSERT ... VALUES (...),(...)`, because that is faster than ODBC parameter arrays on
+every other server measured. Vertica is the second exception after MariaDB
+Connector/ODBC, and by a much wider margin: its driver turns a bound array into a single
+native bulk load, while a multi-row INSERT stays one row-store insert per statement —
+which is the worst case for a column store. Timing 10,000-row ingests directly:
+
+| path | rows/s |
+| --- | --- |
+| `adbc.odbc.array_binding=false` (multi-row INSERT) | 17,122 |
+| `adbc.odbc.array_binding=true` (parameter arrays) | 138,720 |
+| driver default, with the quirk | 131,773 |
+
+So `OdbcDetectQuirks` sets `prefer_param_arrays` for `verticaodbc`, which is the existing
+flag `maodbc` already uses — an 8× improvement for a caller that sets no options. Note
+that `bench/matrix_bench.py` pins `array_binding` explicitly in both of its ingest
+columns, so neither of them shows this: the quirk only moves what happens when nothing is
+set.
+
+### Notes
+
+* **No transaction quirk needed.** Vertica reports `SQL_TXN_CAPABLE` = 3 and honours
+  commit/rollback normally.
+* **`GETDATA_EXTENSIONS` = 15** (`SQL_GD_ANY_COLUMN | SQL_GD_ANY_ORDER | SQL_GD_BLOCK |
+  SQL_GD_BOUND`), so the reader binds wide columns and repairs truncated values in place;
+  no `refetch_repair` fallback is involved.
+* **`SQL_MAX_STATEMENT_LEN` = 0** (the driver will not say), so the multi-row INSERT
+  batch size is settled by probing, as it is for most drivers.
+* The generated ingest DDL comes out as Vertica's own `SQLGetTypeInfo` names —
+  `int`, `long varchar(1048576)`, `float`, `date`, `boolean` — all of which it accepts, so
+  the entry needs neither `ansi_ddl_type_names` nor `ingest_types`.
+
+### Benchmark
+
+10,000-row ingest, 100,000-row fetch:
+
+```
+fetch=948,103/s (pyodbc 436,509/s)  ingest=15,949/s array=151,356/s pyodbc=131,357/s
+```
+
+The fetch is the second-fastest in the matrix — a column store handing over a wide block
+cursor is exactly what the reader's bound-block path is good at — and 2.2× pyodbc.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down vertica
+```
+
+The database lives in the container's own filesystem (`/home/dbadmin/data`), so removing
+the container removes it; `setup_vertica.sh` starts over from scratch on the next one.
