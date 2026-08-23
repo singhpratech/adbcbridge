@@ -140,6 +140,8 @@ struct OdbcReaderOptions {
   // back as UTF-32. Use the narrow SQL_C_CHAR path instead, which is UTF-8 when the
   // connection is opened with CHARSET=UTF8.
   bool wchar_as_utf8;
+  // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
+  bool no_describe_param;
 };
 
 // --- 32-bit-SQLLEN driver quirk accessors -----------------------------------
@@ -253,6 +255,12 @@ AdbcStatusCode OdbcConnectionGetObjects(struct AdbcConnection* connection, int d
 /// Describe the result set of an executed/prepared statement as an Arrow schema.
 AdbcStatusCode OdbcDescribeResultSchema(SQLHSTMT hstmt, const struct OdbcReaderOptions* opts,
                                         struct ArrowSchema* out, struct AdbcError* error);
+
+/// Describe the parameters of a prepared statement as an Arrow struct schema
+/// (SQLNumParams + SQLDescribeParam).  Drivers that cannot describe parameters get
+/// N nullable utf8 fields named "0".."N-1".
+AdbcStatusCode OdbcDescribeParameterSchema(SQLHSTMT hstmt, const struct OdbcReaderOptions* opts,
+                                           struct ArrowSchema* out, struct AdbcError* error);
 
 /// Build an ArrowArrayStream that fetches from an executed statement.
 /// Takes a reference on `ref`.

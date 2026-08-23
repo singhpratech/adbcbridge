@@ -16,6 +16,8 @@
 
 // Parameter binding (Arrow -> SQLBindParameter) and bulk ingest.
 
+#include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -729,10 +731,57 @@ cleanup:
   return status;
 }
 
+// Bind row `row` of `view` as the statement's parameters and execute once.
+// *out_result_cols receives the number of result columns the execution produced.
+static AdbcStatusCode BindAndExecuteRow(SQLHSTMT hstmt, bool prepared, const char* query,
+                                        struct ParamSlot* slots, const struct ArrowSchemaView* svs,
+                                        const struct ArrowArrayView* view, int64_t ncols,
+                                        int64_t row, const struct OdbcReaderOptions* opts,
+                                        SQLSMALLINT* out_result_cols, struct AdbcError* error) {
+  SQLFreeStmt(hstmt, SQL_CLOSE);
+  for (int64_t i = 0; i < ncols; i++) {
+    struct ParamSlot* p = &slots[i];
+    RAISE_ADBC(SlotFromArrow(p, &svs[i], view->children[i], row, opts, error));
+    if (p->indicator == SQL_NULL_DATA) {
+      // Bind NULLs with the driver's own idea of the parameter type when it can
+      // tell us (SQLDescribeParam), a NULL value pointer and SQL_C_DEFAULT -- the
+      // combination every driver we have met encodes correctly (pyodbc does the same).
+      SQLSMALLINT dtype = 0, ddigits = 0, dnullable = 0;
+      SQLULEN dsize = 0;  // zeroed: a 32-bit-SQLLEN driver writes only the low half
+      if (!opts->no_describe_param &&
+          SQL_SUCCEEDED(SQLDescribeParam(hstmt, (SQLUSMALLINT)(i + 1), &dtype, &dsize, &ddigits,
+                                         &dnullable)) &&
+          dtype != 0 && dtype != SQL_UNKNOWN_TYPE) {
+        dsize = OdbcReadULen(&dsize, opts->sqllen_32bit);
+        p->sql_type = dtype;
+        p->column_size = dsize ? dsize : 1;
+        p->decimal_digits = ddigits;
+      }
+      p->c_type = SQL_C_DEFAULT;
+      p->data = NULL;
+      p->buffer_length = 0;
+    }
+    p->bound_indicator = 0;
+    OdbcIndicatorSet(&p->bound_indicator, 0, p->indicator, opts->sqllen_32bit);
+    SQLRETURN r = SQLBindParameter(hstmt, (SQLUSMALLINT)(i + 1), SQL_PARAM_INPUT, p->c_type,
+                                   p->sql_type, p->column_size, p->decimal_digits,
+                                   (SQLPOINTER)p->data, p->buffer_length, &p->bound_indicator);
+    if (!SQL_SUCCEEDED(r)) return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLBindParameter", error);
+  }
+  SQLRETURN r = prepared ? SQLExecute(hstmt) : SQLExecDirect(hstmt, (SQLCHAR*)query, SQL_NTS);
+  if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
+    return OdbcSetError(SQL_HANDLE_STMT, hstmt, prepared ? "SQLExecute" : "SQLExecDirect", error);
+  }
+  *out_result_cols = 0;
+  SQLNumResultCols(hstmt, out_result_cols);
+  return ADBC_STATUS_OK;
+}
+
 // Execute hstmt once per row of the bound stream, returning total rows affected.
-// If `out` is non-NULL, the result set of the (single) execution is exposed.
-static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayStream* out,
-                                  int64_t* rows_affected, struct AdbcError* error) {
+// Any result set an execution happens to produce is discarded; the caller that wants
+// one goes through BoundReaderInit instead.
+static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affected,
+                                  struct AdbcError* error) {
   SQLHSTMT hstmt = stmt->ref->hstmt;
   struct ArrowArrayStream* stream = &stmt->bind_stream;
   struct ArrowSchema schema;
@@ -746,7 +795,6 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
   struct ArrowArrayView view;
   AdbcStatusCode status = ADBC_STATUS_OK;
   int64_t total = 0;
-  bool have_result = false;
 
   int64_t ncols = schema.n_children;
   struct ArrowSchemaView* svs = calloc((size_t)(ncols > 0 ? ncols : 1), sizeof(*svs));
@@ -758,7 +806,7 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
   }
 
   // Array binding only helps for multi-row, non-result-producing executions.
-  bool use_array = stmt->array_binding && out == NULL && ncols > 0;
+  bool use_array = stmt->array_binding && ncols > 0;
   bool probed = false;
 
   for (;;) {
@@ -785,57 +833,13 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
       row = done;
     }
     for (; row < batch.length && status == ADBC_STATUS_OK; row++) {
-      if (have_result) {
-        InternalAdbcSetError(error, "Cannot bind more than one row to a query that returns a result set");
-        status = ADBC_STATUS_NOT_IMPLEMENTED;
-        break;
-      }
-      SQLFreeStmt(hstmt, SQL_CLOSE);
-      for (int64_t i = 0; i < ncols; i++) {
-        status = SlotFromArrow(&slots[i], &svs[i], view.children[i], row, &stmt->reader_opts, error);
-        if (status != ADBC_STATUS_OK) break;
-        struct ParamSlot* p = &slots[i];
-        if (p->indicator == SQL_NULL_DATA) {
-          // Bind NULLs with the driver's own idea of the parameter type when it can
-          // tell us (SQLDescribeParam), a NULL value pointer and SQL_C_DEFAULT -- the
-          // combination every driver we have met encodes correctly (pyodbc does the same).
-          SQLSMALLINT dtype = 0, ddigits = 0, dnullable = 0;
-          SQLULEN dsize = 0;  // zeroed: a 32-bit-SQLLEN driver writes only the low half
-          if (SQL_SUCCEEDED(SQLDescribeParam(hstmt, (SQLUSMALLINT)(i + 1), &dtype, &dsize, &ddigits,
-                                             &dnullable)) &&
-              dtype != 0 && dtype != SQL_UNKNOWN_TYPE) {
-            dsize = OdbcReadULen(&dsize, stmt->reader_opts.sqllen_32bit);
-            p->sql_type = dtype;
-            p->column_size = dsize ? dsize : 1;
-            p->decimal_digits = ddigits;
-          }
-          p->c_type = SQL_C_DEFAULT;
-          p->data = NULL;
-          p->buffer_length = 0;
-        }
-        p->bound_indicator = 0;
-        OdbcIndicatorSet(&p->bound_indicator, 0, p->indicator, stmt->reader_opts.sqllen_32bit);
-        SQLRETURN r = SQLBindParameter(hstmt, (SQLUSMALLINT)(i + 1), SQL_PARAM_INPUT, p->c_type,
-                                       p->sql_type, p->column_size, p->decimal_digits,
-                                       (SQLPOINTER)p->data, p->buffer_length, &p->bound_indicator);
-        if (!SQL_SUCCEEDED(r)) { status = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLBindParameter", error); break; }
-      }
-      if (status != ADBC_STATUS_OK) break;
-      SQLRETURN r = stmt->prepared ? SQLExecute(hstmt)
-                                   : SQLExecDirect(hstmt, (SQLCHAR*)stmt->query, SQL_NTS);
-      if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
-        status = OdbcSetError(SQL_HANDLE_STMT, hstmt, stmt->prepared ? "SQLExecute" : "SQLExecDirect", error);
-        break;
-      }
       SQLSMALLINT nres = 0;
-      SQLNumResultCols(hstmt, &nres);
-      if (nres > 0 && out) {
-        have_result = true;
-      } else {
-        SQLLEN count = OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
-        if (count > 0) total += count;
-        if (nres > 0) SQLCloseCursor(hstmt);
-      }
+      status = BindAndExecuteRow(hstmt, stmt->prepared, stmt->query, slots, svs, &view, ncols, row,
+                                 &stmt->reader_opts, &nres, error);
+      if (status != ADBC_STATUS_OK) break;
+      SQLLEN count = OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
+      if (count > 0) total += count;
+      if (nres > 0) SQLCloseCursor(hstmt);
     }
     batch.release(&batch);
     if (status != ADBC_STATUS_OK) break;
@@ -849,20 +853,305 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
   stream->release(stream);
   memset(stream, 0, sizeof(*stream));
   stmt->has_bind = false;
-  if (status != ADBC_STATUS_OK) { free(slots); return status; }
-  if (rows_affected) *rows_affected = have_result ? -1 : total;
-  if (out) {
-    if (have_result) {
-      status = OdbcReaderInit(stmt->ref, &stmt->reader_opts, out, error);
-    } else {
-      struct ArrowSchema empty;
-      ArrowSchemaInit(&empty);
-      ArrowSchemaSetTypeStruct(&empty, 0);
-      ArrowBasicArrayStreamInit(out, &empty, 0);
+  free(slots);
+  if (status != ADBC_STATUS_OK) return status;
+  if (rows_affected) *rows_affected = total;
+  return status;
+}
+
+// ---------------------------------------------------------------------------
+// Lazy re-execution reader
+//
+// ADBC requires a result-returning query bound to an N-row parameter batch to be
+// executed once per row, with the concatenation of the N result sets exposed as a
+// single stream.  This reader owns the parameter stream and the statement handle,
+// drains one result set at a time through OdbcReaderInit, and only re-executes when
+// the consumer has finished the previous one.  rows_affected is -1 for this path
+// because the row counts are not known until the whole stream has been consumed.
+
+struct BoundReader {
+  struct OdbcHandleRef* ref;
+  struct OdbcReaderOptions opts;
+  bool prepared;
+  char* query;  // copy: the AdbcStatement may be released before the stream is
+  // Parameters
+  struct ArrowArrayStream params;
+  struct ArrowSchema param_schema;
+  struct ArrowArrayView view;
+  bool view_ready;
+  struct ArrowSchemaView* svs;
+  struct ParamSlot* slots;
+  int64_t ncols;
+  struct ArrowArray batch;  // current parameter batch; release == NULL when none
+  int64_t row;              // next row to execute within `batch`
+  bool params_done;
+  // Results
+  struct ArrowSchema schema;      // schema of the first result set
+  struct ArrowArrayStream inner;  // reader over the result set being drained
+  bool done;
+  struct AdbcError error;
+  char error_message[1024];
+};
+
+// Two result sets can be concatenated when their column types line up; column
+// names are allowed to differ (drivers name expression columns inconsistently).
+static bool ResultSchemaMatches(const struct ArrowSchema* a, const struct ArrowSchema* b) {
+  if (a->n_children != b->n_children) return false;
+  for (int64_t i = 0; i < a->n_children; i++) {
+    const char* fa = a->children[i]->format;
+    const char* fb = b->children[i]->format;
+    if (!fa || !fb || strcmp(fa, fb) != 0) return false;
+  }
+  return true;
+}
+
+static void BoundReaderFree(struct BoundReader* r) {
+  if (!r) return;
+  if (r->inner.release) r->inner.release(&r->inner);
+  if (r->batch.release) r->batch.release(&r->batch);
+  if (r->view_ready) ArrowArrayViewReset(&r->view);
+  if (r->params.release) r->params.release(&r->params);
+  if (r->param_schema.release) r->param_schema.release(&r->param_schema);
+  if (r->schema.release) r->schema.release(&r->schema);
+  if (r->slots) {
+    for (int64_t i = 0; i < r->ncols; i++) ArrowBufferReset(&r->slots[i].wbuf);
+    free(r->slots);
+  }
+  free(r->svs);
+  if (r->ref && r->ref->hstmt) {
+    SQLFreeStmt(r->ref->hstmt, SQL_RESET_PARAMS);
+    SQLFreeStmt(r->ref->hstmt, SQL_CLOSE);
+  }
+  OdbcHandleRefRelease(r->ref);
+  free(r->query);
+  if (r->error.release) r->error.release(&r->error);
+  free(r);
+}
+
+// Execute the next parameter row.  Sets *exhausted when the parameter stream is
+// spent; otherwise *out_result_cols is that execution's result column count.
+static AdbcStatusCode BoundReaderExecuteNextRow(struct BoundReader* r, bool* exhausted,
+                                                SQLSMALLINT* out_result_cols,
+                                                struct AdbcError* error) {
+  struct ArrowError na_error;
+  *exhausted = false;
+  for (;;) {
+    if (r->batch.release && r->row < r->batch.length) break;
+    if (r->batch.release) {
+      r->batch.release(&r->batch);
+      r->batch.release = NULL;
+    }
+    if (r->params_done) {
+      *exhausted = true;
+      return ADBC_STATUS_OK;
+    }
+    r->batch.release = NULL;
+    int rc = r->params.get_next(&r->params, &r->batch);
+    if (rc != 0) {
+      InternalAdbcSetError(error, "Bound stream get_next failed: %s",
+                           r->params.get_last_error(&r->params));
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    if (!r->batch.release) {
+      r->params_done = true;
+      *exhausted = true;
+      return ADBC_STATUS_OK;
+    }
+    if (ArrowArrayViewSetArray(&r->view, &r->batch, &na_error) != NANOARROW_OK) {
+      InternalAdbcSetError(error, "Invalid bound batch: %s", na_error.message);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    r->row = 0;
+  }
+  int64_t row = r->row++;
+  return BindAndExecuteRow(r->ref->hstmt, r->prepared, r->query, r->slots, r->svs, &r->view,
+                           r->ncols, row, &r->opts, out_result_cols, error);
+}
+
+// Re-execute until an execution yields a result set, and open a reader over it.
+// Sets *exhausted when the parameter rows run out first.
+static AdbcStatusCode BoundReaderOpenNextResult(struct BoundReader* r, bool* exhausted,
+                                                struct AdbcError* error) {
+  for (;;) {
+    SQLSMALLINT nres = 0;
+    RAISE_ADBC(BoundReaderExecuteNextRow(r, exhausted, &nres, error));
+    if (*exhausted) return ADBC_STATUS_OK;
+    if (nres <= 0) continue;  // e.g. an INSERT row mixed into the batch
+    RAISE_ADBC(OdbcReaderInit(r->ref, &r->opts, &r->inner, error));
+    if (!r->schema.release) {
+      int rc = r->inner.get_schema(&r->inner, &r->schema);
+      if (rc != 0) {
+        InternalAdbcSetError(error, "Failed to read result schema");
+        return ADBC_STATUS_INTERNAL;
+      }
+      return ADBC_STATUS_OK;
+    }
+    struct ArrowSchema next;
+    next.release = NULL;
+    if (r->inner.get_schema(&r->inner, &next) != 0) {
+      InternalAdbcSetError(error, "Failed to read result schema");
+      return ADBC_STATUS_INTERNAL;
+    }
+    bool ok = ResultSchemaMatches(&r->schema, &next);
+    next.release(&next);
+    if (!ok) {
+      InternalAdbcSetError(error,
+                           "Bound parameter row %" PRId64
+                           " produced a result set with a different schema than the first row",
+                           r->row - 1);
+      return ADBC_STATUS_INVALID_STATE;
+    }
+    return ADBC_STATUS_OK;
+  }
+}
+
+static int BoundReaderGetSchema(struct ArrowArrayStream* stream, struct ArrowSchema* out) {
+  struct BoundReader* r = (struct BoundReader*)stream->private_data;
+  if (!r) return EINVAL;
+  return ArrowSchemaDeepCopy(&r->schema, out);
+}
+
+static int BoundReaderGetNext(struct ArrowArrayStream* stream, struct ArrowArray* out) {
+  struct BoundReader* r = (struct BoundReader*)stream->private_data;
+  if (!r) return EINVAL;
+  out->release = NULL;
+  if (r->done) return 0;
+  if (r->error.release) {
+    r->error.release(&r->error);
+    memset(&r->error, 0, sizeof(r->error));
+  }
+  for (;;) {
+    if (r->inner.release) {
+      int rc = r->inner.get_next(&r->inner, out);
+      if (rc != 0) {
+        const char* msg = r->inner.get_last_error(&r->inner);
+        snprintf(r->error_message, sizeof(r->error_message), "%s", msg ? msg : "unknown error");
+        r->done = true;
+        return rc;
+      }
+      if (out->release) return 0;
+      r->inner.release(&r->inner);
+      memset(&r->inner, 0, sizeof(r->inner));
+    }
+    bool exhausted = false;
+    AdbcStatusCode status = BoundReaderOpenNextResult(r, &exhausted, &r->error);
+    if (status != ADBC_STATUS_OK) {
+      snprintf(r->error_message, sizeof(r->error_message), "%s",
+               r->error.message ? r->error.message : "unknown error");
+      r->done = true;
+      return InternalAdbcStatusCodeToErrno(status);
+    }
+    if (exhausted) {
+      r->done = true;
+      return 0;
     }
   }
-  free(slots);
-  return status;
+}
+
+static const char* BoundReaderGetLastError(struct ArrowArrayStream* stream) {
+  struct BoundReader* r = (struct BoundReader*)stream->private_data;
+  if (!r) return NULL;
+  return r->error_message[0] ? r->error_message : NULL;
+}
+
+static void BoundReaderRelease(struct ArrowArrayStream* stream) {
+  BoundReaderFree((struct BoundReader*)stream->private_data);
+  stream->private_data = NULL;
+  stream->release = NULL;
+}
+
+// Execute the bound statement for a caller that wants the result set.  Rows are
+// executed eagerly until the first result set appears; the rest are executed lazily
+// as the consumer drains the stream.  If no row produces a result set at all this
+// degrades to the ExecuteRows behaviour: an empty stream and a real row count.
+static AdbcStatusCode BoundReaderInit(struct OdbcStatement* stmt, struct ArrowArrayStream* out,
+                                      int64_t* rows_affected, struct AdbcError* error) {
+  struct BoundReader* r = calloc(1, sizeof(struct BoundReader));
+  if (!r) {
+    InternalAdbcSetError(error, "out of memory");
+    return ADBC_STATUS_INTERNAL;
+  }
+  r->ref = stmt->ref;
+  stmt->ref->refcount++;
+  r->opts = stmt->reader_opts;
+  r->prepared = stmt->prepared;
+  r->query = stmt->query ? strdup(stmt->query) : NULL;
+  // Take ownership of the parameter stream: it is consumed lazily from here on.
+  memcpy(&r->params, &stmt->bind_stream, sizeof(r->params));
+  memset(&stmt->bind_stream, 0, sizeof(stmt->bind_stream));
+  stmt->has_bind = false;
+
+  AdbcStatusCode status = ADBC_STATUS_OK;
+  if (r->params.get_schema(&r->params, &r->param_schema) != 0) {
+    InternalAdbcSetError(error, "Bound stream get_schema failed: %s",
+                         r->params.get_last_error(&r->params));
+    status = ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  struct ArrowError na_error;
+  if (status == ADBC_STATUS_OK) {
+    r->ncols = r->param_schema.n_children;
+    r->svs = calloc((size_t)(r->ncols > 0 ? r->ncols : 1), sizeof(*r->svs));
+    r->slots = calloc((size_t)(r->ncols > 0 ? r->ncols : 1), sizeof(*r->slots));
+    if (!r->svs || !r->slots) {
+      InternalAdbcSetError(error, "out of memory");
+      status = ADBC_STATUS_INTERNAL;
+    }
+  }
+  if (status == ADBC_STATUS_OK) {
+    for (int64_t i = 0; i < r->ncols; i++) ArrowBufferInit(&r->slots[i].wbuf);
+    if (ArrowArrayViewInitFromSchema(&r->view, &r->param_schema, &na_error) != NANOARROW_OK) {
+      InternalAdbcSetError(error, "Invalid bound schema: %s", na_error.message);
+      status = ADBC_STATUS_INVALID_ARGUMENT;
+    } else {
+      r->view_ready = true;
+    }
+  }
+  for (int64_t i = 0; status == ADBC_STATUS_OK && i < r->ncols; i++) {
+    if (ArrowSchemaViewInit(&r->svs[i], r->param_schema.children[i], &na_error) != NANOARROW_OK) {
+      InternalAdbcSetError(error, "Invalid bound schema: %s", na_error.message);
+      status = ADBC_STATUS_INVALID_ARGUMENT;
+    }
+  }
+
+  // Execute rows until one returns a result set.
+  int64_t total = 0;
+  bool exhausted = false;
+  while (status == ADBC_STATUS_OK) {
+    SQLSMALLINT nres = 0;
+    status = BoundReaderExecuteNextRow(r, &exhausted, &nres, error);
+    if (status != ADBC_STATUS_OK || exhausted) break;
+    if (nres > 0) {
+      status = OdbcReaderInit(r->ref, &r->opts, &r->inner, error);
+      if (status == ADBC_STATUS_OK && r->inner.get_schema(&r->inner, &r->schema) != 0) {
+        InternalAdbcSetError(error, "Failed to read result schema");
+        status = ADBC_STATUS_INTERNAL;
+      }
+      break;
+    }
+    SQLLEN count = 0;
+    if (SQL_SUCCEEDED(SQLRowCount(r->ref->hstmt, &count)) && count > 0) total += count;
+  }
+  if (status != ADBC_STATUS_OK) {
+    BoundReaderFree(r);
+    return status;
+  }
+  if (!r->schema.release) {
+    // Nothing in the batch produced a result set; report the row count instead.
+    BoundReaderFree(r);
+    if (rows_affected) *rows_affected = total;
+    struct ArrowSchema empty;
+    ArrowSchemaInit(&empty);
+    CHECK_NA(INTERNAL, ArrowSchemaSetTypeStruct(&empty, 0), error);
+    CHECK_NA(INTERNAL, ArrowBasicArrayStreamInit(out, &empty, 0), error);
+    return ADBC_STATUS_OK;
+  }
+  if (rows_affected) *rows_affected = -1;
+  out->private_data = r;
+  out->get_schema = BoundReaderGetSchema;
+  out->get_next = BoundReaderGetNext;
+  out->get_last_error = BoundReaderGetLastError;
+  out->release = BoundReaderRelease;
+  return ADBC_STATUS_OK;
 }
 
 AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt, struct AdbcError* error);
@@ -875,7 +1164,8 @@ AdbcStatusCode OdbcStatementExecuteBound(struct OdbcStatement* stmt, struct Arro
                stmt->ref->hstmt, "SQLPrepare", error);
     stmt->prepared = true;
   }
-  return ExecuteRows(stmt, out, rows_affected, error);
+  if (out) return BoundReaderInit(stmt, out, rows_affected, error);
+  return ExecuteRows(stmt, rows_affected, error);
 }
 
 // ---------------------------------------------------------------------------
