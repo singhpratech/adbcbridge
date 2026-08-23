@@ -269,3 +269,17 @@ services:
     environment: { SQLFLITE_PASSWORD: adbc, TLS_ENABLED: "0", PRINT_QUERIES: "0" }
     mem_limit: 2g
     ports: ["127.0.0.1:31337:31337"]
+  # StarRocks: an MPP columnar warehouse serving the MySQL wire protocol on 9030, driven
+  # by MySQL Connector/ODBC.  In the "extra" profile, so a plain `up -d` leaves it alone;
+  # start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d starrocks
+  # allin1-ubuntu runs the FE (frontend/coordinator, a JVM) and one BE (backend) in the
+  # single container; it is ready in well under a minute and the BE sizes its own memory
+  # limit from the container's, so mem_limit is the only knob needed.  The image ships no
+  # user database and a passwordless `root`, so the matrix entry's `setup` creates `adbc`
+  # itself.  Port 19030 keeps it clear of the other MySQL-wire entries.
+  starrocks:
+    image: starrocks/allin1-ubuntu:latest
+    profiles: ["extra"]
+    mem_limit: 5g
+    ports: ["127.0.0.1:19030:9030"]

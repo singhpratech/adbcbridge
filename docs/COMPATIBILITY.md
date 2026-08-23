@@ -48,6 +48,7 @@ from the second table to the first.
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 | Materialize 26.38 | psqlodbc (PG wire) | PASS | streaming warehouse; PostgreSQL SQL layer, so no driver quirks -- but no `SAVEPOINT`, so psqlodbc needs `Protocol=7.4-0` for an ingest big enough to split into a second batch; `NUMERIC` is 39 digits, past decimal128, so it reads back as an exact string; also ingests into and reads back an incrementally maintained `MATERIALIZED VIEW`; ingest 6.5k rows/s (array binding), fetch 248k rows/s |
 | MatrixOne 4.2 (MySQL 8.0.30 wire) | MySQL Connector/ODBC (MySQL wire) | PASS | `mysql_native_password` only, so the connector needs `PLUGIN_DIR`; a table without a PRIMARY KEY gets a hidden `__mo_fake_pk_col` that `SQLColumns` reports; a parameter bound into a `BIT` column aborts the server, so ingest sends booleans as `TINYINT`; describes a TEXT column as 5 characters (driver fix: bind a no-declared-length column at `long_bind_bytes`); ingest 4.4k rows/s, fetch 2.05M rows/s |
+| StarRocks 4.1.4 (MySQL 8.0.33 wire) | MySQL Connector/ODBC (MySQL wire) | PASS | MPP columnar warehouse: no prepared statements but `SELECT`, so the connector runs with `NO_SSPS=1`, and the `_binary` date/timestamp/binary literals it then emits are sent as text instead (`temporal_binary_param_as_varchar`, restored -- it had been dead code since a bad merge); MySQL type names rejected in ingest DDL, and the portable fallback for a double is now `DOUBLE`, not `DOUBLE PRECISION`; no `ANSI_QUOTES` mode at all, so identifiers are quoted with backticks; `DECIMAL(10,3)` described at MySQL's display width (12,3); ingest 10 rows/s (~100 ms per `INSERT` is the server -- pyodbc cannot ingest here at all), fetch 406k rows/s |
 
 ## Driver available, free server available — queued for verification
 
@@ -61,7 +62,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Vertica CE | Vertica ODBC | `vertica/vertica-ce` | queued |
 | OpenSearch | opensearch-sql-odbc | `opensearchproject/opensearch` | queued |
 | Apache Doris | MySQL Connector/ODBC | `apache/doris` | queued (large) |
-| StarRocks | MySQL Connector/ODBC | `starrocks/allin1-ubuntu` | queued (large) |
 | Exasol | Exasol ODBC | `exasol/docker-db` | needs privileged container + 4 GB |
 | Greenplum / Cloudberry | psqlodbc | `cloudberrydb` | queued (large) |
 

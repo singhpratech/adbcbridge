@@ -22,6 +22,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFORMIX_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, COLUMNSTORE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, FLIGHTSQL_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, STARROCKS_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -222,6 +223,54 @@ DBS = {
         ingest_types={pa.bool_(): pa.int8()},
         setup=["CREATE DATABASE IF NOT EXISTS adbc", "USE adbc",
                "SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "starrocks": dict(
+        # StarRocks is an MPP columnar warehouse that serves the MySQL wire protocol on
+        # 9030 (it announces itself as MySQL 8.0.33), so MySQL Connector/ODBC drives it.
+        # Only the wire protocol is MySQL's; the SQL dialect is StarRocks' own.
+        #   The stock image ships no user database and a passwordless `root`, so the
+        # connection string names no database and `setup` creates one and switches to it.
+        # Both statements are idempotent, which matters because bench/matrix_bench.py
+        # replays `setup` on every connection it opens.
+        # {plugin_dir}: StarRocks authenticates with mysql_native_password, whose
+        # *client-side* plugin Connector/ODBC 9 loads at run time -- see conn_uri().
+        env="STARROCKS_ODBC_DRIVER",
+        #   NO_SSPS=1 is what makes the entry work at all, for the same reason Databend
+        # needs it: StarRocks answers COM_STMT_PREPARE for anything but a SELECT with
+        # "This command is not supported in the prepared statement protocol yet" (1295),
+        # so SQLPrepare of the parameterised INSERT fails.  With NO_SSPS the connector
+        # substitutes bound parameters into the SQL text and every statement goes as a
+        # plain query.
+        conn="Driver={drv};Server=127.0.0.1;Port=19030;User=root;NO_SSPS=1;{plugin_dir}",
+        # StarRocks type names: DATETIME is the microsecond timestamp (there is no
+        # TIMESTAMP type) and VARBINARY round-trips bytes.  No DISTRIBUTED BY or
+        # replication_num is needed -- StarRocks 3.1+ picks a random bucket distribution
+        # and the allin1 image's single BE defaults replication_num to 1.
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10),"
+            " d DATE, ts DATETIME, n DECIMAL(10,3), bo BOOLEAN)",
+        # StarRocks BOOLEAN is stored as a TINYINT and described as SQL_TINYINT -> int8,
+        # as MySQL's own TINYINT(1) BOOLEAN is.
+        bool_type="int8",
+        # StarRocks describes a DECIMAL(10,3) column at the *display* width MySQL uses on
+        # the wire -- 12, the ten digits plus the sign and the decimal point -- where a
+        # real MySQL reports the declared precision.  Connector/ODBC passes that straight
+        # through as SQL_DECIMAL precision, so the column reads back as decimal128(12, 3).
+        # No digits are lost: the scale is right and 12.345 round-trips exactly.
+        decimal_type="decimal128(12, 3)",
+        # No ANSI_QUOTES here, unlike every other MySQL-wire entry: StarRocks accepts the
+        # sql_mode *value* but its parser ignores it, so `"adbc_ing"` is still a string
+        # literal and `CREATE TABLE "adbc_ing" (...)` is a syntax error.  Connector/ODBC
+        # therefore reports the backtick for SQL_IDENTIFIER_QUOTE_CHAR -- which is right --
+        # and ingest quotes with it, so this file has to as well.
+        quote="`",
+        # StarRocks runs every INSERT as its own load transaction and waits for the
+        # version to publish, which costs a flat ~100 ms whatever the statement holds --
+        # the `mysql` client inside the container measures the same 10 rows/s for 100
+        # single-row INSERTs.  Since the connector in NO_SSPS mode sends one statement per
+        # parameter set, single-row ingest runs at that rate.  2000 still crosses the
+        # reader's 1024-row batch boundary, which is what this step is for, without
+        # spending eight minutes on it.
+        big_rows=2000,
+        setup=["CREATE DATABASE IF NOT EXISTS adbc", "USE adbc"]),
     "db2": dict(
         env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
@@ -638,7 +687,7 @@ def run(name, cfg):
         for sql in cfg.get("setup", []):
             cur.execute(sql)
         if not ro:
-            for t in (t_name, ing_name, '"%s"' % ing_name):  # ingest quotes names (exact case)
+            for t in (t_name, ing_name, qi(cfg, ing_name)):  # ingest quotes names (exact case)
                 try:
                     cur.execute("DROP TABLE " + t)
                 except Exception:
@@ -685,7 +734,8 @@ def run(name, cfg):
         assert cur.fetchone()[0].startswith("héllo")
         # bulk ingest + read back (read_only reads the fixture's big table instead)
         if ro:
-            check_big(cur, cfg, 'SELECT "a", "b" FROM "adbc_big"')
+            check_big(cur, cfg, "SELECT %s, %s FROM %s" % (
+                qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "adbc_big")))
         else:
             check_ingest(cur, cfg, ing_name)
         # extra: per-database steps run after the standard workload, for features
@@ -731,6 +781,21 @@ def run(name, cfg):
     assert order([f.name.lower() for f in sch]) == order(cols)
     conn.close()
     return "PASS  (%s %s)" % (info["vendor_name"], info["vendor_version"])
+
+
+def qi(cfg, name):
+    """Quote an identifier the way this server spells a quoted name.
+
+    adbc_ingest creates its table with whatever the ODBC driver reports for
+    SQL_IDENTIFIER_QUOTE_CHAR, so the SQL this file writes against an ingested table has
+    to quote with the same character.  Almost everywhere that is the SQL-standard double
+    quote -- MySQL and MariaDB reach it through the `ANSI_QUOTES` sql_mode their entries
+    set in `setup`.  `quote` overrides it for a server that has no double-quoted-identifier
+    mode at all (StarRocks accepts the `ANSI_QUOTES` value but its parser ignores it, so
+    MySQL Connector/ODBC correctly reports the backtick and ingest quotes with that).
+    """
+    q = cfg.get("quote", '"')
+    return q + name + q
 
 
 def refresh(cur, cfg, table):
@@ -780,7 +845,8 @@ def check_ingest(cur, cfg, ing_name):
     n2 = cur.adbc_ingest(ing_name, tbl, mode="append")
     assert (n1, n2) == (3, 3) or not cfg.get("rowcount", True), (n1, n2)
     refresh(cur, cfg, ing_name)
-    cur.execute('SELECT "a", "b", "c", "d" FROM "%s" WHERE "a" = 2' % ing_name)
+    cur.execute("SELECT %s, %s, %s, %s FROM %s WHERE %s = 2" % (
+        qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "c"), qi(cfg, "d"), qi(cfg, ing_name), qi(cfg, "a")))
     got = cur.fetch_arrow_table().to_pylist()
     # The ingest DDL asks the driver for a date (or, where the server has no date type,
     # a timestamp) column; a server whose timestamp carries a zone -- psqlodbc's
@@ -795,7 +861,8 @@ def check_ingest(cur, cfg, ing_name):
                                                    "c": pa.array([float(i) for i in range(N)]), "d": pa.array([i for i in range(N)], pa.date32()),
                                                    "e": pa.array([i % 2 == 0 for i in range(N)])}), mode="replace")
     refresh(cur, cfg, ing_name)
-    check_big(cur, cfg, 'SELECT "a", "b" FROM "%s" ORDER BY "a"' % ing_name)
+    check_big(cur, cfg, "SELECT %s, %s FROM %s ORDER BY %s" % (
+        qi(cfg, "a"), qi(cfg, "b"), qi(cfg, ing_name), qi(cfg, "a")))
 
 
 if __name__ == "__main__":

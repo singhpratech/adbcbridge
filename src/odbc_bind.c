@@ -216,6 +216,22 @@ static void TimestampFromArrow(int64_t v, enum ArrowTimeUnit unit, TIMESTAMP_STR
   ts->second = (SQLUSMALLINT)(sod % 60); ts->fraction = (SQLUINTEGER)(frac * frac_mul);
 }
 
+// Render an ODBC TIMESTAMP_STRUCT as "YYYY-MM-DD HH:MM:SS[.ffffff]"; returns its
+// length.  Used by temporal_binary_param_as_varchar, which sends timestamps as text.
+static int TimestampTextFromStruct(const TIMESTAMP_STRUCT* ts, enum ArrowTimeUnit unit,
+                                   char* out, size_t out_size) {
+  const int digits = FractionalDigits(unit);
+  if (digits == 0) {
+    return snprintf(out, out_size, "%04d-%02d-%02d %02d:%02d:%02d", ts->year, ts->month, ts->day,
+                    ts->hour, ts->minute, ts->second);
+  }
+  int64_t scale = 1;
+  for (int i = digits; i < 9; i++) scale *= 10;  // TIMESTAMP_STRUCT.fraction is nanoseconds
+  return snprintf(out, out_size, "%04d-%02d-%02d %02d:%02d:%02d.%0*lld", ts->year, ts->month,
+                  ts->day, ts->hour, ts->minute, ts->second, digits,
+                  (long long)(ts->fraction / scale));
+}
+
 static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct ArrowSchemaView* sv,
                                          const struct ArrowArrayView* av, int64_t row,
                                          bool is_null, const struct OdbcReaderOptions* opts,
@@ -325,8 +341,15 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
     case NANOARROW_TYPE_FIXED_SIZE_BINARY: case NANOARROW_TYPE_BINARY_VIEW: {
       struct ArrowBufferView b = {{NULL}, 0};
       if (p->indicator != SQL_NULL_DATA) b = ArrowArrayViewGetBytesUnsafe(av, row);
-      p->c_type = SQL_C_BINARY;
-      p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARBINARY : SQL_VARBINARY;
+      // temporal_binary_param_as_varchar: the bytes go across as a character
+      // parameter, so the driver quotes them as an ordinary string literal instead
+      // of a `_binary'...'` introducer the server cannot parse.
+      p->c_type = opts->temporal_binary_param_as_varchar ? SQL_C_CHAR : SQL_C_BINARY;
+      if (opts->temporal_binary_param_as_varchar) {
+        p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARCHAR : SQL_VARCHAR;
+      } else {
+        p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARBINARY : SQL_VARBINARY;
+      }
       p->column_size = (SQLULEN)(b.size_bytes > 0 ? b.size_bytes : 1);
       p->data = b.data.as_uint8; p->buffer_length = b.size_bytes;
       if (p->indicator != SQL_NULL_DATA) p->indicator = b.size_bytes;
@@ -337,6 +360,13 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
       CivilFromDays(ArrowArrayViewGetIntUnsafe(av, row), &y, &m, &d);
       p->fixed.date.year = (SQLSMALLINT)y; p->fixed.date.month = (SQLUSMALLINT)m;
       p->fixed.date.day = (SQLUSMALLINT)d;
+      if (opts->temporal_binary_param_as_varchar) {
+        const int n = snprintf(p->fixed.text, sizeof(p->fixed.text), "%04d-%02d-%02d", y, m, d);
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = 10;
+        p->data = p->fixed.text; p->buffer_length = n + 1;
+        if (p->indicator != SQL_NULL_DATA) p->indicator = n;
+        break;
+      }
       p->c_type = SQL_C_TYPE_DATE; p->sql_type = SQL_TYPE_DATE;
       p->data = &p->fixed.date; p->buffer_length = sizeof(DATE_STRUCT);
       break;
@@ -367,6 +397,17 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
     }
     case NANOARROW_TYPE_TIMESTAMP: {
       TimestampFromArrow(ArrowArrayViewGetIntUnsafe(av, row), sv->time_unit, &p->fixed.ts);
+      if (opts->temporal_binary_param_as_varchar) {
+        // fixed.ts and fixed.text are the same union member, so take a copy of the
+        // struct before rendering the text over it.
+        const TIMESTAMP_STRUCT ts = p->fixed.ts;
+        const int n = TimestampTextFromStruct(&ts, sv->time_unit, p->fixed.text,
+                                              sizeof(p->fixed.text));
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = (SQLULEN)n;
+        p->data = p->fixed.text; p->buffer_length = n + 1;
+        if (p->indicator != SQL_NULL_DATA) p->indicator = n;
+        break;
+      }
       p->c_type = SQL_C_TYPE_TIMESTAMP; p->sql_type = SQL_TYPE_TIMESTAMP;
       TimestampParamSize(sv->time_unit, &p->column_size, &p->decimal_digits);
       p->data = &p->fixed.ts; p->buffer_length = sizeof(TIMESTAMP_STRUCT);
@@ -620,9 +661,21 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       p->c_type = SQL_C_DOUBLE; p->sql_type = SQL_DOUBLE; p->elem_size = sizeof(SQLDOUBLE);
       p->needs_buffer = true; break;
     case NANOARROW_TYPE_DATE32:
+      // temporal_binary_param_as_varchar renders each value as text; that is a
+      // per-value conversion only the row path does, as with null_param_as_varchar
+      // above.  Such a driver substitutes parameters into the SQL text anyway, so it
+      // sends one statement per set either way and nothing is lost by going row-wise.
+      if (opts->temporal_binary_param_as_varchar) {
+        *supported = false;
+        return;
+      }
       p->c_type = SQL_C_TYPE_DATE; p->sql_type = SQL_TYPE_DATE;
       p->elem_size = sizeof(DATE_STRUCT); p->needs_buffer = true; break;
     case NANOARROW_TYPE_TIMESTAMP:
+      if (opts->temporal_binary_param_as_varchar) {  // see DATE32 above
+        *supported = false;
+        return;
+      }
       p->c_type = SQL_C_TYPE_TIMESTAMP; p->sql_type = SQL_TYPE_TIMESTAMP;
       p->elem_size = sizeof(TIMESTAMP_STRUCT);
       TimestampParamSize(sv->time_unit, &p->column_size, &p->decimal_digits);
@@ -667,6 +720,10 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       // SQL_C_CHAR array is transcoded from the driver's narrow charset and
       // mangles anything outside it (SQL Server stored "hello ?" for an emoji).
       // Drivers whose SQLWCHAR is not UTF-16 keep the narrow, UTF-8 path.
+      if (binary && opts->temporal_binary_param_as_varchar) {  // see DATE32 above
+        *supported = false;
+        return;
+      }
       const bool wide = !binary && !opts->wchar_as_utf8;
       int64_t max = ArrayParamVarLenMax(av, binary, wide, nrows);
       if (max < 0) {  // too wide to stage: this batch goes row-at-a-time
@@ -1735,7 +1792,13 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
       break;
     case NANOARROW_TYPE_HALF_FLOAT:
     case NANOARROW_TYPE_FLOAT: CHAIN("REAL", SQL_REAL, SQL_FLOAT, SQL_DOUBLE); break;
-    case NANOARROW_TYPE_DOUBLE: CHAIN("DOUBLE PRECISION", SQL_DOUBLE, SQL_FLOAT); break;
+    // "DOUBLE", not the ISO "DOUBLE PRECISION": this fallback is only reached when the
+    // driver's own type names are unusable (ansi_ddl_type_names), which in practice
+    // means an analytic engine behind someone else's wire protocol, and those parse the
+    // one-word spelling far more reliably.  StarRocks rejects "DOUBLE PRECISION"
+    // outright ("Unexpected input ','"); MySQL/MariaDB (and ColumnStore), QuestDB and
+    // Databend all name the type DOUBLE and accept "DOUBLE PRECISION" only as an alias.
+    case NANOARROW_TYPE_DOUBLE: CHAIN("DOUBLE", SQL_DOUBLE, SQL_FLOAT); break;
     case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING:
     case NANOARROW_TYPE_STRING_VIEW:
       CHAIN("TEXT", SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_VARCHAR); break;

@@ -169,7 +169,7 @@ struct OdbcReaderOptions {
   const char* nullable_type_format;
   // Driver quirk: the names SQLGetTypeInfo reports are not names the server accepts in
   // DDL, so bulk ingest spells its CREATE TABLE with portable SQL type names (BIGINT,
-  // DOUBLE PRECISION, BOOLEAN, ...) instead.  psqlodbc drives every PostgreSQL-wire
+  // DOUBLE, BOOLEAN, ...) instead.  psqlodbc drives every PostgreSQL-wire
   // server but answers SQLGetTypeInfo with PostgreSQL's own internal names ("int8",
   // "float8", "bool", "numeric"); QuestDB, which has its own type system behind that
   // wire protocol, rejects those with "unsupported column type" while accepting the
