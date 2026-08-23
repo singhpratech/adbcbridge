@@ -178,3 +178,27 @@ services:
     profiles: ["extra"]
     mem_limit: 2g
     ports: ["127.0.0.1:16875:6875"]
+  # openGauss: Huawei's fork of PostgreSQL 9.2, speaking the PostgreSQL wire protocol on
+  # 5432, so psqlodbc drives it.  In the "extra" profile, so a plain `up -d` leaves it
+  # alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d opengauss
+  # Three things this image needs that the other PostgreSQL-wire services here do not:
+  #  * cap_add SYS_NICE -- openGauss's MOT (memory-optimized table) engine calls mbind(),
+  #    which Docker's default seccomp profile rejects with EPERM unless the container has
+  #    CAP_SYS_NICE.  Without it the postmaster dies during start-up ("mbind: Operation
+  #    not permitted" -> "Failed to Initialize the Recovery Manager").
+  #  * the `command` overrides -- gs_initdb sizes shared_buffers (1 GB) and
+  #    max_process_memory (12 GB) from *host* RAM, which no small container can back.
+  #    max_process_memory has a hard 2 GB lower bound, so mem_limit cannot go below 3g.
+  #  * an `adbc` role and database created after the first start: openGauss refuses a
+  #    remote login for the initial user, so the matrix cannot connect as it.  See
+  #    README.md for the two gsql statements that create them.
+  opengauss:
+    image: enmotech/opengauss:latest
+    profiles: ["extra"]
+    environment: { GS_PASSWORD: "Adbc@2026" }
+    command: ["-c", "shared_buffers=256MB", "-c", "max_process_memory=2GB", "-c", "max_connections=50"]
+    cap_add: ["SYS_NICE"]
+    shm_size: 1g
+    mem_limit: 3g
+    ports: ["127.0.0.1:15438:5432"]

@@ -18,6 +18,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER, QUESTDB_ODBC_DRIVER,
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER
     QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MATERIALIZE_ODBC_DRIVER
+    QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER, OPENGAUSS_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -297,6 +298,18 @@ DBS = {
             ('SELECT "n", "s" FROM "adbc_mv{sfx}" WHERE "e"', (2, 5)),
             ('SELECT "n", "s" FROM "adbc_mv{sfx}" WHERE "e" IS NULL', (1, 2)),
         ]),
+    "opengauss": dict(
+        # openGauss is Huawei's fork of PostgreSQL 9.2, so psqlodbc drives it (it reports
+        # SQL_DBMS_NAME "PostgreSQL" 9.2.4) and the plain PostgreSQL types apply unchanged.
+        # Two things about the server, not the driver, shape this entry -- see
+        # tests/compat/README.md: openGauss refuses a remote login for the *initial* user
+        # (gaussdb), so the matrix connects as an `adbc` role created after start-up, and
+        # that role's database is created with DBCOMPATIBILITY 'PG' (the image's default,
+        # pinned explicitly) -- in openGauss's other, Oracle-flavoured 'A' mode a DATE
+        # column is a timestamp(0), and `d` below would not read back as a date.
+        env="OPENGAUSS_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=15438;Database=adbc;Uid=adbc;Pwd=Adbc@2026;",
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"),
     "cratedb": dict(
         # CrateDB speaks the PostgreSQL wire protocol (it announces itself as PostgreSQL
         # 14), so psqlodbc drives it, but its type system is its own: there is no binary
@@ -411,24 +424,6 @@ DBS = {
         big_rows=3000),
 }
 
-def conn_uri(name, cfg, drv=None):
-    """The entry's connection string, with `<NAME>_CONN` and the format keys applied.
-
-    `{drv}` is the driver library.  `{plugin}` expands to a PLUGIN_DIR= setting pointing
-    at the "plugin" directory beside the driver when there is one, and to nothing when
-    there is not: MySQL Connector/ODBC keeps its client-side authentication plugins
-    there, and unpacked from the generic tarball (as README.md describes) its compiled-in
-    default plugin path does not exist, so a server that asks for an auth plugin the
-    client does not have built in cannot be reached without it.  A packaged root install,
-    whose default path is correct, has no such directory and is left alone.
-    """
-    if drv is None:
-        drv = os.environ[cfg["env"]]
-    pdir = os.path.join(os.path.dirname(drv), "plugin")
-    plugin = "PLUGIN_DIR=%s;" % pdir if os.path.isdir(pdir) else ""
-    return os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv, plugin=plugin)
-
-
 # Typed values: ADBC clients send Arrow-typed parameters, so dates/timestamps go as
 # date32/timestamp (string literals for dates are not portable, e.g. Oracle).
 ROW1 = (1, 1.5, "héllo 🚀", b"\x01\x02", datetime.date(2024, 2, 29),
@@ -436,21 +431,28 @@ ROW1 = (1, 1.5, "héllo 🚀", b"\x01\x02", datetime.date(2024, 2, 29),
 ROW2 = (2, None, None, None, None, None, None, None)
 
 
-def conn_uri(name, cfg, drv):
-    """The entry's connection string, overridable with <NAME>_CONN.
+def conn_uri(name, cfg, drv=None):
+    """The entry's connection string, overridable with `<NAME>_CONN`.
 
-    `{drv}` expands to the driver library. `{plugin_dir}` expands to a `PLUGIN_DIR=`
-    setting for the drivers that need one: MySQL Connector/ODBC loads client-side
-    authentication plugins from the directory it was *built* with
-    (/usr/local/mysql/lib/plugin for the generic tarball), so a tarball unpacked elsewhere
-    cannot load them, and a server still using mysql_native_password (TiDB) refuses the
-    connection. The tarball keeps those plugins next to the driver, so point PLUGIN_DIR
-    there when that directory exists; a packaged install has no such directory and keeps
-    its own -- correct -- compiled-in default.
+    `{drv}` expands to the driver library (the entry's `env` variable when `drv` is not
+    given) and `{drvdir}` to the directory holding it, for the rare connection option
+    that must point at a file shipped beside the driver.  `{plugin}` and `{plugin_dir}`
+    -- two spellings of the same thing -- expand to a `PLUGIN_DIR=` setting for the
+    drivers that need one: MySQL Connector/ODBC loads client-side authentication plugins
+    from the directory it was *built* with (/usr/local/mysql/lib/plugin for the generic
+    tarball), so a tarball unpacked elsewhere cannot load them and a server still using
+    mysql_native_password (TiDB, Dolt, Databend) refuses the connection.  The tarball
+    keeps those plugins next to the driver, so point PLUGIN_DIR there when that directory
+    exists; a packaged install has no such directory and keeps its own -- correct --
+    compiled-in default.
     """
-    pdir = os.path.join(os.path.dirname(drv), "plugin")
-    plugin_dir = "PLUGIN_DIR=%s;" % pdir if os.path.isdir(pdir) else ""
-    return os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv, plugin_dir=plugin_dir)
+    if drv is None:
+        drv = os.environ[cfg["env"]]
+    drvdir = os.path.dirname(drv)
+    pdir = os.path.join(drvdir, "plugin")
+    plugin = "PLUGIN_DIR=%s;" % pdir if os.path.isdir(pdir) else ""
+    return os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(
+        drv=drv, drvdir=drvdir, plugin=plugin, plugin_dir=plugin)
 
 
 def run(name, cfg):
@@ -462,11 +464,6 @@ def run(name, cfg):
         os.environ.setdefault(k, v)
     if cfg.get("fixture"):  # file-based, read-only database: work on a private copy
         shutil.copy(HERE / "fixtures" / cfg["fixture"], os.path.join(TMP, cfg["fixture"]))
-    uri = conn_uri(name, cfg, drv)
-    # {drv} is the driver library; {drvdir} is the directory holding it, for the rare
-    # connection option that must point at a file shipped beside the driver.
-    uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(
-        drv=drv, drvdir=os.path.dirname(drv))
     uri = conn_uri(name, cfg, drv)
     # This matrix exists to exercise the ODBC path, so native delegation (which
     # would take over for e.g. SQLite/PostgreSQL) is switched off here.
