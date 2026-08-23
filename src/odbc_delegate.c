@@ -1860,14 +1860,26 @@ static AdbcStatusCode ProxyFinish(struct OdbcDelegateProxy* proxy, AdbcStatusCod
   if (status != ADBC_STATUS_OK && error) {
     if (native_error->message) {
       InternalAdbcSetError(error, "%s", native_error->message);
+    } else if (status == ADBC_STATUS_NOT_IMPLEMENTED) {
+      // A driver is free to decline an entry point without saying anything about it.
+      InternalAdbcSetError(error, "the native \"%s\" driver does not implement this operation",
+                           proxy->name);
     } else {
       InternalAdbcSetError(error, "the native \"%s\" driver failed", proxy->name);
     }
     memcpy(error->sqlstate, native_error->sqlstate, sizeof(error->sqlstate));
+    // ADBC_ERROR_INIT sets vendor_code to ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA before the
+    // call: that is the *caller* opting in to extended errors, not the driver promising
+    // to have written one.  A driver that returns a status without touching the error at
+    // all -- which is exactly what adbc_driver_postgresql does for the entry points it
+    // has not implemented -- leaves that value in place with private_data still NULL, and
+    // asking such a driver for the error's details makes it dereference the state it
+    // never created.  A populated error always has a release; an untouched one never
+    // does, so that is what says whether there is anything to ask about.
     if (native_error->vendor_code != ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA) {
       error->vendor_code = native_error->vendor_code;
-    } else if (proxy->version >= ADBC_VERSION_1_1_0 && proxy->native->ErrorGetDetailCount &&
-               proxy->native->ErrorGetDetail) {
+    } else if (native_error->release && proxy->version >= ADBC_VERSION_1_1_0 &&
+               proxy->native->ErrorGetDetailCount && proxy->native->ErrorGetDetail) {
       int count = proxy->native->ErrorGetDetailCount(native_error);
       for (int i = 0; i < count; i++) {
         struct AdbcErrorDetail detail = proxy->native->ErrorGetDetail(native_error, i);

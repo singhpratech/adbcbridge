@@ -78,6 +78,16 @@
 /// See OdbcConnection::multirow_* for the probe that decides whether the server takes
 /// the multi-row form at all.
 #define ADBC_ODBC_OPTION_ROWS_PER_INSERT "adbc.odbc.rows_per_insert"
+/// Number of partitions AdbcStatementExecutePartitions should try to split the query
+/// into.  0 (the default) lets the driver choose from the table's size -- one partition
+/// per 64 MiB of heap, capped at 8; 1 disables splitting and always returns the original
+/// query as a single partition.  A query the driver cannot prove it can slice exactly
+/// falls back to one partition whatever this says.  See src/odbc_partition.c.
+#define ADBC_ODBC_OPTION_PARTITIONS "adbc.odbc.partitions"
+/// Rowsets to keep in flight on a background fetch thread, so that SQLFetch for the next
+/// rowset overlaps the Arrow conversion of the current one.  0 (the default) is off; 1 is
+/// double buffering.  See OdbcReaderOptions::prefetch.
+#define ADBC_ODBC_OPTION_PREFETCH "adbc.odbc.prefetch"
 /// Force the 32-bit-SQLLEN driver quirk on or off ("true"/"false").  Unset means
 /// autodetect from SQL_DRIVER_NAME; see OdbcReaderOptions::sqllen_32bit.
 #define ADBC_ODBC_OPTION_SQLLEN_32BIT "adbc.odbc.sqllen_32bit"
@@ -94,6 +104,14 @@
 /// Read-only: SQL_DRIVER_NAME of the underlying ODBC driver.  ADBC_INFO_DRIVER_NAME
 /// must be a stable identity for adbcbridge itself, so the backing driver's file
 /// name is exposed here (and, as context, in ADBC_INFO_VENDOR_NAME) instead.
+
+// Ceiling on `adbc.odbc.partitions`: a partition is a connection's worth of work, and
+// no useful split needs more of them than a large machine has cores.
+#define ADBC_ODBC_MAX_PARTITIONS 256
+// Ceiling on `adbc.odbc.prefetch`.  Each rowset in flight is another full set of bound
+// buffers (`adbc.odbc.rowset_bytes` of them), and one is already enough to hide the
+// fetch behind the conversion; more only helps when the two are very unevenly matched.
+#define ADBC_ODBC_MAX_PREFETCH 8
 
 #define ADBC_ODBC_DEFAULT_BATCH_SIZE 1024
 #define ADBC_ODBC_DEFAULT_MAX_BIND_BYTES 32768
@@ -306,6 +324,9 @@ struct OdbcReaderOptions {
   bool prefer_param_arrays;
   // SQL_MAX_STATEMENT_LEN, in bytes; 0 when the driver will not say.
   int64_t max_statement_len;
+  // Rowsets kept in flight on a background fetch thread (0 = off, the default).  See
+  // ADBC_ODBC_OPTION_PREFETCH and the prefetch section of src/odbc_reader.c.
+  int64_t prefetch;
 };
 
 // --- 32-bit-SQLLEN driver quirk accessors -----------------------------------
@@ -421,6 +442,8 @@ struct OdbcStatement {
   bool array_binding;
   /// Rows of parameters per INSERT for bulk ingest; 0 = automatic, 1 = disabled.
   int64_t rows_per_insert;
+  /// Partitions ExecutePartitions should aim for; 0 = automatic, 1 = never split.
+  int64_t partitions;
   // Bulk ingest
   char* ingest_table;
   char* ingest_catalog;
@@ -461,6 +484,20 @@ AdbcStatusCode OdbcDescribeResultSchema(SQLHSTMT hstmt, const struct OdbcReaderO
 /// N nullable utf8 fields named "0".."N-1".
 AdbcStatusCode OdbcDescribeParameterSchema(SQLHSTMT hstmt, const struct OdbcReaderOptions* opts,
                                            struct ArrowSchema* out, struct AdbcError* error);
+
+/// Split stmt->query into partition descriptors (src/odbc_partition.c).
+AdbcStatusCode OdbcStatementExecutePartitionsOdbc(struct OdbcStatement* stmt,
+                                                  struct ArrowSchema* schema,
+                                                  struct AdbcPartitions* partitions,
+                                                  int64_t* rows_affected,
+                                                  struct AdbcError* error);
+
+/// Execute one partition descriptor on `conn` and stream its rows.
+AdbcStatusCode OdbcConnectionReadPartitionOdbc(struct OdbcConnection* conn,
+                                               const uint8_t* serialized_partition,
+                                               size_t serialized_length,
+                                               struct ArrowArrayStream* out,
+                                               struct AdbcError* error);
 
 /// Build an ArrowArrayStream that fetches from an executed statement.
 /// Takes a reference on `ref`.

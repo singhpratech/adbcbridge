@@ -59,6 +59,22 @@ static AdbcStatusCode SetString(char** dst, const char* value) {
   return ADBC_STATUS_OK;
 }
 
+// Parse `adbc.odbc.prefetch`: rowsets to keep in flight on the fetch thread.
+static AdbcStatusCode OdbcParsePrefetchOption(const char* key, const char* value, int64_t* out,
+                                              struct AdbcError* error) {
+  char* end = NULL;
+  long long v = strtoll(value, &end, 10);
+  if (end == value || (end && *end) || v < 0 || v > ADBC_ODBC_MAX_PREFETCH) {
+    InternalAdbcSetError(error,
+                         "Invalid value \"%s\" for %s (expected 0 to disable, or up to %d "
+                         "rowsets in flight)",
+                         value, key, ADBC_ODBC_MAX_PREFETCH);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  *out = (int64_t)v;
+  return ADBC_STATUS_OK;
+}
+
 // Parse a "true"/"false" option that pins a quirk otherwise chosen by autodetection.
 static AdbcStatusCode OdbcParseBoolOption(const char* key, const char* value, bool* out,
                                           bool* forced, struct AdbcError* error) {
@@ -118,6 +134,8 @@ static AdbcStatusCode OdbcDatabaseSetOption(struct AdbcDatabase* database, const
     }
     db->reader_opts.batch_size = v;
     return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_PREFETCH) == 0) {
+    return OdbcParsePrefetchOption(key, value, &db->reader_opts.prefetch, error);
   } else if (strcmp(key, ADBC_ODBC_OPTION_MAX_BIND_BYTES) == 0) {
     long v = strtol(value, NULL, 10);
     if (v <= 0) {
@@ -415,6 +433,8 @@ static AdbcStatusCode OdbcConnectionSetOptionOdbc(struct AdbcConnection* connect
     if (v <= 0) return ADBC_STATUS_INVALID_ARGUMENT;
     conn->reader_opts.batch_size = v;
     return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_PREFETCH) == 0) {
+    return OdbcParsePrefetchOption(key, value, &conn->reader_opts.prefetch, error);
   } else if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
     return OdbcParseBoolOption(key, value, &conn->reader_opts.sqllen_32bit,
                                &conn->reader_opts.sqllen_32bit_forced, error);
@@ -1236,8 +1256,8 @@ static AdbcStatusCode OdbcConnectionReadPartition(struct AdbcConnection* connect
     return OdbcProxyConnectionReadPartition(conn->proxy, serialized_partition, serialized_length,
                                             out, error);
   }
-  InternalAdbcSetError(error, "Partitioned results are not supported over ODBC");
-  return ADBC_STATUS_NOT_IMPLEMENTED;
+  if (!conn) return ADBC_STATUS_INVALID_STATE;
+  return OdbcConnectionReadPartitionOdbc(conn, serialized_partition, serialized_length, out, error);
 }
 
 static AdbcStatusCode OdbcConnectionSetOptionInt(struct AdbcConnection* connection,
@@ -1314,6 +1334,10 @@ static AdbcStatusCode OdbcConnectionGetOptionInt(struct AdbcConnection* connecti
   if (conn->proxy) return OdbcProxyConnectionGetOptionInt(conn->proxy, key, value, error);
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) {
     *value = conn->reader_opts.batch_size;
+    return ADBC_STATUS_OK;
+  }
+  if (strcmp(key, ADBC_ODBC_OPTION_PREFETCH) == 0) {
+    *value = conn->reader_opts.prefetch;
     return ADBC_STATUS_OK;
   }
   if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
@@ -1450,6 +1474,20 @@ static AdbcStatusCode OdbcStatementSetOption(struct AdbcStatement* statement, co
     long v = strtol(value, NULL, 10);
     if (v <= 0) return ADBC_STATUS_INVALID_ARGUMENT;
     stmt->reader_opts.batch_size = v;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_PREFETCH) == 0) {
+    return OdbcParsePrefetchOption(key, value, &stmt->reader_opts.prefetch, error);
+  } else if (strcmp(key, ADBC_ODBC_OPTION_PARTITIONS) == 0) {
+    char* end = NULL;
+    long long v = strtoll(value, &end, 10);
+    if (end == value || (end && *end) || v < 0 || v > ADBC_ODBC_MAX_PARTITIONS) {
+      InternalAdbcSetError(error,
+                           "Invalid value \"%s\" for %s (expected 0 for automatic, 1 to "
+                           "disable splitting, or up to %d partitions)",
+                           value, key, ADBC_ODBC_MAX_PARTITIONS);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    stmt->partitions = (int64_t)v;
     return ADBC_STATUS_OK;
   } else if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
     return OdbcParseBoolOption(key, value, &stmt->reader_opts.sqllen_32bit,
@@ -1757,26 +1795,34 @@ static AdbcStatusCode OdbcStatementGetOptionInt(struct AdbcStatement* statement,
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) { *value = stmt->reader_opts.batch_size; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) { *value = stmt->array_binding ? 1 : 0; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_ROWS_PER_INSERT) == 0) { *value = stmt->rows_per_insert; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_PARTITIONS) == 0) { *value = stmt->partitions; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_PREFETCH) == 0) { *value = stmt->reader_opts.prefetch; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = stmt->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }
   InternalAdbcSetError(error, "Unknown statement option %s", key);
   return ADBC_STATUS_NOT_FOUND;
 }
 
-// Statement entry points ODBC does not implement, forwarded when a native driver
-// is behind this statement.
 static AdbcStatusCode OdbcStatementExecutePartitions(struct AdbcStatement* statement,
                                                      struct ArrowSchema* schema,
                                                      struct AdbcPartitions* partitions,
                                                      int64_t* rows_affected,
                                                      struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
-  if (stmt && stmt->proxy) {
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) {
     return OdbcProxyStatementExecutePartitions(stmt->proxy, schema, partitions, rows_affected,
                                                error);
   }
-  InternalAdbcSetError(error, "Partitioned results are not supported over ODBC");
-  return ADBC_STATUS_NOT_IMPLEMENTED;
+  if (!partitions) {
+    InternalAdbcSetError(error, "ExecutePartitions requires an output partitions struct");
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  memset(partitions, 0, sizeof(*partitions));
+  return OdbcStatementExecutePartitionsOdbc(stmt, schema, partitions, rows_affected, error);
 }
+
+// Statement entry points ODBC does not implement, forwarded when a native driver
+// is behind this statement.
 
 static AdbcStatusCode OdbcStatementSetSubstraitPlan(struct AdbcStatement* statement,
                                                     const uint8_t* plan, size_t length,
