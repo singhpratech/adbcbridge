@@ -71,3 +71,50 @@ the drivers report as `SQL_TINYINT`, so the entry expects `int8` for the `bo` co
 other tolerance flags are needed and no driver quirk is required in `src/`: both drivers
 pass every assertion, including the emoji round-trip, microsecond timestamps,
 `DECIMAL(10,3)`, NULL parameters, affected-row counts and the 5000-row batched read.
+## MonetDB
+
+Server (Dec2025-SP3, 11.55.x) on `127.0.0.1:15000`, database `adbc`, user `monetdb`:
+
+```sh
+docker run -d --name adbcbridge-monetdb \
+  -e MDB_DB_ADMIN_PASS=adbc -e MDB_CREATE_DBS=adbc \
+  -p 127.0.0.1:15000:50000 monetdb/monetdb:latest
+```
+
+`MDB_CREATE_DBS` names the databases to create and `MDB_DB_ADMIN_PASS` sets the password
+of their `monetdb` admin user — the entrypoint refuses to start if one is given without
+the other.
+
+The ODBC driver is not in the Debian/Ubuntu archives (MonetDB was removed from them);
+get it from MonetDB's own apt repository without root. `libMonetODBC.so` needs libmapi,
+libstream and libmutils from the same release, so unpack all four packages into one tree
+and point `LD_LIBRARY_PATH` at it:
+
+```sh
+mkdir -p /tmp/monetdb && cd /tmp/monetdb
+base=https://www.monetdb.org/downloads/deb/pool/noble/monetdb/m/monetdb
+for p in libmonetdb-client-odbc libmonetdb-client28 libmonetdb-stream28 libmonetdb-mutils; do
+  curl -sLO $base/${p}_11.55.7_amd64.deb
+  dpkg-deb -x ${p}_11.55.7_amd64.deb ex
+done
+```
+
+(Replace `noble` with your distribution's codename — the repository also carries
+`jammy`, `focal`, `bookworm`, `trixie` and others — and bump `11.55.7` to whatever
+version that codename currently ships; `dists/<codename>/monetdb/binary-amd64/Packages`
+lists them.)
+
+Run the entry:
+
+```sh
+export LD_LIBRARY_PATH=/tmp/monetdb/ex/usr/lib/x86_64-linux-gnu
+MONETDB_ODBC_DRIVER=/tmp/monetdb/ex/usr/lib/x86_64-linux-gnu/libMonetODBC.so \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py monetdb
+# monetdb   PASS  (MonetDB 11.55.0007)
+```
+
+The entry needs no tolerance flags and the driver needs no quirk: MonetDBODBClib handles
+typed parameters, NULL parameters, row counts, 5000-row batched reads and the standard
+catalog calls as they are. Identifiers fold to lower case, like the unquoted names the
+workload uses, so no `ident` mapping is needed either.

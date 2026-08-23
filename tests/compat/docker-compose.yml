@@ -17,3 +17,7 @@ services:
     image: mysql:8
     environment: { MYSQL_ROOT_PASSWORD: adbc, MYSQL_DATABASE: adbc, MYSQL_USER: adbc, MYSQL_PASSWORD: adbc }
     ports: ["127.0.0.1:13307:3306"]
+  monetdb:
+    image: monetdb/monetdb:latest
+    environment: { MDB_DB_ADMIN_PASS: adbc, MDB_CREATE_DBS: adbc }
+    ports: ["127.0.0.1:15000:50000"]

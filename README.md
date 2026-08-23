@@ -63,6 +63,9 @@ reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
 Per-database driver setup and the exact commands are in
+| MonetDB 11.55 (Dec2025-SP3) | MonetDBODBClib 11.55 | PASS |
+
+Per-database setup (including how to fetch each ODBC driver without root) is in
 [`tests/compat/README.md`](tests/compat/README.md).
 
 ## Build
