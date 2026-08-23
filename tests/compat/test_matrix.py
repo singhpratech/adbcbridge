@@ -4,8 +4,10 @@ Usage:
     ADBC_ODBC_DRIVER=build/libadbc_driver_odbc.so python tests/compat/test_matrix.py [db ...]
 
 Each database is enabled by an environment variable holding the path to its ODBC driver:
-    SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, PSQL_ODBC_DRIVER, MARIADB_ODBC_DRIVER, MSSQL_ODBC_DRIVER
+    SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, PSQL_ODBC_DRIVER, MARIADB_ODBC_DRIVER,
+    ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER, MSSQL_ODBC_DRIVER, COCKROACH_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars).
+See README.md in this directory for how to obtain each driver without root.
 """
 import os, sys, tempfile, pathlib, datetime, decimal
 import pyarrow as pa
@@ -57,6 +59,14 @@ DBS = {
     "monetdb": dict(
         env="MONETDB_ODBC_DRIVER", conn="Driver={drv};Host=127.0.0.1;Port=15000;Database=adbc;Uid=monetdb;Pwd=adbc;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b BLOB, d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"),
+    "cockroachdb": dict(
+        # Wire-compatible with PostgreSQL, so it uses psqlodbc; INTEGER is 64-bit here.
+        # The PRIMARY KEY is required, not decorative: a CockroachDB table declared without
+        # one gets a synthesised hidden "rowid" column (NOT VISIBLE, DEFAULT unique_rowid()),
+        # which information_schema.columns -- and therefore SQLColumns/GetObjects -- reports
+        # as a 9th column even though SELECT * never returns it.
+        env="COCKROACH_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=16257;Database=defaultdb;Uid=root;",
+        ddl="CREATE TABLE adbc_t (i INTEGER PRIMARY KEY, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)"),
 }
 
 # Typed values: ADBC clients send Arrow-typed parameters, so dates/timestamps go as

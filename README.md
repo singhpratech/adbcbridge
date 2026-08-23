@@ -60,6 +60,7 @@ reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
 | Oracle 23ai Free | Instant Client ODBC 23 | PASS (set `NLS_LANG=.AL32UTF8` for non-ASCII; 64-bit ints sent as numeric text — driver lacks `SQL_C_SBIGINT`) |
 | ClickHouse 26 | clickhouse-odbc 1.5 | PASS (NULL params need `SQLDescribeParam`; no affected-row counts; `Nullable()` DDL wrapper on ingest) |
 | MySQL 8.4 | MySQL Connector/ODBC 9.4 (and MariaDB Connector/ODBC 3.1) | PASS |
+| CockroachDB 26.3 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; declare a PRIMARY KEY or the synthesised hidden `rowid` shows up in `GetObjects`) |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
 Per-database driver setup and the exact commands are in

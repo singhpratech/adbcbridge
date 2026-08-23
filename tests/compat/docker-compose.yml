@@ -21,3 +21,7 @@ services:
     image: monetdb/monetdb:latest
     environment: { MDB_DB_ADMIN_PASS: adbc, MDB_CREATE_DBS: adbc }
     ports: ["127.0.0.1:15000:50000"]
+  cockroachdb:
+    image: cockroachdb/cockroach:latest
+    command: start-single-node --insecure --cache=128MiB --max-sql-memory=128MiB
+    ports: ["127.0.0.1:16257:26257", "127.0.0.1:18080:8080"]
