@@ -39,7 +39,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 
 | Database | Wire / driver | Server | Status |
 |---|---|---|---|
-| H2 (PG mode) | psqlodbc | `java -jar h2.jar -pg` | queued |
 | CrateDB | psqlodbc | `crate` | queued |
 | QuestDB | psqlodbc | `questdb/questdb` | queued |
 | Citus | psqlodbc | `citusdata/citus` | queued |
@@ -91,5 +90,6 @@ Not verified; expected to work on the generic path.
 
 | Database / driver | Why |
 |---|---|
+| H2 2.4 (PG mode) + psqlodbc | psqlodbc's connect handshake sends `SET DateStyle = 'ISO';SET extra_float_digits = 2;show transaction_isolation`, and H2's parser rejects the last two in every `MODE` (no `SHOW`, and `SET` takes only H2's own setting names). `SQLDriverConnect` therefore fails with `42001` and adbcbridge never gets a handle, so no quirk can apply. H2 has no ODBC driver of its own. See `tests/compat/README.md` for the wire-level repro |
 | Elasticsearch SQL ODBC | Windows-only driver |
 | Microsoft Text/Excel ODBC | Windows-only; on Linux read CSV/Parquet/Excel through DuckDB's ODBC driver instead |
