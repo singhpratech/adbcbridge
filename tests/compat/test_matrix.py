@@ -160,7 +160,24 @@ DBS = {
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)"),
     "postgres": dict(
         env="POSTGRES_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15432;Database=adbc;Uid=adbc;Pwd=adbc;",
-        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"),
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        # psqlodbc describes BYTEA as SQL_LONGVARBINARY of column_size 0 however long its
+        # values are, so the reader binds it at a guessed width and re-reads what
+        # overflows -- and gives the binding up part-way down a result set whose values
+        # never fit (AdaptBindWidth in src/odbc_reader.c).  500 rows, every hundredth of
+        # them 40,000 bytes: the first row is one of the big ones, so the assertion is
+        # that a value 20x the bound width comes back whole through the path the rest of
+        # the table pushed the reader onto.  tests/test_long_columns.py has the rest.
+        extra=[
+            ('DROP TABLE IF EXISTS "adbc_long{sfx}"', None),
+            ('CREATE TABLE "adbc_long{sfx}" (i INTEGER, b BYTEA)', None),
+            ('INSERT INTO "adbc_long{sfx}" SELECT g,'
+             " convert_to(CASE WHEN g % 100 = 1 THEN repeat('ab', 20000)"
+             "                 ELSE repeat('cd', 50) END, 'UTF8')"
+             ' FROM generate_series(1, 500) g', None),
+            ('SELECT "i", "b" FROM "adbc_long{sfx}" ORDER BY "i"', (1, b"ab" * 20000)),
+            ('DROP TABLE IF EXISTS "adbc_long{sfx}"', None),
+        ]),
     "mariadb": dict(
         env="MARIADB_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=13306;Database=adbc;User=adbc;Password=adbc;",
         ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",

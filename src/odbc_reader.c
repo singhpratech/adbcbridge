@@ -216,6 +216,9 @@ struct OdbcColumn {
   // the repair path -- which is why prefetch, whose fetch thread has already moved the
   // cursor past the rowset being converted, engages only when no column is clipped.
   bool clipped;
+  // Bytes that had to be re-read because the value outgrew the bound buffer, counted
+  // over the adaptation window only.  See AdaptBindWidth().
+  int64_t trunc_bytes;
   void* buffer;      // elem_size * rows
   SQLLEN* indicators;
   enum ArrowTimeUnit unit;
@@ -1023,6 +1026,20 @@ struct OdbcRowsetSlot {
   bool needs_repair;
 };
 
+// Rows the bind-width decision below is taken on, and the rowset it takes them in.  The
+// window is the whole cost of the decision -- every row of it that truncates is read
+// twice -- so it is fetched in small rowsets to keep that cost off result sets that are
+// themselves only a few thousand rows: 3,000 rows of 64 KiB `bytea` learn in 2 x 128
+// rows (0.02 s of the 0.72 s read) where one 1,024-row rowset would have cost 0.09 s.
+// The Arrow batches do not change size: the probe rowsets fill the first batch to
+// `batch_size` between them, and the full rowset comes back for the batch after it.
+#define ODBC_ADAPT_WINDOW_ROWS 256
+#define ODBC_ADAPT_PROBE_ROWS 128
+
+// Bytes a truncated value may cost the re-read for each row the block cursor keeps.
+// See AdaptBindWidth() for where 256 comes from.
+#define ODBC_ADAPT_REREAD_BUDGET 256
+
 struct OdbcReader {
   struct OdbcHandleRef* ref;
   struct OdbcReaderOptions opts;
@@ -1042,6 +1059,14 @@ struct OdbcReader {
   // block cursor in the first place: see ReaderNextBatch().
   int64_t rowsets_read;
   int64_t rowsets_repaired;
+  // A column bound at a guessed width could still be given up on: see AdaptBindWidth().
+  // `adapt_rows` is how many rows that decision has been able to look at so far, and
+  // while it is open the rowset is the small probe one -- `rowset_full` is the size the
+  // next batch goes back to once the columns have kept their bindings.
+  bool adapt_open;
+  int64_t adapt_rows;
+  bool rowset_restore;
+  SQLULEN rowset_full;
   // Set when the driver rejected SQL_ATTR_ROWS_FETCHED_PTR and therefore never reports
   // how many rows SQLFetch produced; then each successful SQLFetch means exactly one row.
   bool no_rows_fetched_ptr;
@@ -1171,6 +1196,23 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
     capacity = (SQLULEN)r->opts.min_buffer_rows;
   }
 
+  // Arm the width adaptation (AdaptBindWidth) if a column was bound at a guessed width
+  // and giving that binding up could buy anything: the repair route has to be the
+  // in-place one (getdata_repair; the others have their own remedy, see AdaptBindWidth)
+  // and a one-row rowset has nothing to give up.  While the decision is open the rowset
+  // is the small probe one, so that the rows it is taken on are few; the buffers are
+  // still allocated for the full rowset the batch after it goes back to.
+  r->rowset_full = r->rows_per_fetch;
+  if (r->opts.getdata_repair && r->rows_per_fetch > 1) {
+    for (SQLSMALLINT i = 0; i < r->ncols; i++) {
+      if (r->cols[i].bound && r->cols[i].clipped) r->adapt_open = true;
+    }
+  }
+  if (r->adapt_open && r->opts.min_buffer_rows <= 0 &&
+      r->rows_per_fetch > (SQLULEN)ODBC_ADAPT_PROBE_ROWS) {
+    r->rows_per_fetch = (SQLULEN)ODBC_ADAPT_PROBE_ROWS;
+  }
+
   // Column-wise binding is the ODBC default; some drivers (DuckDB) reject setting it
   // explicitly, so this is best-effort.
   SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_BIND_TYPE, (SQLPOINTER)SQL_BIND_BY_COLUMN, 0);
@@ -1190,6 +1232,11 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
     SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)1, 0);
   }
 
+  if (r->rows_per_fetch <= 1) {  // a driver that refused the block cursor outright
+    r->adapt_open = false;
+    r->rowset_full = 1;
+  }
+
   // Decide how many rowset slots to allocate.  Prefetch asks for one set of bound
   // buffers per rowset in flight, and only engages where the whole rowset can be
   // converted out of memory once the fetch thread has moved on -- see the prefetch
@@ -1203,6 +1250,7 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
       r->nslots = depth + 1;
     }
   }
+  if (r->nslots > 1) r->adapt_open = false;  // prefetch refuses a clipped column anyway
   r->slots = calloc((size_t)r->nslots, sizeof(struct OdbcRowsetSlot));
   if (!r->slots) {
     InternalAdbcSetError(error, "out of memory");
@@ -2052,10 +2100,139 @@ static ArrowErrorCode ReserveBatch(struct OdbcReader* r, struct ArrowArray* batc
   return NANOARROW_OK;
 }
 
+// Give up on a column bound at a guessed width, and on every column after it, for the
+// rest of this result set: unbind them and read them with SQLGetData instead.  ODBC (and
+// SQL Server strictly) wants the SQLGetData columns after all the bound ones and read in
+// increasing order, which is the same rule DescribeColumns() applies up front.
+//
+// The rowset collapses to one row with them, which is the whole cost of this and the
+// reason ApplyBindWidth() binds such a column in the first place.  It is not avoidable
+// by unbinding the one column and keeping the block cursor for the rest: psqlodbc --
+// which does support SQLSetPos + SQLGetData on a *bound* column of a block cursor, and
+// is why this reader can repair a truncated value at all -- answers SQL_NO_DATA for
+// every row after the first when the column is not bound.  Measured on the same driver,
+// keeping the block cursor would not have paid anyway: with the column bound one byte
+// wide, so that the buffer write costs nothing and every row is repaired, 50,000 rows of
+// 3 KiB `bytea` still took 1.04 s against 0.71 s unbound.  What the repair costs is the
+// SQLGetData against a block cursor, not the buffer it truncates into.
+static AdbcStatusCode ReaderUnbindFrom(struct OdbcReader* r, SQLSMALLINT from,
+                                       struct AdbcError* error) {
+  SQLHSTMT hstmt = r->ref->hstmt;
+  // Only give the binding up if the cursor can actually be collapsed; SQLGetData needs
+  // the one-row rowset (see above), so a driver that refuses is left as it was.
+  if (r->rows_per_fetch > 1) {
+    if (!SQL_SUCCEEDED(SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)1, 0))) {
+      r->rowset_restore = true;  // keep the bindings, and the rowset they were sized for
+      return ADBC_STATUS_OK;
+    }
+    r->rows_per_fetch = 1;
+  }
+  for (SQLSMALLINT i = from; i < r->ncols; i++) {
+    if (!r->cols[i].bound) continue;
+    ODBC_CHECK(SQLBindCol(hstmt, (SQLUSMALLINT)(i + 1), r->cols[i].c_type, NULL, 0, NULL),
+               SQL_HANDLE_STMT, hstmt, "SQLBindCol(unbind)", error);
+    r->cols[i].bound = false;
+    r->cols[i].clipped = false;
+    for (int sl = 0; sl < r->nslots; sl++) {
+      free(r->slots[sl].buffers[i]);
+      r->slots[sl].buffers[i] = NULL;
+    }
+  }
+  r->all_bound = false;
+  ReaderUseSlot(r, r->cur_slot);  // repoint the columns; the freed ones become NULL
+  return ADBC_STATUS_OK;
+}
+
+// Watch what a column bound at a guessed width actually costs, and stop binding it if
+// the values do not fit in it.
+//
+// `ApplyBindWidth` binds a length-less column -- psqlodbc's `bytea` (column_size 0) and
+// its `text` (8190), sqliteodbc's every TEXT column -- at a width it invented, because
+// one unbound column costs the whole result set its block cursor.  That is a good bet
+// when the values fit.  It is a bad bet when they do not, because the driver then reads
+// a truncated value twice: once decoding it into the rowset buffer (which it does in
+// full, to report the length it did not fit) and once again for the SQLGetData that
+// repairs it, where an unbound column would have decoded it exactly once.  Measured on
+// PostgreSQL 16 through psqlodbc 16, 50,000 rows of (int4, bytea), median of 7:
+//
+//   value size    64 B    512 B    1 KiB    2 KiB   |   3 KiB    4 KiB   16 KiB*  64 KiB*
+//   unbound     0.028 s  0.113 s  0.199 s  0.477 s  |  0.742 s  0.815 s  0.692 s  0.722 s
+//   bound       0.023 s  0.100 s  0.182 s  0.447 s  |  1.091 s  1.180 s  0.972 s  0.994 s
+//                 1.24x    1.13x    1.09x    1.07x  |    0.68x    0.69x    0.71x    0.73x
+//   (* 12,000 and 3,000 rows; `bound` truncates at long_bind_bytes = 2 KiB.  The full
+//   sweep, the mixed tables and the controls are in bench/BENCHMARKS.md.)
+//
+// The rule is *the bytes that had to be re-read*, not the fraction of rows that
+// truncated.  What a truncation costs is the second decode, which is proportional to the
+// value -- 7 us for a 3 KiB value, 54 us for a 64 KiB one, i.e. about 0.8 us/KiB over a
+// 5 us fixed part -- while what the block cursor saves is a flat ~0.2 us per row that
+// does not truncate.  So the two sides cross over at roughly 256 re-read bytes per row,
+// and a row-fraction rule would get the case this exists to protect exactly backwards: a
+// table where 1% of the rows hold 64 KiB and the rest 64 B truncates on 1% of its rows
+// and still reads 21% slower bound (0.183 s) than unbound (0.151 s), because 1% of
+// 64 KiB is 655 bytes per row of double decoding and 99% of a 0.2 us saving is not.
+// Every table measured here lands at least 1.6x clear of the 256-byte line on one side
+// or the other, which is the sense in which the constant is not load-bearing.
+//
+// The decision is per column and per result set, and once taken it is never revisited: a
+// column that does not truncate in the window keeps exactly the binding it has today,
+// and a result set with no clipped column never arms this at all (see ReaderBind).
+// Columns after the one that loses its binding have to follow it -- ODBC wants the
+// SQLGetData columns last and in increasing order -- but columns before it keep theirs.
+//
+// Drivers that repair a truncated value by re-reading its whole rowset instead
+// (refetch_repair -- sqliteodbc, MariaDB Connector/ODBC) are not covered here and do not
+// need to be: their cost is per *rowset*, not per row, and ReaderNextBatch() already
+// drops them to one row per fetch once three rowsets in four have had to be repaired.
+static AdbcStatusCode AdaptBindWidth(struct OdbcReader* r, SQLULEN fetched,
+                                     struct AdbcError* error) {
+  const struct OdbcRowsetSlot* slot = &r->slots[r->cur_slot];
+  for (SQLSMALLINT i = 0; i < r->ncols; i++) {
+    struct OdbcColumn* c = &r->cols[i];
+    if (!c->bound || !c->clipped) continue;
+    if (c->c_type != SQL_C_CHAR && c->c_type != SQL_C_WCHAR && c->c_type != SQL_C_BINARY) {
+      continue;
+    }
+    for (SQLULEN row = 0; row < fetched; row++) {
+      SQLLEN ind = OdbcIndicatorGet(slot->indicators[i], (size_t)row, r->opts.sqllen_32bit);
+      if (!BoundValueTruncated(c, ind)) continue;
+      // A driver that answers SQL_NO_TOTAL (or a negative length) is saying only that
+      // the value did not fit; charge it the buffer, which is what it did write.
+      c->trunc_bytes += (ind > c->elem_size) ? (int64_t)ind : (int64_t)c->elem_size;
+    }
+  }
+  r->adapt_rows += (int64_t)fetched;
+  if (r->adapt_rows < ODBC_ADAPT_WINDOW_ROWS) return ADBC_STATUS_OK;
+
+  r->adapt_open = false;
+  for (SQLSMALLINT i = 0; i < r->ncols; i++) {
+    const struct OdbcColumn* c = &r->cols[i];
+    if (!c->bound || !c->clipped) continue;
+    if (c->trunc_bytes > r->adapt_rows * ODBC_ADAPT_REREAD_BUDGET) {
+      return ReaderUnbindFrom(r, i, error);
+    }
+  }
+  // Every clipped column earns its binding: go back to the full rowset, at the next
+  // batch boundary so that this batch keeps the size it would have had.
+  r->rowset_restore = true;
+  return ADBC_STATUS_OK;
+}
+
 static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* out,
                                       struct AdbcError* error) {
   SQLHSTMT hstmt = r->ref->hstmt;
   if (!r->bound) RAISE_ADBC(ReaderBind(r, error));
+
+  // The width adaptation is over and every column kept its binding: take the full rowset
+  // back, here rather than where that was decided so the batch it was decided in keeps
+  // the size it would otherwise have had.
+  if (r->rowset_restore) {
+    r->rowset_restore = false;
+    if (SQL_SUCCEEDED(SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)r->rowset_full,
+                                     0))) {
+      r->rows_per_fetch = r->rowset_full;
+    }
+  }
 
   struct ArrowArray batch;
   batch.release = NULL;
@@ -2117,6 +2294,12 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
     }
     status = ConvertRowset(r, fetched, bulk, &batch, &total, error);
     if (status != ADBC_STATUS_OK) break;
+    // The rowset has been converted out of the bound buffers, so they can now be given
+    // up if this column's values do not fit in them (AdaptBindWidth).
+    if (r->adapt_open && bulk) {
+      status = AdaptBindWidth(r, fetched, error);
+      if (status != ADBC_STATUS_OK) break;
+    }
     if (r->rows_per_fetch == 1 && total >= r->opts.batch_size) break;
   }
   if (status != ADBC_STATUS_OK) {

@@ -442,17 +442,121 @@ A width of 0 from a type that *does* have a declared length still means the
 driver is saying nothing usable, and such a column stays unbound.
 
 Worth **1.19x** on a realistic seven-column row with one `bytea` in it and
-**1.31x** on `(id, bytea)`, and it costs nothing anywhere else. Output is
-byte-identical: a table of 5/200/2,000/20,000-byte `bytea` and
-10/300/5,000/40,000-character `text` values, with NULLs and empty values, hashes
-the same before and after at `batch_size` 1024 and at 7, and the Arrow schema is
-unchanged.
+**1.31x** on `(id, bytea)`. Output is byte-identical: a table of
+5/200/2,000/20,000-byte `bytea` and 10/300/5,000/40,000-character `text` values,
+with NULLs and empty values, hashes the same before and after at `batch_size`
+1024 and at 7, and the Arrow schema is unchanged.
+
+It did **not** cost nothing anywhere else, which the paragraph above used to
+claim: every value in those tables fitted in the bound width or was rare enough
+not to matter. Values that do not fit cost 1.4x, and the next section is what was
+done about that.
 
 psqlodbc's `ByteaAsLongVarBinary=0` reaches the same block cursor from the other
 end — it makes `bytea` a `SQL_VARBINARY(255)` — and was measured at 0.5425 s
 against 0.5304 s for the reader fix on the seven-column query, i.e. no better,
 while it also moves `SQLGetTypeInfo`'s name for `SQL_LONGVARBINARY` from `bytea`
 to `lo` and so breaks the DDL bulk ingest generates. It is not set.
+
+### The other side of the cliff: values that never fit
+
+Binding a guessed width is a bet, and the bet loses when the values are bigger
+than the guess. The driver then reads every value **twice**: once decoding it
+into the rowset buffer — in full, because it has to report the length that did
+not fit — and once more for the `SQLGetData` that repairs it. An unbound column
+decodes it once. A 2 KiB buffer in front of 3 KiB values is therefore *worse*
+than no buffer at all, and by more than the block cursor is worth.
+
+`AdaptBindWidth()` (src/odbc_reader.c) takes the bet and then checks it: it
+watches what the first 256 rows of the result set actually cost and, if the
+values do not fit, unbinds the column for the rest of the read — back to
+`SQLGetData` and a one-row rowset, which is what the reader did before the
+change above. The decision is per column and per result set, taken once, and
+only where the repair route is the in-place one (`getdata_repair`; drivers that
+repair by re-reading a whole rowset already drop to one row per fetch after four
+repaired rowsets, and their cost is per rowset rather than per row).
+
+**The rule is bytes re-read, not rows truncated.** A truncation costs the second
+decode, which is proportional to the value — 7 µs for a 3 KiB value, 54 µs for a
+64 KiB one, about 0.8 µs/KiB over a 5 µs fixed part — while the block cursor
+saves a flat ~0.2 µs on each row that does *not* truncate. The two cross at
+roughly **256 re-read bytes per row**, which is the threshold. A "most rows
+truncate" rule would get the mixed case backwards: a table where 1% of the rows
+hold 64 KiB and the rest 64 B truncates on 1 row in 100 and is still 21% slower
+bound, because 1% of 64 KiB is 655 bytes per row of double decoding.
+
+The 256 rows the decision is taken on are fetched in 128-row rowsets rather than
+the full one, so that a result set of only a few thousand rows does not pay for
+the window: 3,000 rows of 64 KiB learn in 0.02 s instead of 0.09 s. Arrow batch
+sizes do not change — the probe rowsets fill the first batch between them.
+
+50,000 rows of `(int4, bytea)`, `batch_size` 1024, medians of 7 interleaved runs,
+fresh process per rep, `taskset -c 3`, PostgreSQL 16 in Docker, psqlodbc 16.00,
+`adbc.odbc.delegate=never`, connection strings identical across variants. Each
+value is distinct and self-identifying (a re-read that landed on the wrong row
+would be caught) and the column is `STORAGE EXTERNAL`, so the server does not
+compress the values away:
+
+The multiplier is speed against the unbound column, so above 1.00x is faster than
+leaving the column unbound and below it is slower:
+
+| value size | unbound (before a9d1af5) | always bound (a9d1af5) | adaptive (now) |
+|---|---:|---:|---:|
+| 64 B | 0.0279 s | 0.0225 s (1.24x) | 0.0216 s (**1.29x**) |
+| 512 B | 0.1125 s | 0.0997 s (1.13x) | 0.0946 s (1.19x) |
+| 1 KiB | 0.1989 s | 0.1824 s (1.09x) | 0.1799 s (1.11x) |
+| 2 KiB | 0.4768 s | 0.4474 s (1.07x) | 0.4413 s (1.08x) |
+| 3 KiB | 0.7419 s | 1.0906 s (**0.68x**) | 0.7199 s (**1.03x**) |
+| 4 KiB | 0.8150 s | 1.1802 s (0.69x) | 0.8172 s (1.00x) |
+| 16 KiB (12,000 rows) | 0.6924 s | 0.9721 s (0.71x) | 0.6895 s (1.00x) |
+| 64 KiB (3,000 rows) | 0.7223 s | 0.9942 s (0.73x) | 0.7512 s (0.96x) |
+
+The 2 KiB row is the last one that fits: `long_bind_bytes` is 2,048 and a 2,048-byte
+value does not truncate. Everything below the line keeps a9d1af5's win; everything
+above it is back to what an unbound column cost, and the 64 KiB read — 4% short of
+it in this run, 0.7397 s against 0.7401 s in a repeat — is the one where the
+window is visible at all: 3,000 rows is twelve probe rowsets, so 8% of the table is
+read before the decision.
+
+Mixed tables, 50,000 rows, same conditions — the case an adaptive rule can get
+wrong, since the column is worth giving up long before most rows truncate:
+
+| shape | unbound | always bound | adaptive |
+|---|---:|---:|---:|
+| 1% of rows 64 KiB, 99% 64 B | 0.1510 s | 0.1833 s (0.82x) | 0.1518 s (0.99x) |
+| 10% of rows 4 KiB | 0.1140 s | 0.1302 s (0.88x) | 0.1079 s (1.06x) |
+| 25% of rows 4 KiB | 0.2386 s | 0.3167 s (0.75x) | 0.2226 s (1.07x) |
+| 50% of rows 4 KiB | 0.4623 s | 0.6295 s (0.73x) | 0.4511 s (1.02x) |
+
+And the columns that must not move (medians of 13):
+
+| query | unbound | always bound | adaptive |
+|---|---:|---:|---:|
+| `(int4, float8, varchar(20), date)`, 200,000 rows | 0.1026 s | 0.1033 s | 0.1028 s |
+| `text`, 512 characters, 50,000 rows | 0.0450 s | 0.0454 s | 0.0452 s |
+| seven columns with a 64-byte `bytea`, 200,000 rows | 0.2905 s | 0.2332 s | 0.2360 s |
+| `text`, 40,000 characters, 3,000 rows | 0.3277 s | 0.3243 s | **0.1876 s** |
+
+The four-column query has no length-less column and never enters the machinery.
+The 512-character `text` column is bound at the 8,198 bytes psqlodbc's 8,190 implies
+and never truncates, so nothing about it changes. The last row is a case the
+`text` binding had always been losing: 40,000-character values truncate into that
+8 KiB buffer on every row, and giving the binding up is worth **1.75x** — a gain
+that has nothing to do with `bytea` and was there before a9d1af5.
+
+Two things that were tried and did not work, before settling on the one-row rowset:
+
+* **Unbinding the column but keeping the block cursor for the others.** psqlodbc
+  supports `SQLSetPos` + `SQLGetData` on a *bound* column of a block cursor —
+  that is the repair route the reader relies on — but answers `SQL_NO_DATA` for
+  every row after the first when the column is not bound. So a column that stops
+  being bound takes the rowset down to one row with it, and the columns after it
+  (ODBC wants the `SQLGetData` columns last, in increasing order).
+* **Binding the column one byte wide** instead of unbinding it, so that the
+  buffer write costs nothing and every row goes through the repair path. Still
+  1.04 s on the 3 KiB table against 0.71 s unbound: what the repair costs is the
+  second decode and the `SQLGetData` against a block cursor, not the buffer it
+  truncates into.
 
 ### Streaming reads: `UseDeclareFetch=1` is now free
 
