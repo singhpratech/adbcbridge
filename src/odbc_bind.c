@@ -2183,6 +2183,14 @@ static bool TypeNameOne(SQLHDBC hdbc, const struct OdbcReaderOptions* opts, SQLS
       char* paren = strchr(name, '(');
       if (paren) *paren = '\0';
       bool has_params = ind2 > 0;
+      // CREATE_PARAMS is prose, and ODBC does not say in which case: psqlodbc and
+      // msodbcsql write "length" and "precision,scale", IBM's CLI driver writes
+      // "LENGTH".  The tests below are all lowercase, so fold the driver's answer to
+      // match -- otherwise a Db2 VARCHAR is asked for with no length at all and the
+      // CREATE TABLE fails with SQL0604N.
+      for (char* c = params; *c; c++) {
+        if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
+      }
       // A datetime type whose only CREATE_PARAMS entry is the fractional-seconds
       // precision (msodbcsql reports "scale" for time/datetime2, clickhouse-odbc for
       // DateTime64).  Without it the type is created at its default scale, which is
@@ -2210,6 +2218,24 @@ static bool TypeNameOne(SQLHDBC hdbc, const struct OdbcReaderOptions* opts, SQLS
   }
   SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
   return done;
+}
+
+// The widest value the driver says one of its types can hold (SQLGetTypeInfo's
+// COLUMN_SIZE).  0 when the driver has no such type or will not say.
+static int64_t TypeMaxLength(SQLHDBC hdbc, SQLSMALLINT sql_type, bool q) {
+  SQLHSTMT hstmt = NULL;
+  int64_t max_len = 0;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return 0;
+  if (SQL_SUCCEEDED(SQLGetTypeInfo(hstmt, sql_type)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
+    SQLINTEGER size = 0;
+    SQLLEN ind = 0;
+    if (SQL_SUCCEEDED(OdbcGetData(hstmt, 3, SQL_C_SLONG, &size, 0, &ind, q)) &&
+        ind != SQL_NULL_DATA && size > 0) {
+      max_len = (int64_t)size;
+    }
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+  return max_len;
 }
 
 // Try a chain of candidate SQL types (e.g. BIGINT, then NUMERIC(19,0) for Oracle).
@@ -2269,8 +2295,27 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
     // Databend all name the type DOUBLE and accept "DOUBLE PRECISION" only as an alias.
     case NANOARROW_TYPE_DOUBLE: CHAIN("DOUBLE", SQL_DOUBLE, SQL_FLOAT); break;
     case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING:
-    case NANOARROW_TYPE_STRING_VIEW:
-      CHAIN("TEXT", SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_VARCHAR); break;
+    case NANOARROW_TYPE_STRING_VIEW: {
+      // ddl_string_type_name: the driver's SQL_LONGVARCHAR names a type this server
+      // barely supports (SQL Server's TEXT), and the replacement has a fixed spelling.
+      if (opts->ddl_string_type_name) {
+        snprintf(out, out_size, "%s", opts->ddl_string_type_name);
+        break;
+      }
+      // ddl_string_as_max_varchar: this driver's SQL_LONGVARCHAR names a type the server
+      // cannot write at bulk speed (Db2's LONG VARCHAR), so ask for its widest VARCHAR
+      // instead, and fall through to the usual chain if it has none.
+      if (opts->ddl_string_as_max_varchar) {
+        const int64_t max_len = TypeMaxLength(hdbc, SQL_VARCHAR, q);
+        if (max_len > 0 &&
+            TypeNameOne(hdbc, opts, SQL_VARCHAR, &(const struct TypeParams){.length = max_len}, q,
+                        out, out_size)) {
+          break;
+        }
+      }
+      CHAIN("TEXT", SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_VARCHAR);
+      break;
+    }
     case NANOARROW_TYPE_BINARY: case NANOARROW_TYPE_LARGE_BINARY: case NANOARROW_TYPE_FIXED_SIZE_BINARY:
     case NANOARROW_TYPE_BINARY_VIEW:
       CHAIN("BLOB", SQL_LONGVARBINARY, SQL_VARBINARY); break;
