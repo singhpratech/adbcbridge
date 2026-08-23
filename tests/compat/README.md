@@ -322,7 +322,7 @@ to the row-at-a-time path, exactly as `null_param_as_varchar` does; nothing is l
 because a driver that substitutes parameters into the SQL text sends one statement per
 parameter set either way.
 
-**MySQL type names in ingest DDL** (`ignore_driver_type_names`). `SQLGetTypeInfo` answers
+**MySQL type names in ingest DDL** (`ansi_ddl_type_names`). `SQLGetTypeInfo` answers
 with MySQL's type system whatever the server is -- `bit` for `SQL_BIT`, `long varchar` for
 `SQL_LONGVARCHAR`, `long varbinary`, `datetime` -- and Databend rejects most of those
 names:

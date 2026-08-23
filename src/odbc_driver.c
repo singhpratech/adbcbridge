@@ -620,7 +620,7 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     conn->reader_opts.temporal_binary_param_as_varchar = true;
     // Its SQLGetTypeInfo answers with MySQL's type system whatever the server is, so
     // ingest DDL has to fall back to portable type names.
-    conn->reader_opts.ignore_driver_type_names = true;
+    conn->reader_opts.ansi_ddl_type_names = true;
   }
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
