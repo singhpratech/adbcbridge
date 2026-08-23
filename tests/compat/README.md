@@ -2583,3 +2583,193 @@ For binary the entry declares `BYTE`, Informix's byte-string type (there is no
 does not configure). The clidriver describes it with IBM's own `SQL_BLOB` type code
 `-98`, which the reader now treats as a binary column — left unrecognised it fell through
 to the text default, where the driver hands the bytes back hex-encoded (`"0102"`).
+
+## ArcadeDB 26.9
+
+ArcadeDB is a multi-model database — the same records are reachable as documents, as a
+property graph, as key-value pairs — with a PostgreSQL wire listener bolted on by a
+plugin. That listener is why it is in this matrix: psqlodbc, the driver the `postgres`
+entry uses, drives it unchanged. Nothing above the wire is PostgreSQL's, and the entry is
+`read_only` because of it.
+
+Server:
+
+```sh
+docker run -d --name adbcbridge-arcadedb --memory=1g -p 127.0.0.1:15441:5432 \
+  -e JAVA_OPTS="-Darcadedb.server.rootPassword=Adbc2026 \
+    -Darcadedb.server.defaultDatabases=adbc[adbc:adbc] \
+    -Darcadedb.postgres.port=5432 \
+    -Darcadedb.server.plugins=Postgres:com.arcadedb.postgres.PostgresProtocolPlugin" \
+  arcadedata/arcadedb:latest
+```
+
+(or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d arcadedb`;
+it is in the `extra` profile, so a plain `up -d` leaves it alone). It is ready in about
+ten seconds — `ArcadeDB Server started` in `docker logs`, preceded by
+`Listening for incoming connections on 0.0.0.0:5432`. Three things about that command are
+not optional:
+
+* `arcadedb.server.plugins=Postgres:...` — the PostgreSQL protocol plugin is **not**
+  loaded by default. Without it 5432 is closed and there is nothing to connect to.
+* `arcadedb.server.rootPassword` — with no password set the server tries to prompt for
+  one and exits.
+* `arcadedb.server.defaultDatabases=adbc[adbc:adbc]` — the image ships no database at
+  all. The syntax is `name[user:password]`; the matrix connects as `root`, but the
+  database has to exist.
+
+Host port 15441, not 15433: that one is yugabyte's.
+
+No driver to fetch — ArcadeDB reuses the psqlodbc build the `postgres` entry uses (see
+the PostgreSQL section for the root-free `.deb` extraction):
+
+```sh
+export ARCADEDB_ODBC_DRIVER=$POSTGRES_ODBC_DRIVER
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so ADBC_ODBC_DELEGATE=never \
+  python tests/compat/test_matrix.py arcadedb
+# arcadedb  PASS  (PostgreSQL (via ODBC) 12.0.0)
+```
+
+`SELECT version()` answers `PostgreSQL 12.0 (ArcadeDB 26.9.1-SNAPSHOT)` — the `arcadedb`
+in there is what the driver keys its one quirk on, since `SQL_DBMS_NAME` is a bare
+`PostgreSQL`.
+
+### Why the entry is `read_only`
+
+ArcadeDB has no `CREATE TABLE`:
+
+```
+CREATE TABLE probe1 (i INTEGER, s VARCHAR(50))
+-> 42601 SQL syntax error at line 1, column 7: no viable alternative at input 'CREATE TABLE'
+```
+
+Its equivalent is a *type* plus one *property* per column, which is 1 + N statements:
+
+```sql
+CREATE DOCUMENT TYPE adbc_t;      -- or VERTEX TYPE / EDGE TYPE
+CREATE PROPERTY adbc_t.i INTEGER;
+CREATE PROPERTY adbc_t.s STRING;
+```
+
+`adbc_ingest` generates a `CREATE TABLE` for its target, so `mode="create"` (and
+`"replace"`) cannot be spelled for ArcadeDB at all. That is a shape mismatch, not a type
+name an `ansi_ddl_type_names`-style quirk could patch up, so the entry declares
+`read_only=True` and builds `adbc_t` and `adbc_big` in `setup` with ArcadeDB's own DDL —
+the same route the `flightsql` entry takes for a different reason. Everything else runs:
+`SELECT`, a parameterised `SELECT`, the 100,000-row batched read, `GetObjects`,
+`GetTableSchema`, the error path, and the `extra` graph steps, all through ODBC.
+
+Ordinary DML is fine; only the generated DDL is not. `setup` drops and recreates both
+types every time, because ArcadeDB has `CREATE DOCUMENT TYPE x IF NOT EXISTS` but no
+`IF NOT EXISTS` for a property — and `setup` has to be idempotent, since
+`bench/matrix_bench.py` replays it on every connection it opens.
+
+### Driver quirk: `SQLColumns` returns an empty result set
+
+psqlodbc builds `SQLColumns` as one pg_catalog query, and ArcadeDB emulates enough of
+pg_catalog that each *table* in it works on its own (`pg_class`, `pg_namespace`,
+`pg_attribute` and a two-table join over them all answer). The query as psqlodbc writes
+it does not:
+
+```
+select n.nspname, c.relname, a.attname, ..., pg_get_expr(d.adbin, d.adrelid), ...
+from (((pg_catalog.pg_class c inner join pg_catalog.pg_namespace n on ...)
+       inner join pg_catalog.pg_attribute a on ...)
+      inner join pg_catalog.pg_type t on ...)
+left outer join pg_attrdef d on ...
+```
+
+Two things in it are past ArcadeDB's parser: the parenthesised join nesting, which it
+does not recognise as a query at all, and `pg_get_expr()`, which it does not have
+(`Unknown function name 'pg_get_expr'`). Run verbatim it answers "not a query"; run
+through `SQLColumns` it produces `SQL_SUCCESS` and **zero rows**, so every table looks
+like it has no columns:
+
+```python
+cur.columns(table="adbc_t").fetchall()   # -> []
+```
+
+There is no return code to fall back on, which is exactly the situation
+`reader_opts.no_sql_columns` exists for (the Arrow Flight SQL driver reaches it by
+segfaulting instead). With it set, `GetObjects` describes `SELECT * FROM <table> WHERE
+1=0` and reads the columns off `SQLDescribeCol`, which ArcadeDB answers correctly and in
+declaration order. The quirk is keyed on `SELECT version()` containing `arcadedb`, inside
+the psqlodbc block — never on the driver name, which says nothing about the server.
+
+### Driver fallback: `SQLTables(SQL_ALL_TABLE_TYPES)`
+
+`GetTableTypes` asks the driver to enumerate table types, which psqlodbc answers with a
+query of its own making:
+
+```sql
+select NULL, NULL, relkind from
+  (select 'r' as relkind union select 'v' union select 'm' union select 'f' union select 'p') as a
+```
+
+ArcadeDB rejects it, and `SQLTables` fails — while an ordinary table listing through the
+same call works perfectly. Rather than a per-server quirk, `OdbcConnectionGetTableTypes`
+now falls back to a plain `SQLTables` listing and returns the distinct `TABLE_TYPE`
+values the server's own tables have (`TABLE` here). Nothing else in the matrix reaches
+that path, since every other driver answers the enumeration.
+
+### Server behaviour handled by the entry's tolerance flags
+
+* **`@rid`, `@type`, `@cat`** (`pseudo_columns`). Every `SELECT *` carries ArcadeDB's
+  record metadata — record id, type name, and category (`d`ocument / `v`ertex / `e`dge) —
+  so a describe of an eight-property type reports eleven columns. They are not columns of
+  the table: the entry lists them in `pseudo_columns`, which drops them from the
+  all-NULL row check and from the `GetObjects`/`GetTableSchema` comparisons.
+* **`BoolsAsChar=0`** in the connection string. Without it psqlodbc reports every
+  `BOOLEAN` as a `VARCHAR(5)` holding `"1"`/`"0"` instead of `SQL_BIT`. Same setting, same
+  reason, as the `questdb` entry.
+* **`not_null=("bo",)`.** With `BoolsAsChar=0` a boolean property has no NULL state on
+  the wire: row 2's `bo` goes in as `NULL` and reads back `False`.
+* **`decimal_type="decimal128(28, 3)"`.** ArcadeDB reports no declared precision for a
+  `DECIMAL` property, so psqlodbc falls back to its own maximum (28) with the scale of the
+  values in the result set — as it does for RisingWave's unqualified `NUMERIC`.
+* **Timestamp literals need the ISO-8601 `T`.** `'2024-02-29 13:45:10.123456'` into a
+  `DATETIME_MICROS` property is stored as `NULL`, silently;
+  `'2024-02-29T13:45:10.123456'` round-trips to the microsecond. (A bound
+  `SQL_TYPE_TIMESTAMP` parameter goes as the space form, so it hits the same silent NULL —
+  a reason to write timestamps as ISO text against this server.)
+* **No binary transport.** A bound `bytea` parameter is refused by the protocol layer
+  outright (`Error on parsing bind message: Type with code 0 not supported for
+  deserializing`), and a `BINARY` property fed a string hands the string straight back.
+  A `\x0102` literal does not even lex (`token recognition error at: '\x'`), so the entry
+  writes ROW1's two bytes as the `\uXXXX` escapes ArcadeDB does accept — which is what
+  they read back as, and what the workload's `"\x01\x02"` branch already allows.
+* **32 kB statements.** The PostgreSQL plugin refuses anything longer
+  (`String content (294205) too long (>32768)`), so `setup` loads `adbc_big` in ~30 kB
+  chunks. `arcadedb_insert()` in `test_matrix.py` does the splitting.
+
+A boolean *parameter* is also refused — psqlodbc sends `SQL_BIT` as `"1"`, and ArcadeDB
+answers `Cannot convert type 'class java.lang.String' to 'BOOLEAN'`, while the word
+`'true'` is accepted. That is the same shape as QuestDB's `bool_param_as_varchar` quirk,
+but nothing in this `read_only` entry binds a boolean, so no quirk is set for it here; it
+is recorded as a known limitation instead.
+
+### What the entry checks beyond the standard workload
+
+ArcadeDB is a graph database as much as a document one, and none of the standard workload
+touches that, so the `extra` steps build a small graph through the ODBC path and traverse
+it: three vertices, two edges (`CREATE EDGE ... FROM (SELECT ...) TO (SELECT ...)`), then
+one- and two-hop traversals with `expand(out('adbc_ge'))`. `MATCH` would be the other way
+to write the traversal, but its `{...}` pattern syntax collides with ODBC escape
+sequences and the driver manager rejects it (`ODBC escape convert error`) before the
+server sees it.
+
+### Benchmark
+
+```sh
+ADBC_MATRIX_SUFFIX=_arcadedb python bench/matrix_bench.py \
+  --rows 10000 --fetch-rows 100000 --pyodbc-timeout 300 arcadedb
+# arcadedb  PostgreSQL (via ODBC) 12.0.0   fetch=331,629/s
+```
+
+A `read_only` entry has no ingest numbers, and `--fetch-rows` does not apply: the
+benchmark reads whatever `adbc_big` holds, which `setup` sizes at 100,000 rows.
+
+### Clean up
+
+```sh
+docker rm -f adbcbridge-arcadedb
+```

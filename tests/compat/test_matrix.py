@@ -22,6 +22,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFORMIX_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, COLUMNSTORE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, FLIGHTSQL_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, ARCADEDB_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -52,6 +53,45 @@ EXTRA_ROWS = pa.table({
 # this column list, which is also what the entry declares as its `ddl`.
 FLIGHTSQL_COLS = ("(i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP,"
                   " n DECIMAL(10,3), bo BOOLEAN)")
+
+# --- ArcadeDB -------------------------------------------------------------------
+# ArcadeDB has no CREATE TABLE at all: a "table" is a document (or vertex) type, and a
+# typed column is a property declared on it, so building one takes 1 + N statements
+# instead of one.  That is also why the `arcadedb` entry is read_only -- adbc_ingest's
+# generated CREATE TABLE has nowhere to go -- and why it builds its tables from these
+# two helpers in `setup` instead, the way `flightsql` does with literal SQL.
+# ArcadeDB's PostgreSQL plugin also refuses any statement longer than 32768 characters
+# ("String content (...) too long"), so a literal bulk load has to be split.
+ARCADEDB_MAX_SQL = 30000
+
+
+def arcadedb_type(name, cols):
+    """DROP + CREATE document type `name` with `cols` = [(column, ArcadeDB type)].
+
+    Dropping first is what makes `setup` idempotent -- bench/matrix_bench.py replays it
+    on every connection it opens -- since ArcadeDB has no CREATE ... IF NOT EXISTS for a
+    property (only for a type).
+    """
+    return (["DROP TYPE %s IF EXISTS UNSAFE" % name, "CREATE DOCUMENT TYPE %s" % name] +
+            ["CREATE PROPERTY %s.%s %s" % (name, c, t) for c, t in cols])
+
+
+def arcadedb_insert(name, cols, rows):
+    """INSERT statements loading `rows` (formatted "(v, ...)" literals) into `name`."""
+    head = "INSERT INTO %s (%s) VALUES " % (name, ", ".join(cols))
+    out, batch, size = [], [], 0
+    for r in rows:
+        if batch and size + len(r) + 1 > ARCADEDB_MAX_SQL - len(head):
+            out.append(head + ",".join(batch))
+            batch, size = [], 0
+        batch.append(r)
+        size += len(r) + 1
+    if batch:
+        out.append(head + ",".join(batch))
+    return out
+
+
+ARCADEDB_BIG_ROWS = 100000
 DBS = {
     "sqlite": dict(
         env="SQLITE_ODBC_DRIVER", conn="Driver={drv};Database=" + os.path.join(TMP, "m.db") + ";",
@@ -539,6 +579,96 @@ DBS = {
             ("SELECT count(*) FROM orders o JOIN customer c ON o.o_custkey = c.c_custkey",
              (15000,)),
         ]),
+    "arcadedb": dict(
+        # ArcadeDB is a multi-model (document/graph/key-value) database whose server
+        # speaks the PostgreSQL wire protocol through its PostgresProtocolPlugin, so the
+        # psqlodbc build used for the `postgres` entry drives it.  Only the wire protocol
+        # is PostgreSQL's; everything above it is ArcadeDB's own.
+        #   BoolsAsChar=0 is psqlodbc's setting, not ArcadeDB's: without it the driver
+        # reports every BOOLEAN as a VARCHAR(5) holding "1"/"0" instead of SQL_BIT.  It is
+        # the same setting the `questdb` entry needs, for the same reason.
+        env="ARCADEDB_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=15441;Database=adbc;Uid=root;Pwd=Adbc2026;"
+             "BoolsAsChar=0;",
+        # read_only: ArcadeDB has no CREATE TABLE -- its DDL is "CREATE DOCUMENT TYPE t"
+        # plus one "CREATE PROPERTY t.c <type>" per column -- so the CREATE TABLE that
+        # adbc_ingest generates cannot be spelled for it at all, and neither the ingest
+        # steps nor the single-statement `ddl` of the other entries can run.  `setup`
+        # builds the two tables the read side of the workload needs in ArcadeDB's own
+        # DDL instead, and that whole read side then runs unchanged.  (Ordinary DML is
+        # fine: the INSERTs below and the `extra` steps all go through the ODBC path.)
+        read_only=True,
+        # The ArcadeDB spelling of what `setup` creates, for the record; unlike the other
+        # entries' `ddl` it is never executed -- it is not one statement.
+        ddl="CREATE DOCUMENT TYPE adbc_t; CREATE PROPERTY adbc_t.i INTEGER;"
+            " CREATE PROPERTY adbc_t.f DOUBLE; CREATE PROPERTY adbc_t.s STRING;"
+            " CREATE PROPERTY adbc_t.b BINARY; CREATE PROPERTY adbc_t.d DATE;"
+            " CREATE PROPERTY adbc_t.ts DATETIME_MICROS; CREATE PROPERTY adbc_t.n DECIMAL;"
+            " CREATE PROPERTY adbc_t.bo BOOLEAN",
+        setup=(
+            arcadedb_type("adbc_t", [("i", "INTEGER"), ("f", "DOUBLE"), ("s", "STRING"),
+                                     ("b", "BINARY"), ("d", "DATE"), ("ts", "DATETIME_MICROS"),
+                                     ("n", "DECIMAL"), ("bo", "BOOLEAN")]) +
+            # The literal spelling of ROW1/ROW2.  Two of these are ArcadeDB's parsing,
+            # not SQL's: a timestamp literal is only recognised in ISO-8601 form with the
+            # "T" separator (with a space it is stored as NULL, silently), and "\x.."
+            # does not lex at all, so the two bytes of ROW1's `b` go in as the "\uXXXX"
+            # escapes of U+0001 and U+0002 -- which is what they read back as, see below.
+            arcadedb_insert("adbc_t", ("i", "f", "s", "b", "d", "ts", "n", "bo"), [
+                "(1, 1.5, 'héllo \U0001F680', '\\u0001\\u0002', '2024-02-29',"
+                " '2024-02-29T13:45:10.123456', 12.345, true)",
+                "(2, null, null, null, null, null, null, null)"]) +
+            # adbc_big, the table check_big() reads and the one bench/matrix_bench.py
+            # times a fetch of on a read_only entry -- so, as for `flightsql`, it is sized
+            # for the benchmark rather than for the assertion.  100,000 literal rows load
+            # in about two and a half seconds, which is what `setup` costs on every
+            # connection opened; a 5,000-row table fetches in ~25 ms, too short to time.
+            arcadedb_type("adbc_big", [("a", "LONG"), ("b", "STRING"), ("c", "DOUBLE"),
+                                       ("d", "DATE"), ("e", "BOOLEAN")]) +
+            arcadedb_insert("adbc_big", ("a", "b", "c", "d", "e"),
+                            ["(%d,'r%d',%d.0,'2024-01-01',%s)" % (i, i, i, str(i % 2 == 0).lower())
+                             for i in range(ARCADEDB_BIG_ROWS)])),
+        big_rows=ARCADEDB_BIG_ROWS,
+        # ArcadeDB puts three record-metadata fields -- the record id, its type and its
+        # category (d/v/e) -- into the result of every "SELECT *", so a describe of the
+        # table reports eleven columns where the type has eight properties.  They are not
+        # columns of the table, so they are skipped both in the all-NULL row check and in
+        # the catalog comparisons.
+        pseudo_columns=("@rid", "@type", "@cat"),
+        # ArcadeDB reports no declared precision for a DECIMAL property, so psqlodbc
+        # falls back to its own maximum (28) with the scale of the values in the result
+        # set -- as it does for RisingWave's unqualified NUMERIC.
+        decimal_type="decimal128(28, 3)",
+        # A BOOLEAN property has no NULL state on the wire: row 2's `bo` was inserted as
+        # NULL and reads back false, as QuestDB's and Access's booleans do.
+        not_null=("bo",),
+        # ArcadeDB is a graph database as much as a document one, which nothing in the
+        # standard workload touches, so the `extra` steps build a small graph through the
+        # ODBC path and traverse it: three vertices, two edges, then one- and two-hop
+        # traversals from the first vertex.  (MATCH would be the other way to write the
+        # traversal, but its "{...}" pattern syntax collides with ODBC escape sequences,
+        # which the driver manager rejects before the server ever sees them.)
+        extra=[
+            ('DROP TYPE "adbc_ge{sfx}" IF EXISTS UNSAFE', None),
+            ('DROP TYPE "adbc_gv{sfx}" IF EXISTS UNSAFE', None),
+            ('CREATE VERTEX TYPE "adbc_gv{sfx}"', None),
+            ('CREATE EDGE TYPE "adbc_ge{sfx}"', None),
+            ('CREATE PROPERTY "adbc_gv{sfx}"."name" STRING', None),
+            # An ArcadeDB INSERT answers with the records it created, @rid and all, so
+            # there is nothing portable to assert on it -- the count below does that.
+            ("""INSERT INTO "adbc_gv{sfx}" ("name") VALUES ('a'),('b'),('c')""", None),
+            ('SELECT count(*) AS "c" FROM "adbc_gv{sfx}"', (3,)),
+            ("""CREATE EDGE "adbc_ge{sfx}" FROM (SELECT FROM "adbc_gv{sfx}" WHERE "name" = 'a')"""
+             """ TO (SELECT FROM "adbc_gv{sfx}" WHERE "name" = 'b')""", None),
+            ("""CREATE EDGE "adbc_ge{sfx}" FROM (SELECT FROM "adbc_gv{sfx}" WHERE "name" = 'b')"""
+             """ TO (SELECT FROM "adbc_gv{sfx}" WHERE "name" = 'c')""", None),
+            ('SELECT count(*) AS "c" FROM "adbc_ge{sfx}"', (2,)),
+            # One hop out of 'a' is 'b'; two hops is 'c'.
+            ("""SELECT "name" FROM (SELECT expand(out('adbc_ge{sfx}'))"""
+             """ FROM "adbc_gv{sfx}" WHERE "name" = 'a')""", ("b",)),
+            ("""SELECT "name" FROM (SELECT expand(out('adbc_ge{sfx}').out('adbc_ge{sfx}'))"""
+             """ FROM "adbc_gv{sfx}" WHERE "name" = 'a')""", ("c",)),
+        ]),
     "access": dict(
         env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
         # No server: MDB Tools opens an .mdb file. It is read-only (it executes no DDL and
@@ -631,6 +761,7 @@ def run(name, cfg):
     # names are fixed by the fixture -- no suffix -- and concurrent runs cannot collide
     # anyway, each working on its own copy of the file in its own temp dir.
     ro = cfg.get("read_only", False)
+    pseudo = tuple(cfg.get("pseudo_columns", ()))
     sfx = "" if ro else SUFFIX
     t_name, ing_name = "adbc_t" + sfx, "adbc_ing" + sfx
     T, ING = ident(t_name), ident(ing_name)
@@ -675,7 +806,10 @@ def run(name, cfg):
         assert fields["bo"] == cfg.get("bool_type", "bool"), fields["bo"]
         assert r1["bo"] in (True, 1), r1["bo"]
         # not_null: columns whose type has no NULL state at all (Access YESNO).
-        skip = ("i",) + tuple(cfg.get("not_null", ()))
+        # pseudo: record-metadata fields the server adds to every "SELECT *" of its own
+        # accord (ArcadeDB's @rid/@type/@cat) -- always populated, and not columns of the
+        # table, so they are skipped here and in the catalog comparisons below.
+        skip = ("i",) + tuple(cfg.get("not_null", ())) + pseudo
         assert all(v is None for k, v in r2.items() if k not in skip), r2
         # parameterised query (literal where the driver has no SQLBindParameter)
         if cfg.get("params", True):
@@ -719,16 +853,19 @@ def run(name, cfg):
     # catalog calls are, so those entries compare the column names as a set.
     order = (lambda c: c) if cfg.get("column_order", True) else sorted
     cols = ["i", "f", "s", "b", "d", "ts", "n", "bo"]
+    def real(names):  # the table's own columns, in the order this entry compares them
+        return order([c for c in names if c not in pseudo])
+
     # No catalog filter is given, so every catalog on the server that happens to
     # hold a table of this name is reported -- shared servers really do have
     # more than one.  Check the columns of each match individually.
-    per_table = [order([c["column_name"].lower() for c in t["table_columns"]])
+    per_table = [real([c["column_name"].lower() for c in t["table_columns"]])
                  for cat in objs for s in cat["catalog_db_schemas"] or []
                  for t in s["db_schema_tables"] or []]
     assert order(cols) in per_table, per_table
     assert "adbc_t" in [x.lower() for x in conn.adbc_get_table_types()] or True
     sch = conn.adbc_get_table_schema(T)
-    assert order([f.name.lower() for f in sch]) == order(cols)
+    assert real([f.name.lower() for f in sch]) == order(cols)
     conn.close()
     return "PASS  (%s %s)" % (info["vendor_name"], info["vendor_version"])
 

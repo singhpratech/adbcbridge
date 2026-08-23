@@ -646,6 +646,18 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       // psqlodbc sends as a typed PQexecPrepared.
       conn->reader_opts.no_param_arrays = true;
     }
+    if (strstr(version, "arcadedb")) {
+      // ArcadeDB serves the PostgreSQL wire protocol over its own multi-model engine and
+      // emulates enough of pg_catalog for psqlodbc's SQLTables, but not for its
+      // SQLColumns: that query nests its joins in parentheses -- "((pg_class c inner join
+      // pg_namespace n on ...) inner join pg_attribute a on ...)" -- which ArcadeDB's SQL
+      // parser does not take as a query at all, and it calls pg_get_expr(), which ArcadeDB
+      // does not have.  The statement fails on the server, psqlodbc still answers
+      // SQL_SUCCESS, and the result set is empty: every table looks like it has no
+      // columns.  An empty result carries no return code to fall back on, so skip the
+      // call and describe "SELECT * FROM <table> WHERE 1=0" instead.
+      conn->reader_opts.no_sql_columns = true;
+    }
   }
   if (strstr((const char*)name, "myodbc") && !conn->reader_opts.txn_capable) {
     // MySQL Connector/ODBC against a server that reports SQL_TC_NONE: not a MySQL or a
@@ -920,10 +932,21 @@ static AdbcStatusCode OdbcConnectionGetTableTypes(struct AdbcConnection* connect
              "SQLAllocHandle(SQL_HANDLE_STMT)", error);
   SQLRETURN ret = SQLTables(hstmt, (SQLCHAR*)"", 0, (SQLCHAR*)"", 0, (SQLCHAR*)"", 0,
                             (SQLCHAR*)SQL_ALL_TABLE_TYPES, SQL_NTS);
+  // The type enumeration is a query of the driver's own making, and a server can reject
+  // it while answering an ordinary table listing perfectly well: psqlodbc builds it as
+  // "select NULL, NULL, relkind from (select 'r' as relkind union select 'v' ...) as a",
+  // which ArcadeDB's SQL parser refuses.  Fall back to the types the server's own tables
+  // actually have -- one plain SQLTables listing, deduplicated below.
+  bool from_listing = false;
   if (!SQL_SUCCEEDED(ret)) {
     AdbcStatusCode s = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLTables(SQL_ALL_TABLE_TYPES)", error);
-    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
-    return s;
+    SQLFreeStmt(hstmt, SQL_CLOSE);
+    if (!SQL_SUCCEEDED(SQLTables(hstmt, NULL, 0, NULL, 0, NULL, 0, NULL, 0))) {
+      SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+      return s;
+    }
+    if (error && error->release) error->release(error);
+    from_listing = true;
   }
   // Collect column 4 (TABLE_TYPE) into a single-column "table_type" batch.
   struct ArrowSchema schema;
@@ -938,10 +961,25 @@ static AdbcStatusCode OdbcConnectionGetTableTypes(struct AdbcConnection* connect
   SQLCHAR buf[256];
   SQLLEN ind = 0;
   int64_t n = 0;
+  // Distinct types seen so far, only needed on the listing fallback (where every table
+  // repeats its type).  ODBC defines a handful of type names; the cap just bounds the
+  // scan on a server that invents its own.
+  char seen[16][sizeof(buf)];
+  int seen_count = 0;
   while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
     if (SQL_SUCCEEDED(OdbcGetData(hstmt, 4, SQL_C_CHAR, buf, sizeof(buf), &ind,
                                   conn->reader_opts.sqllen_32bit)) &&
         ind != SQL_NULL_DATA) {
+      if (from_listing) {
+        bool dup = false;
+        for (int i = 0; i < seen_count; i++) {
+          if (strcmp(seen[i], (const char*)buf) == 0) dup = true;
+        }
+        if (dup) continue;
+        if (seen_count < (int)(sizeof(seen) / sizeof(seen[0]))) {
+          snprintf(seen[seen_count++], sizeof(seen[0]), "%s", (const char*)buf);
+        }
+      }
       CHECK_NA(INTERNAL, ArrowArrayAppendString(array.children[0], ArrowCharView((const char*)buf)), error);
       n++;
     }
