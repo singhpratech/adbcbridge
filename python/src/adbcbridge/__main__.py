@@ -14,28 +14,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Vendored third-party sources are kept byte-identical to upstream.
-exclude: |
-  (?x)^(
-    vendor/.*|
-    include/arrow-adbc/.*|
-    src/utils\.c|
-    src/utils\.h|
-    src/options\.h|
-    LICENSE|
-    NOTICE|
-    python/LICENSE|
-    python/NOTICE
-  )$
+"""``python -m adbcbridge`` / the ``adbcbridge`` console script."""
 
-repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
-    hooks:
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
-  - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v18.1.8
-    hooks:
-      - id: clang-format
-        types_or: [c, c++]
+import sys
+
+from ._cli import main
+
+if __name__ == "__main__":
+    sys.exit(main())
