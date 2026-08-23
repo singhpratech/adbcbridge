@@ -236,13 +236,20 @@ struct OdbcReaderOptions {
   //     CREATE TABLE t (<ingested columns>, <ddl_extra_column>) <ddl_table_options>
   // Both are NULL for every other server, which leaves the DDL exactly as it was.
   //
-  // GreptimeDB is the one such server verified here.  Every GreptimeDB table must carry
-  // exactly one TIME INDEX column, and it has to be a NOT NULL TIMESTAMP -- an ingest
-  // payload need not have any timestamp column at all, so the extra column is one the
-  // server fills in itself (DEFAULT CURRENT_TIMESTAMP), which leaves the ingested
-  // columns untouched.  The table option matters just as much: outside append mode
-  // GreptimeDB *merges* rows that share a time index, so rows ingested within the same
-  // millisecond would silently collapse into one.
+  // GreptimeDB needs both.  Every GreptimeDB table must carry exactly one TIME INDEX
+  // column, and it has to be a NOT NULL TIMESTAMP -- an ingest payload need not have any
+  // timestamp column at all, so the extra column is one the server fills in itself
+  // (DEFAULT CURRENT_TIMESTAMP), which leaves the ingested columns untouched.  The table
+  // option matters just as much: outside append mode GreptimeDB *merges* rows that share
+  // a time index, so rows ingested within the same millisecond would silently collapse
+  // into one.
+  //
+  // Apache Doris needs only the table option: an MPP warehouse refuses a CREATE TABLE
+  // with no distribution clause ("Create olap table should contain distribution desc"),
+  // and -- without a key clause -- also refuses one whose leading column is a string,
+  // float or double, since those are the columns it would otherwise make the duplicate
+  // key out of.  "DISTRIBUTED BY RANDOM BUCKETS AUTO PROPERTIES
+  // ("enable_duplicate_without_keys_by_default" = "true")" answers both.
   const char* ddl_extra_column;
   const char* ddl_table_options;
   // Driver quirk: bind date, timestamp and binary parameters as SQL_VARCHAR text and

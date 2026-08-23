@@ -378,3 +378,21 @@ services:
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
     mem_limit: 3g
     ports: ["127.0.0.1:19200:9200"]
+  # Apache Doris: an MPP analytic warehouse that serves the MySQL wire protocol on 9030
+  # (8030 is the FE's HTTP console, 8040 the BE's).  In the "extra" profile, so a plain
+  # `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d doris
+  # This is the all-in-one image: frontend and backend in one container, with the
+  # passwordless `root` account and no user database (the matrix entry's `setup` creates
+  # `adbc`).  It is not ready when the port opens: the BE registers with the FE a little
+  # later, and until it does every CREATE TABLE fails.  Poll for it with
+  #   docker exec adbcbridge-doris mysql -uroot -P9030 -h127.0.0.1 -e 'SHOW BACKENDS\G'
+  # until `Alive: true` (about a minute from a cold start).  The single backend also means
+  # the FE's three-replica default cannot be satisfied; the entry's `setup` sets
+  # force_olap_table_replication_num=1 for that.  See tests/compat/README.md.
+  #   Port 19031 keeps it clear of the other MySQL-wire entries.
+  doris:
+    profiles: ["extra"]
+    image: apache/doris:doris-all-in-one-2.1.0
+    mem_limit: 6g
+    ports: ["127.0.0.1:19031:9030"]
