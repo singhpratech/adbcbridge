@@ -518,7 +518,7 @@ static AdbcStatusCode OdbcStatementNew(struct AdbcConnection* connection,
   }
   stmt->conn = conn;
   stmt->reader_opts = conn->reader_opts;
-  stmt->array_binding = true;
+  stmt->array_binding = false;  /* opt-in until verified across the compat matrix */
   statement->private_data = stmt;
   return ADBC_STATUS_OK;
 }
