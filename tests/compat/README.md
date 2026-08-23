@@ -1830,6 +1830,125 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down tidb
 docker rm -f adbcbridge-tidb
 ```
 
+## MariaDB ColumnStore 23.02 (MariaDB 11.1)
+
+MariaDB ColumnStore is a columnar storage engine *inside* an ordinary MariaDB server, so
+the MariaDB Connector/ODBC build used for the `mariadb` entry drives it unchanged and no
+new driver has to be downloaded. The engine is what the entry exercises: `adbc_t` is
+declared `ENGINE=Columnstore`, and the entry's `setup` sets
+`default_storage_engine = Columnstore` so every table the driver's generated ingest DDL
+creates is columnar too. Without both, the workload would run against a plain InnoDB
+MariaDB and never touch the engine.
+
+Server (or use the `columnstore` service in `docker-compose.yml`, which is in the `extra`
+profile so a plain `up -d` leaves it alone). `--hostname` must match `PM1`: the node
+registers itself in the cluster under that name.
+
+```sh
+docker run -d --name adbcbridge-columnstore --hostname mcs1 \
+  -e PM1=mcs1 -e MARIADB_ROOT_PASSWORD=adbc --memory=2g \
+  -v $PWD/tests/compat/columnstore.cnf:/etc/my.cnf.d/zz-adbc.cnf:ro \
+  -p 127.0.0.1:13313:3306 mariadb/columnstore:latest
+```
+
+The entrypoint starts `mariadbd` and the CMAPI server but **not** the ColumnStore backend
+processes (`controllernode`, `PrimProc`, `DMLProc`, ...), and MariaDB answers on 3306
+long before they exist. Until they are started every ColumnStore DDL fails with
+`Internal error: Cannot execute the statement. DBRM is read only!` and the error log
+fills with `connect() error: Connection refused ... port: 8616`. The image's `provision`
+script is what starts them — it sets the CMAPI key, adds this node to the cluster and
+restarts it (`mcs cluster node add` on its own answers
+`Starting transaction isn't successful.` because the key has not been set):
+
+```sh
+docker exec adbcbridge-columnstore provision
+# Adding PM(s) To Cluster ... done
+# Restarting Cluster ... done
+# Validating ColumnStore Engine ... done
+```
+
+The image honours `MARIADB_ROOT_PASSWORD` but not `MARIADB_DATABASE`/`MARIADB_USER`, and
+the account it creates is `root@localhost`, which a client coming in through the
+published port cannot match. Create the database and a `%` user by hand. The password
+has to get past `cracklib_password_check`, which this image loads: `adbc` is rejected
+with `Your password does not satisfy the current policy requirements`.
+
+```sh
+docker exec adbcbridge-columnstore mariadb -uroot -padbc -e "
+  CREATE DATABASE adbc;
+  CREATE USER 'adbc'@'%' IDENTIFIED BY 'Adbc!Bridge2026';
+  GRANT ALL ON *.* TO 'adbc'@'%';"
+```
+
+`tests/compat/columnstore.cnf` (mounted above) carries two server settings the entry
+depends on, both of which have to be set at startup:
+
+* `character_set_server = utf8mb4`. The image ships `utf8mb3`, which cannot hold the
+  astral-plane emoji the matrix writes — `INSERT` fails with
+  `Incorrect string value: '\xF0\x9F\x9A\x80' for column 's'`. The `adbc` database
+  inherits it, and so do `adbc_t` and every ingest table.
+* `columnstore_cache_inserts = ON`. ColumnStore's bulk-load path is `cpimport`; an
+  `INSERT` carrying *bound parameters* goes to `DMLProc` a row at a time, each row
+  committing its own extent. Measured through plain pyodbc, with no adbcbridge involved,
+  that is **~2 rows/s** — a 2000-row ingest takes a quarter of an hour, whether the rows
+  go as an ODBC parameter array (MariaDB's `COM_STMT_BULK_EXECUTE`) or one execute per
+  row. The same rows as one literal `INSERT ... VALUES (...),(...)` run at ~350 rows/s,
+  which is the batch path. `columnstore_cache_inserts` buffers the parameterised rows in
+  the UM and writes them out in one batch, and the whole matrix workload then runs in
+  three seconds. The variable is read-only at run time (`Variable 'columnstore_cache_inserts'
+  is a read only variable`), so it cannot go in the entry's `SET SESSION` setup.
+
+Run the entry — same driver library as `mariadb`:
+
+```sh
+export COLUMNSTORE_ODBC_DRIVER=$MARIADB_ODBC_DRIVER  # MariaDB Connector/ODBC libmaodbc.so
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+python tests/compat/test_matrix.py columnstore
+# columnstore PASS  (MariaDB (via ODBC) 11.01.000001)
+```
+
+Entry notes. The wire is MariaDB's, so the `mariadb` entry's tolerances carry over:
+`ANSI_QUOTES` in `sql_mode` for the double-quoted identifiers `adbc_ingest` emits, and
+`BOOLEAN` stored as `TINYINT(1)` and reported as `SQL_TINYINT`, so `bo` is expected as
+`int8`. The type system is not MariaDB's, though:
+
+* **No `VARBINARY`.** `CREATE TABLE` is refused outright with `Varbinary is currently not
+  supported by Columnstore`, so `b` is `BLOB`, which round-trips the two bytes fine. No
+  tolerance flag is needed — it is a DDL choice, not a lost capability.
+* **`CHAR`/`VARCHAR` cap at 8000 bytes** (`char, varchar and varbinary length may not
+  exceed 8000 bytes`); `TEXT`/`MEDIUMTEXT` are the types above that.
+
+Everything else in the workload passes as it does on MariaDB: the emoji round-trip,
+microsecond `DATETIME(6)`, `DECIMAL(10,3)`, NULL parameters, affected-row counts, the
+5000-row batched read, `GetObjects` and the error path.
+
+One driver quirk was needed, in `OdbcDetectQuirks` (`src/odbc_driver.c`), keyed on
+`maodbc` **plus** the server actually having the engine:
+
+```sql
+SELECT COUNT(*) FROM information_schema.engines
+ WHERE engine = 'Columnstore' AND support IN ('YES', 'DEFAULT')
+```
+
+ColumnStore's DDL parser accepts only its own list of type names, and two of the names
+`maodbc`'s `SQLGetTypeInfo` answers with are not on it: `SQL_LONGVARCHAR` is
+`LONG VARCHAR` and `SQL_BIT` is `BIT`. Both are refused with `The syntax or the data
+type(s) is not supported by Columnstore`, even though the underlying types (`MEDIUMTEXT`,
+`TINYINT`) do exist there — so the ingest DDL the driver generates,
+`CREATE TABLE "adbc_ing" ("a" BIGINT, "b" LONG VARCHAR, "c" DOUBLE, "d" DATE, "e" BIT)`,
+fails on the string and boolean columns. The standard spellings `TEXT` and `BOOLEAN` are
+accepted, which is exactly what the existing `ansi_ddl_type_names` flag (added for
+QuestDB) produces, so that is what the quirk sets. The driver name alone could not carry
+it: `maodbc` also drives plain MariaDB, where `LONG VARCHAR` and `BIT` are fine — hence
+the extra question to the server, in the same shape as the `version()` probe psqlodbc
+gets. Turning ANSI type names on for an InnoDB table on such a server costs nothing;
+MariaDB accepts `TEXT` and `BOOLEAN` just as readily.
+
+Benchmarks (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`): fetch 1.41M
+rows/s (pyodbc 452k/s), ingest 14.9k rows/s and 54.6k rows/s with
+`adbc.odbc.array_binding=true` (pyodbc `fast_executemany` 28.8k/s) — all of that with
+`columnstore_cache_inserts = ON`; without it ingest is ~2 rows/s.
+
 ## libSQL server (sqld) — no PostgreSQL wire protocol, so no ODBC route
 
 libSQL is Turso's fork of SQLite, and `sqld` (the `ghcr.io/tursodatabase/libsql-server`

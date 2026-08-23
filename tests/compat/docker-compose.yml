@@ -167,3 +167,21 @@ services:
     environment: { DBA_PASSWORD: adbc }
     mem_limit: 2g
     ports: ["127.0.0.1:11111:1111"]
+  # MariaDB ColumnStore: MariaDB's columnar storage engine (this image is MariaDB 11.1 +
+  # ColumnStore 23.02), driven by the same MariaDB Connector/ODBC as the `mariadb`
+  # service.  In the "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d columnstore
+  # Two steps are needed after it comes up, neither of which the image does for you --
+  # see tests/compat/README.md: `provision` (the ColumnStore backend processes are not
+  # started by the entrypoint, and until they are every DDL fails with "DBRM is read
+  # only!"), and creating the `adbc` database and user.  PM1/hostname must agree: the
+  # node registers itself in the cluster under that name.  The mounted .cnf carries the
+  # two server settings the matrix entry depends on.
+  columnstore:
+    profiles: ["extra"]
+    image: mariadb/columnstore:latest
+    hostname: mcs1
+    environment: { PM1: mcs1, MARIADB_ROOT_PASSWORD: adbc }
+    volumes: ["./columnstore.cnf:/etc/my.cnf.d/zz-adbc.cnf:ro"]
+    mem_limit: 2g
+    ports: ["127.0.0.1:13313:3306"]

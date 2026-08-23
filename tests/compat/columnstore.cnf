@@ -1,0 +1,14 @@
+# Server settings for the `columnstore` compat-matrix entry, mounted into
+# /etc/my.cnf.d/ (the name sorts after the image's own columnstore.cnf, so these win).
+[mysqld]
+# The image ships utf8mb3, which cannot store the astral-plane emoji the matrix writes
+# ("Incorrect string value: '\xF0\x9F\x9A\x80'").
+character_set_server = utf8mb4
+collation_server = utf8mb4_general_ci
+# ColumnStore's bulk-load path is cpimport; an INSERT carrying bound parameters goes to
+# DMLProc a row at a time, each row committing its own extent, which measures at ~2
+# rows/s.  columnstore_cache_inserts buffers those rows in the UM and writes them out in
+# one batch, which is what makes an ODBC parameter array usable at all here (~8k rows/s).
+# It is read-only at run time, so it has to be set here rather than in the entry's SET
+# SESSION setup.
+columnstore_cache_inserts = ON

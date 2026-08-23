@@ -332,7 +332,10 @@ if args._child:
     drv = os.environ[cfg["env"]]
     uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(
         drv=drv, drvdir=os.path.dirname(drv))
-    uri = m.conn_uri(name, cfg)
+    # conn_uri() takes the driver library explicitly; without it every pyodbc child dies
+    # with "conn_uri() missing 1 required positional argument: 'drv'" and the pyodbc
+    # columns of the table come out empty for every database.
+    uri = m.conn_uri(name, cfg, drv)
     ident = cfg.get("ident", lambda x: x)
     if fn_name == "ingest":
         res = attempt(time_pyodbc_ingest, uri, cfg, ident, make_table(args.rows, cfg))
