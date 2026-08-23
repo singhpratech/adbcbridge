@@ -149,6 +149,127 @@ static int TableRowCmp(const void* a, const void* b) {
 // ---------------------------------------------------------------------------
 // Column + constraint emission for one table
 
+// Emit one column into table_columns[].  `num`/`has` are indexed by SQLColumns result
+// column number, so both the SQLColumns path and the SQLDescribeCol fallback below fill
+// the same slots; the strings are consumed (freed) here.
+static AdbcStatusCode EmitColumn(struct ArrowArray* c, char* name, char* type_name,
+                                 char* remarks, char* column_def, char* is_nullable,
+                                 const int64_t* num, const bool* has, struct AdbcError* error) {
+  CHECK_NA(INTERNAL, AppendStrOrNull(c->children[0], name ? name : ""), error);
+  free(name);
+  // ordinal_position
+  if (has[17]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[1], num[17]), error);
+  else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[1], 1), error);
+  CHECK_NA(INTERNAL, AppendStrOrNull(c->children[2], remarks), error); free(remarks);
+  if (has[5]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[3], num[5]), error);
+  else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[3], 1), error);
+  CHECK_NA(INTERNAL, AppendStrOrNull(c->children[4], type_name), error); free(type_name);
+  if (has[7]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[5], num[7]), error);
+  else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[5], 1), error);
+  if (has[9]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[6], num[9]), error);
+  else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[6], 1), error);
+  if (has[10]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[7], num[10]), error);
+  else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[7], 1), error);
+  if (has[11]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[8], num[11]), error);
+  else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[8], 1), error);
+  CHECK_NA(INTERNAL, AppendStrOrNull(c->children[9], column_def), error); free(column_def);
+  if (has[14]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[10], num[14]), error);
+  else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[10], 1), error);
+  if (has[15]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[11], num[15]), error);
+  else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[11], 1), error);
+  if (has[16]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[12], num[16]), error);
+  else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[12], 1), error);
+  CHECK_NA(INTERNAL, AppendStrOrNull(c->children[13], is_nullable), error); free(is_nullable);
+  // scope catalog/schema/table, autoincrement, generated: unknown via SQLColumns
+  for (int k = 14; k <= 18; k++) CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[k], 1), error);
+  CHECK_NA(INTERNAL, ArrowArrayFinishElement(c), error);
+  return ADBC_STATUS_OK;
+}
+
+// Execute "SELECT * FROM <table> WHERE 1=0" on `hstmt`, so the columns can be read off
+// the result set with SQLDescribeCol.  Tries the most qualified name first and drops one
+// qualifier at a time: a driver whose SQLColumns just failed is not one to trust about
+// how much qualification the server accepts (QuestDB rejects the catalog its own
+// SQLTables reports).  Returns false if no spelling executes.
+static bool DescribeTableStmt(struct OdbcConnection* conn, const struct TableRow* t,
+                              SQLHSTMT hstmt) {
+  char q[8];
+  OdbcQuoteChar(conn->hdbc, q);
+  const bool have_cat = t->catalog && *t->catalog, have_sch = t->schema && *t->schema;
+  for (int level = 0; level < 3; level++) {
+    if (level == 0 && !have_cat) continue;  // same query as level 1
+    if (level == 1 && !have_sch) continue;  // same query as level 2
+    struct InternalAdbcStringBuilder sb;
+    InternalAdbcStringBuilderInit(&sb, 128);
+    InternalAdbcStringBuilderAppend(&sb, "SELECT * FROM ");
+    if (level == 0) InternalAdbcStringBuilderAppend(&sb, "%s%s%s.", (char*)q, t->catalog, (char*)q);
+    if (level <= 1 && have_sch) {
+      InternalAdbcStringBuilderAppend(&sb, "%s%s%s.", (char*)q, t->schema, (char*)q);
+    }
+    InternalAdbcStringBuilderAppend(&sb, "%s%s%s WHERE 1=0", (char*)q, t->table, (char*)q);
+    SQLRETURN ret = SQLExecDirect(hstmt, (SQLCHAR*)sb.buffer, SQL_NTS);
+    InternalAdbcStringBuilderReset(&sb);
+    if (SQL_SUCCEEDED(ret)) return true;
+    SQLFreeStmt(hstmt, SQL_CLOSE);
+  }
+  return false;
+}
+
+// Fallback for a driver whose SQLColumns fails outright: describe the result set of a
+// zero-row SELECT instead, which is what GetTableSchema does anyway.  psqlodbc builds
+// SQLColumns from a pg_catalog query and binds pg_attribute.attidentity with a NULL
+// StrLen_or_IndPtr, so any PostgreSQL-wire server that reports that column as NULL
+// rather than as the empty string -- QuestDB does -- fails the whole call with
+// "Unrecognized return value from copy_and_convert_field".  SQLDescribeCol knows less
+// than SQLColumns (no remarks, no default, no radix), so the fields it cannot answer are
+// left NULL rather than guessed.
+static AdbcStatusCode AppendColumnsViaDescribe(struct OdbcConnection* conn,
+                                               struct ArrowArray* cols_list,
+                                               const struct TableRow* t, const char* column_name,
+                                               struct AdbcError* error) {
+  struct ArrowArray* c = cols_list->children[0];
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt))) return ADBC_STATUS_IO;
+  if (!DescribeTableStmt(conn, t, hstmt)) {
+    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+    return ADBC_STATUS_IO;
+  }
+  SQLSMALLINT ncols = 0;
+  if (!SQL_SUCCEEDED(SQLNumResultCols(hstmt, &ncols))) ncols = 0;
+  for (SQLSMALLINT i = 1; i <= ncols; i++) {
+    SQLCHAR name[512] = {0};
+    SQLSMALLINT name_len = 0, data_type = 0, decimal_digits = 0, nullable = SQL_NULLABLE_UNKNOWN;
+    SQLULEN column_size = 0;
+    if (!SQL_SUCCEEDED(SQLDescribeCol(hstmt, (SQLUSMALLINT)i, name, sizeof(name), &name_len,
+                                      &data_type, &column_size, &decimal_digits, &nullable))) {
+      continue;
+    }
+    if (column_name && !LikeMatch(column_name, (const char*)name)) continue;
+    int64_t num[19] = {0};
+    bool has[19] = {false};
+    num[5] = data_type;  has[5] = true;   // DATA_TYPE
+    num[7] = (int64_t)OdbcReadULen(&column_size, conn->reader_opts.sqllen_32bit);
+    has[7] = num[7] > 0;                  // COLUMN_SIZE
+    num[9] = decimal_digits; has[9] = true;   // DECIMAL_DIGITS
+    num[11] = nullable; has[11] = true;       // NULLABLE
+    num[14] = data_type; has[14] = true;      // SQL_DATA_TYPE
+    num[17] = i; has[17] = true;              // ORDINAL_POSITION
+    SQLCHAR type_name[256] = {0};
+    SQLSMALLINT type_name_len = 0;
+    if (!SQL_SUCCEEDED(SQLColAttribute(hstmt, (SQLUSMALLINT)i, SQL_DESC_TYPE_NAME, type_name,
+                                       sizeof(type_name), &type_name_len, NULL))) {
+      type_name[0] = '\0';
+    }
+    const char* yes_no = nullable == SQL_NO_NULLS ? "NO" : nullable == SQL_NULLABLE ? "YES" : NULL;
+    RAISE_ADBC(EmitColumn(c, strdup((const char*)name),
+                          type_name[0] ? strdup((const char*)type_name) : NULL, NULL, NULL,
+                          yes_no ? strdup(yes_no) : NULL, num, has, error));
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+  CHECK_NA(INTERNAL, ArrowArrayFinishElement(cols_list), error);
+  return ADBC_STATUS_OK;
+}
+
 static AdbcStatusCode AppendColumns(struct OdbcConnection* conn, struct ArrowArray* cols_list,
                                     const struct TableRow* t, const char* column_name,
                                     struct AdbcError* error) {
@@ -162,6 +283,14 @@ static AdbcStatusCode AppendColumns(struct OdbcConnection* conn, struct ArrowArr
   if (!SQL_SUCCEEDED(ret)) {
     AdbcStatusCode s = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLColumns", error);
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+    // The driver cannot list this table's columns; describing a zero-row SELECT can.
+    // Keep the SQLColumns diagnostic if that fails too.
+    struct AdbcError ignored = ADBC_ERROR_INIT;
+    if (AppendColumnsViaDescribe(conn, cols_list, t, column_name, &ignored) == ADBC_STATUS_OK) {
+      if (error && error->release) error->release(error);
+      return ADBC_STATUS_OK;
+    }
+    if (ignored.release) ignored.release(&ignored);
     return s;
   }
   while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
@@ -184,35 +313,7 @@ static AdbcStatusCode AppendColumns(struct OdbcConnection* conn, struct ArrowArr
     has[16] = GetIntCol(conn, hstmt, 16, &num[16]);      // CHAR_OCTET_LENGTH
     has[17] = GetIntCol(conn, hstmt, 17, &num[17]);      // ORDINAL_POSITION
     char* is_nullable = GetStrCol(conn, hstmt, 18);      // IS_NULLABLE
-
-    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[0], name ? name : ""), error);
-    free(name);
-    // ordinal_position
-    if (has[17]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[1], num[17]), error);
-    else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[1], 1), error);
-    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[2], remarks), error); free(remarks);
-    if (has[5]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[3], num[5]), error);
-    else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[3], 1), error);
-    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[4], type_name), error); free(type_name);
-    if (has[7]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[5], num[7]), error);
-    else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[5], 1), error);
-    if (has[9]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[6], num[9]), error);
-    else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[6], 1), error);
-    if (has[10]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[7], num[10]), error);
-    else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[7], 1), error);
-    if (has[11]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[8], num[11]), error);
-    else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[8], 1), error);
-    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[9], column_def), error); free(column_def);
-    if (has[14]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[10], num[14]), error);
-    else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[10], 1), error);
-    if (has[15]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[11], num[15]), error);
-    else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[11], 1), error);
-    if (has[16]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[12], num[16]), error);
-    else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[12], 1), error);
-    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[13], is_nullable), error); free(is_nullable);
-    // scope catalog/schema/table, autoincrement, generated: unknown via SQLColumns
-    for (int k = 14; k <= 18; k++) CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[k], 1), error);
-    CHECK_NA(INTERNAL, ArrowArrayFinishElement(c), error);
+    RAISE_ADBC(EmitColumn(c, name, type_name, remarks, column_def, is_nullable, num, has, error));
   }
   SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
   CHECK_NA(INTERNAL, ArrowArrayFinishElement(cols_list), error);

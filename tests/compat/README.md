@@ -567,6 +567,165 @@ docker compose -f tests/compat/docker-compose.yml down timescaledb
 docker stop adbcbridge-timescale && docker rm adbcbridge-timescale
 ```
 
+## QuestDB 10
+
+QuestDB is a column-oriented time-series database that speaks the PostgreSQL wire
+protocol, so the same `psqlodbc` build used for the `postgres` entry drives it — there is
+no QuestDB ODBC driver. Only the *wire protocol* is PostgreSQL's, though: the type
+system, the DDL parser and the catalog are QuestDB's own, and that is where every quirk
+below comes from.
+
+### Get the ODBC driver without root
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export QUESTDB_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d questdb
+# or standalone:
+docker run -d --name adbcbridge-questdb --memory=2g \
+  -e JAVA_OPTS="-Xms256m -Xmx768m" \
+  -p 127.0.0.1:18812:8812 -p 127.0.0.1:19000:9000 questdb/questdb
+```
+
+PostgreSQL wire is on `18812` (user `admin`, password `quest`, database `qdb`); `19000`
+is the HTTP console and REST API, which is the easiest way to look at the server
+independently of ODBC. It comes up in a few seconds and is ready when this succeeds:
+
+```sh
+curl -sG http://127.0.0.1:19000/exec --data-urlencode "query=SELECT 1"
+```
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py questdb
+# questdb   PASS  (PostgreSQL (via ODBC) 11.0.3)
+```
+
+`GetInfo` reports `PostgreSQL 11.0.3` because that is the server version QuestDB
+advertises over the wire, and `SQL_DRIVER_NAME` is `psqlodbcw.so` — the same pair real
+PostgreSQL gives. `SELECT version()` is what tells them apart:
+
+```
+PostgreSQL 12.3, compiled by Visual C++ build 1914, 64-bit, QuestDB
+```
+
+### Types
+
+QuestDB's DDL takes its own type names, and psqlodbc's `SQLGetTypeInfo` answers with
+PostgreSQL's internal ones, which QuestDB rejects outright:
+
+| Workload column | QuestDB type | note |
+|---|---|---|
+| `i` | `INT` | `INTEGER` also accepted; `int4` is **not** |
+| `f` | `DOUBLE` | `DOUBLE PRECISION` also accepted; `float8` is not |
+| `s` | `STRING` | `TEXT` and a bare `VARCHAR` work; `VARCHAR(50)` is a **syntax error** — QuestDB's VARCHAR takes no length |
+| `b` | `BINARY` | `BLOB`/`BYTEA`/`VARBINARY(n)` are not QuestDB types |
+| `d` | `DATE` | millisecond resolution; reads back as a timestamp, not a date |
+| `ts` | `TIMESTAMP` | microsecond resolution, no time zone — the round-trip is exact |
+| `n` | `DECIMAL(10,3)` | `NUMERIC` does not exist here |
+| `bo` | `BOOLEAN` | **no NULL state**: a NULL boolean is stored as false |
+
+`bool`, `int8`, `float8`, `numeric` and `bpchar` all fail with
+`unsupported column type`, while `BIGINT`, `DOUBLE PRECISION`, `BOOLEAN`, `TEXT`, `DATE`,
+`TIMESTAMP` and `DECIMAL(p,s)` — the portable spellings — are all accepted. That is why
+the driver detects QuestDB and spells its ingest DDL in standard SQL types
+(`ansi_ddl_type_names`, below) instead of the names the ODBC driver hands it.
+
+### Two psqlodbc settings in the connection string
+
+Both are the driver's, not the server's:
+
+* **`BoolsAsChar=0`.** By default psqlodbc reports a PostgreSQL `bool` column as a
+  `VARCHAR(5)` holding `"1"`/`"0"`, which would make the workload's `bo` column an Arrow
+  string. With it off the column is `SQL_BIT` → Arrow `bool`, as for every other entry.
+* **`Protocol=7.4-0`.** The trailing digit is psqlodbc's "level of rollback on errors";
+  `2` (the default) wraps each execute of a prepared statement in `SAVEPOINT`. QuestDB
+  has no `SAVEPOINT` statement — it fails the whole insert with
+  `internal SAVEPOINT failed` — and `0` turns that off.
+
+### Driver quirks
+
+Three quirks are keyed on the server, not on the driver name: `psqlodbcw.so` also drives
+real PostgreSQL, CockroachDB, YugabyteDB and TimescaleDB, so a name-keyed quirk would
+fire on all of them. `OdbcDetectQuirks` asks `SELECT version()` once per connection —
+only for psqlodbc — and looks for `questdb` in the answer.
+
+* **`ansi_ddl_type_names`.** Bulk ingest normally asks `SQLGetTypeInfo` for the driver's
+  name of each SQL type; against QuestDB those names (`int8`, `float8`, `bool`) are not
+  DDL QuestDB accepts. The flag makes `ColumnTypeSql` skip the `SQLGetTypeInfo` chain and
+  use the portable fallback name it already carries for every Arrow type, so an ingest of
+  `int64/string/double/date32/bool` creates `BIGINT / TEXT / DOUBLE PRECISION / DATE /
+  BOOLEAN`.
+* **`bool_param_as_varchar`.** QuestDB parses a boolean parameter only from the words
+  `true`/`false`. psqlodbc sends an `SQL_BIT` parameter as `"1"`/`"0"`, which QuestDB
+  stores as **false without any diagnostic** — every `True` silently became `False`. The
+  flag binds booleans as a `VARCHAR` holding those two words instead.
+* **`no_param_arrays`.** psqlodbc executes a column-wise parameter array by inlining the
+  values into a single `BEGIN;INSERT ...;INSERT ...` string, where every non-numeric
+  value becomes a string literal. PostgreSQL types such a literal from the target column;
+  QuestDB does not convert it at all, so a bound `b"\x01\x02"` fails with
+  `inconvertible types: STRING -> BINARY [from='\x0102']`. One execute per row instead,
+  which psqlodbc sends as a typed `PQexecPrepared` — and QuestDB takes the bytes. The
+  cost is small here: 22.3k rows/s row-at-a-time against 23.9k with arrays forced on.
+
+### `GetObjects` falls back to `SQLDescribeCol`
+
+`SQLColumns` **fails** against QuestDB, with
+
+```
+HY000 Unrecognized return value from copy_and_convert_field. (8) (SQLColumns)
+```
+
+This one is a psqlodbc bug that QuestDB merely triggers. psqlodbc builds `SQLColumns`
+from a `pg_catalog` query and, for a server that reports itself as PostgreSQL 10 or
+newer, selects `pg_attribute.attidentity` — which it binds with a **NULL
+`StrLen_or_IndPtr`**, so a NULL in that column is a hard error rather than a NULL value.
+Real PostgreSQL stores `''` there; QuestDB's `pg_attribute` emulation has a `CHAR`
+column, and QuestDB sends an empty `CHAR` as NULL. Nothing on the ADBC side can make that
+call succeed.
+
+`AppendColumns` therefore falls back, when `SQLColumns` fails outright, to describing the
+result set of `SELECT * FROM <table> WHERE 1=0` with `SQLDescribeCol` — which is what
+`GetTableSchema` has always done. The fallback is not keyed on any driver: it only ever
+runs where the primary path already returned an error. It knows less than `SQLColumns`
+(no remarks, no column default, no radix), and leaves those fields NULL rather than
+guessing. It also drops one qualifier at a time from the table name, because QuestDB
+rejects the catalog its own `SQLTables` reports:
+`SELECT * FROM "qdb"."public"."adbc_t"` is an error, `"public"."adbc_t"` is fine.
+
+### Notes
+
+The entry needs two tolerance flags:
+
+* `decimal_type="decimal128(28, 3)"` — QuestDB does not send the declared precision of a
+  `DECIMAL` over the wire, so psqlodbc describes the column at its own maximum precision
+  (28) with the column's scale.
+* `not_null=("bo",)` — QuestDB's `BOOLEAN` has no NULL state, exactly like Access
+  `YESNO`: the workload's all-NULL second row reads back with `bo` false.
+
+Everything else passes unchanged: typed and NULL parameters, the emoji (QuestDB is
+UTF-8 throughout), microsecond timestamps, `BINARY` round-trips, affected-row counts,
+5000-row batched reads, and the "table does not exist [table=adbc_no_such_table]" error
+text.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down questdb
+# or, if started standalone:
+docker stop adbcbridge-questdb && docker rm adbcbridge-questdb
+```
+
 ## Microsoft Access (MDB Tools)
 
 No server: MDB Tools reads an Access `.mdb`/`.accdb` file directly. Getting the driver
