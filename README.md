@@ -127,6 +127,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | QuestDB 10 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (quirks handled: ingest DDL in standard SQL type names, boolean params as `true`/`false` text, no usable parameter arrays; `GetObjects` falls back to `SQLDescribeCol` because psqlodbc's `SQLColumns` fails here) |
 | IBM Db2 12.1 | Db2 CLI driver (clidriver `libdb2.so`) | PASS (driver quirk handled: 32-bit `SQLLEN` — see `adbc.odbc.sqllen_32bit`) |
 | Firebird 5 | Firebird ODBC 3.5.0-rc1 | PASS (driver quirks handled: `SQL_C_WCHAR` sized in 4-byte `wchar_t`, no usable parameter arrays) |
+| Azure SQL Edge 16.0 | msodbcsql 18 | PASS (no quirks; the SQL Server 2022 engine, so it takes the same path as SQL Server 2022 — it even reports `SQL_DBMS_NAME` "Microsoft SQL Server") |
 | Microsoft Access `.mdb`/`.accdb` | MDB Tools 1.0 (`odbc-mdbtools`) | PASS, read side only — the driver executes no DDL/DML and has no `SQLBindParameter` (32-bit `SQLLEN`, as Db2) |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.

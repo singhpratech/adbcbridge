@@ -33,6 +33,7 @@ from the second table to the first.
 | QuestDB 10 | psqlodbc (PG wire) | PASS | own type system behind the PG wire: standard-SQL ingest DDL, `true`/`false` boolean params, no usable parameter arrays; `SQLColumns` fails, `GetObjects` describes a zero-row SELECT instead |
 | MonetDB 11.55 | MonetDBODBClib | PASS | no usable parameter arrays; `SQLEndTran` unreliable under pyodbc |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
+| Azure SQL Edge 16.0 | msodbcsql 18 | PASS | SQL Server 2022 engine; no quirks |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 
 ## Driver available, free server available — queued for verification
@@ -54,7 +55,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | MatrixOne | MySQL Connector/ODBC | `matrixorigin/matrixone` | queued |
 | MariaDB ColumnStore | MariaDB Connector/ODBC | `mariadb/columnstore` | queued |
 | MongoDB (BI Connector) | MySQL Connector/ODBC | `mongo` + `mongosqld` | queued |
-| Azure SQL Edge | msodbcsql | `mcr.microsoft.com/azure-sql-edge` | queued |
 | IBM Informix | Db2 clidriver (DRDA) | `icr.io/informix/informix-developer-database` | queued |
 | OpenLink Virtuoso | virtodbc | `openlink/virtuoso-opensource-7` | queued |
 | Apache Ignite | ignite-odbc | `apacheignite/ignite` | queued |

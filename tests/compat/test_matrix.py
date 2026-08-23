@@ -5,7 +5,8 @@ Usage:
 
 Each database is enabled by an environment variable holding the path to its ODBC driver:
     SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, POSTGRES_ODBC_DRIVER, MARIADB_ODBC_DRIVER,
-    MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER,
+    MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, AZURESQLEDGE_ODBC_DRIVER, ORACLE_ODBC_DRIVER,
+    CLICKHOUSE_ODBC_DRIVER,
     DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER,
     ACCESS_ODBC_DRIVER
@@ -62,6 +63,16 @@ DBS = {
         null_params=False, rowcount=False, big_rows=300),
     "mssql": dict(
         env="MSSQL_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1,14331;Database=master;Uid=sa;Pwd=Adbc!Bridge2026;TrustServerCertificate=yes;",
+        ddl="CREATE TABLE adbc_t (i INT, f FLOAT, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME2(6), n DECIMAL(10,3), bo BIT)"),
+    "azuresqledge": dict(
+        # Azure SQL Edge is the SQL Server 2022 engine (it reports SQL_DBMS_NAME
+        # "Microsoft SQL Server" 16.00.x, indistinguishable from mssql over the wire),
+        # so msodbcsql 18 drives it and the mssql DDL applies unchanged -- INT, FLOAT,
+        # NVARCHAR, VARBINARY, DATE, DATETIME2(6), DECIMAL and BIT all behave the same.
+        # Kept as its own entry because it is a separately shipped engine build with a
+        # trimmed feature set, so the workload is worth running against it directly.
+        env="AZURESQLEDGE_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1,14332;Database=master;Uid=sa;Pwd=Adbc!Bridge2026;TrustServerCertificate=yes;",
         ddl="CREATE TABLE adbc_t (i INT, f FLOAT, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME2(6), n DECIMAL(10,3), bo BIT)"),
     "mysql": dict(
         env="MYSQL_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=13307;Database=adbc;User=adbc;Password=adbc;",
