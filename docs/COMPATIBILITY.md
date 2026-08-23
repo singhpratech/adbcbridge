@@ -13,13 +13,35 @@ an unverified driver should be expected to work on the generic path *and* to hav
 quirk or two waiting. Bug reports with the driver name and SQLSTATE are what move rows
 from the second table to the first.
 
+### A note on the PostgreSQL-wire rows
+
+Eighteen entries below reach their server through psqlodbc, and most of them are not
+PostgreSQL. One behaviour is keyed on being PostgreSQL rather than on speaking its wire:
+bulk ingest sends a batch as one array parameter per column
+(`INSERT … SELECT * FROM unnest(?::bigint[], ?::text[], …)`) instead of K row-groups of
+bound cells. It is enabled only when `version()` is a PostgreSQL banner carrying no fork's
+marker, and the server is then asked to prove it expands the form the way PostgreSQL does
+before it is used. Verified against live servers: **on** for PostgreSQL, TimescaleDB and
+Citus (the last two being extensions on stock PostgreSQL) and **off** for CockroachDB,
+YugabyteDB, CrateDB, RisingWave, Materialize, openGauss and Apache Cloudberry. Off by
+construction, not tried live, for QuestDB and ArcadeDB (both name themselves in
+`version()`, which is also how their existing quirks are keyed) and for YDB and Cloud
+Spanner via PGAdapter (whose `version()` is indistinguishable from a real PostgreSQL's,
+so the code that identifies them for their other quirks switches this one off
+explicitly). Everything excluded keeps the multi-row `INSERT` path, which is what it had
+before.
+
+Note that being excluded is not evidence the form would have failed: CockroachDB and
+YugabyteDB both answer the semantic check correctly. The rule is the brief's — default to
+off for anything not verified — not a claim that each excluded server is broken.
+
 ## Verified
 
 | Database | Wire / driver | Matrix | Notes |
 |---|---|---|---|
 | SQLite 3.45 | sqliteodbc | PASS | native delegation to `adbc_driver_sqlite` when installed |
 | DuckDB | duckdb-odbc | PASS | no usable parameter arrays |
-| PostgreSQL 16 | psqlodbc | PASS | native delegation to `adbc_driver_postgresql` when installed |
+| PostgreSQL 16 | psqlodbc | PASS | native delegation to `adbc_driver_postgresql` when installed; bulk ingest sends one array parameter per column (`INSERT … SELECT * FROM unnest(?::t[], …)`) rather than K row-groups of cells — a server quirk keyed on `version()`, so no other PG-wire server here gets it |
 | MariaDB 11 | MariaDB Connector/ODBC | PASS | |
 | MariaDB ColumnStore 23.02 | MariaDB Connector/ODBC (MariaDB wire) | PASS | columnar engine inside MariaDB 11.1: standard-SQL ingest DDL (`LONG VARCHAR`/`BIT` rejected), no `VARBINARY` column type; needs `columnstore_cache_inserts=ON` (bound-parameter inserts are ~2 rows/s without it) and `provision` to start the backend processes; ingest 14.9k rows/s (54.6k with array binding), fetch 1.41M rows/s |
 | MySQL 8.4 | MySQL Connector/ODBC | PASS | driver executes parameter arrays row by row |
@@ -28,14 +50,14 @@ from the second table to the first.
 | Oracle 23ai Free | Instant Client ODBC | PASS | no `SQL_C_SBIGINT` |
 | IBM Db2 12.1 | Db2 clidriver | PASS | 32-bit `SQLLEN`; ingest DDL spells an Arrow string as the widest `VARCHAR`, not the `LONG VARCHAR` the driver names (deprecated, unsortable, ~700x slower to write) |
 | ClickHouse 26 | clickhouse-odbc | PASS | one HTTP request per row on ingest |
-| CockroachDB 26 | psqlodbc (PG wire) | PASS | |
+| CockroachDB 26 | psqlodbc (PG wire) | PASS | `version()` is CockroachDB's own, so the PostgreSQL array-ingest form stays off and ingest uses the multi-row `INSERT` (verified) |
 | Percona Server 8.4 | MySQL Connector/ODBC (MySQL wire) | PASS | drop-in MySQL fork: same entry as MySQL, no quirks; ingest 21.1k rows/s, fetch 1.18M rows/s |
-| YugabyteDB 2026.1 | psqlodbc (PG wire) | PASS | |
-| TimescaleDB 2.29 | psqlodbc (PG wire) | PASS | |
-| Citus 14.1 (PostgreSQL 18) | psqlodbc (PG wire) | PASS | no quirks; the single container must be registered as its own worker (`citus_set_coordinator_host` + `shouldhaveshards`) before `create_distributed_table()` works; ingest 107k rows/s (array binding), fetch 1.86M rows/s |
-| CrateDB 6.4 | psqlodbc (PG wire) | PASS | eventually consistent (`REFRESH TABLE`); no binary or `DATE` column type; ingest 626 rows/s, fetch 767k rows/s |
+| YugabyteDB 2026.1 | psqlodbc (PG wire) | PASS | `version()` carries `-YB-`, so the PostgreSQL array-ingest form stays off (verified) |
+| TimescaleDB 2.29 | psqlodbc (PG wire) | PASS | an extension on stock PostgreSQL, so the array-ingest form applies and is used (verified) |
+| Citus 14.1 (PostgreSQL 18) | psqlodbc (PG wire) | PASS | no quirks; an extension on stock PostgreSQL, so the array-ingest form applies and is used, distributed tables included (verified); the single container must be registered as its own worker (`citus_set_coordinator_host` + `shouldhaveshards`) before `create_distributed_table()` works; ingest 107k rows/s (array binding), fetch 1.86M rows/s |
+| CrateDB 6.4 | psqlodbc (PG wire) | PASS | `version()` is CrateDB's own, so the PostgreSQL array-ingest form stays off (verified); eventually consistent (`REFRESH TABLE`); no binary or `DATE` column type; ingest 626 rows/s, fetch 767k rows/s |
 | QuestDB 10 | psqlodbc (PG wire) | PASS | own type system behind the PG wire: standard-SQL ingest DDL, `true`/`false` boolean params, no usable parameter arrays; `SQLColumns` fails, `GetObjects` describes a zero-row SELECT instead |
-| RisingWave 3.0 | psqlodbc (PG wire) | PASS | no driver quirks; server side: no type modifiers at all (`VARCHAR`, `NUMERIC` unqualified) and writes are visible only after `FLUSH`; ingest 983 rows/s, fetch 991k rows/s |
+| RisingWave 3.0 | psqlodbc (PG wire) | PASS | no driver quirks; `version()` names RisingWave, so the PostgreSQL array-ingest form stays off (verified); server side: no type modifiers at all (`VARCHAR`, `NUMERIC` unqualified) and writes are visible only after `FLUSH`; ingest 983 rows/s, fetch 991k rows/s |
 | MonetDB 11.55 | MonetDBODBClib | PASS | no usable parameter arrays; `SQLEndTran` unreliable under pyodbc |
 | TiDB 7.5 | MySQL Connector/ODBC (MySQL wire) | PASS | tarball driver needs `PLUGIN_DIR` for `mysql_native_password` |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |

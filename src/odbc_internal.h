@@ -161,6 +161,19 @@
 // Ceiling on the per-row parameter scratch one multi-row execute may allocate.
 #define ADBC_ODBC_MULTIROW_MAX_SLOT_BYTES (16 * 1024 * 1024)
 
+// --- Array ingest (PostgreSQL) ----------------------------------------------
+// Rows carried by one `INSERT INTO t SELECT * FROM unnest(?::t1[], ?::t2[], ...)`.
+// The statement takes one parameter per *column* however many rows it carries, so the
+// row count is bounded by how much text one parameter should hold rather than by any
+// parameter ceiling.  10,000 rows of the four-column benchmark shape is about 600 kB
+// spread over four parameters; measured against PostgreSQL 16 it is within noise of
+// 50,000 and clearly ahead of 1,000 (see bench/BENCHMARKS.md).
+#define ADBC_ODBC_ARRAY_INGEST_ROWS 10000
+// Ceiling on the array literal built for one column of one such statement.  A batch that
+// would exceed it is split, so a table of long strings does not build a parameter the
+// server would refuse (PostgreSQL's own limit is 1 GB per value).
+#define ADBC_ODBC_ARRAY_INGEST_MAX_BYTES (32 * 1024 * 1024)
+
 // --- Parallel bulk ingest (ADBC_ODBC_OPTION_INGEST_CONNECTIONS) --------------
 // Ceiling on `adbc.odbc.ingest_connections`.  A worker is a connection's worth of work,
 // and servers cap concurrent connections far below this anyway.
@@ -397,6 +410,17 @@ struct OdbcReaderOptions {
   // turns a bound array into one COM_STMT_BULK_EXECUTE, and Vertica's own client driver,
   // which turns one into a native bulk load.
   bool prefer_param_arrays;
+  // Server quirk: bulk ingest may send a whole batch as one array parameter per column
+  // and let the server expand it --
+  //   INSERT INTO t ("a", "b") SELECT * FROM unnest(?::bigint[], ?::text[])
+  // -- instead of K*ncols separately bound cells.  Set only for PostgreSQL itself, from
+  // the psqlodbc block of OdbcDetectQuirks: several servers speak the PostgreSQL wire
+  // protocol without being PostgreSQL, and multi-argument unnest with those casts is not
+  // theirs to promise.  Before the form is used on a connection it is also *verified*
+  // there, by a single statement whose answer pins down NULLs, empty strings and
+  // separator quoting (ArrayIngestServerOk); anything that answers differently keeps the
+  // multi-row INSERT path.
+  bool pg_array_ingest;
   // Driver quirk: spell an unbounded Arrow string column as the driver's widest VARCHAR
   // in generated ingest DDL, rather than as its SQL_LONGVARCHAR type.
   //
@@ -526,6 +550,12 @@ struct OdbcConnection {
   // Largest parameter count an INSERT on this connection was seen to prepare, discovered
   // by halving; 0 until something has actually been refused.
   int64_t multirow_max_params;
+  // Array ingest (reader_opts.pg_array_ingest), verified once per connection: whether
+  // this server really expands a multi-argument unnest of array literals the way
+  // PostgreSQL does.  The check is one small statement, run on the first bulk ingest
+  // rather than on connect, so a connection that never ingests never pays for it.
+  bool array_ingest_probed;      // the semantic check has run
+  bool array_ingest_unsupported; // ... and the form is not usable here: never try again
   struct OdbcReaderOptions reader_opts;
 };
 
