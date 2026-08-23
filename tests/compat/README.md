@@ -3122,3 +3122,172 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down influxdb3
 # or, if started standalone:
 docker rm -f adbcbridge-influxdb3
 ```
+
+## Dremio 26 (OSS, Arrow Flight SQL)
+
+Dremio is a lakehouse query engine, and Arrow Flight SQL is its *native* client
+protocol — port 32010, alongside the web UI and REST API on 9047. The ODBC route is
+therefore the same Arrow Flight SQL ODBC driver the
+[`flightsql`](#arrow-flight-sql-sqlflite-155--duckdb-111) and
+[`influxdb3`](#influxdb-3-core-arrow-flight-sql) entries use — read the `flightsql`
+section first: it is Dremio's own driver, and everything documented there (no
+`SQLBindParameter`, `SQLColumns` segfaults on the first `SQLFetch`, decimals described
+with precision 19) is the driver's and therefore true here too. What this entry adds is
+the driver run against the engine it was written for.
+
+Server:
+
+```sh
+docker run -d --name adbcbridge-dremio --memory=5g \
+  -p 127.0.0.1:9047:9047 -p 127.0.0.1:32010:32010 dremio/dremio-oss:latest
+```
+
+(or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d dremio`;
+it is in the `extra` profile, so a plain `up -d` leaves it alone). It is ready in about
+15 seconds — `Dremio Daemon Started as master` in `docker logs`, and
+`curl -s http://127.0.0.1:9047/apiv2/server_status` answers `"OK"`. The image is 1.4 GB;
+the JVM settles at about 1.5 GB resident with the image's own heap settings, so
+`--memory=5g` leaves plenty of room.
+
+### First start: there are no users, and every login fails until you make one
+
+A fresh Dremio has an empty user store and refuses all authentication — including the
+Flight SQL handshake — until the first admin exists. It is created over one unauthenticated
+REST call (`_dremionull` is the literal placeholder token that endpoint expects):
+
+```sh
+curl -s -X PUT http://127.0.0.1:9047/apiv2/bootstrap/firstuser \
+  -H 'Authorization: _dremionull' -H 'Content-Type: application/json' \
+  -d '{"userName":"adbc","firstName":"adbc","lastName":"bridge",
+       "email":"adbc@example.com","createdAt":1700000000000,
+       "password":"Adbc2026pass"}'
+# {"resourcePath":"/user/adbc","userName":"adbc", ...}
+```
+
+The password has to be at least 8 characters with a letter and a digit -- `"short"`
+comes back `400`. Run it once per container; a second call answers `First user can only
+be created when no user is already registered`.
+
+Driver: none to install — this is the same library the `flightsql` entry extracts, so
+point a third variable at it:
+
+```sh
+export DREMIO_ODBC_DRIVER=$FLIGHTSQL_ODBC_DRIVER
+```
+
+Run the entry:
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py dremio
+# dremio    PASS  (Dremio Server (via ODBC) 26.00.0005-202509091642240013-f5051a07)
+```
+
+### The query context is a connection property, not a `USE`
+
+Flight SQL has no "connect to database X" step. Dremio reads the default context from a
+gRPC header named `schema`, and the driver forwards every connection property it does not
+recognise as a header of exactly that name — the same mechanism the `influxdb3` entry uses
+for `database`:
+
+```
+Driver={drv};Host=127.0.0.1;Port=32010;UID=adbc;PWD=Adbc2026pass;useEncryption=false;schema=$scratch;
+```
+
+`useEncryption=false` matches the container's plain-gRPC listener: the image's
+`conf/dremio.conf` sets nothing under `services.flight` but `use_session_service`, so the
+Flight service comes up without TLS (`Flight Service started at ... on port 32010` in the
+log). `UID`/`PWD` are the admin created above; the driver turns them into Dremio's bearer
+token.
+
+### Loading the data: `$scratch`, and why the entry is still read-only
+
+`$scratch` is the one writable source a stock dremio-oss has — a filesystem source under
+`/opt/dremio/data/pdfs/scratch`. `CREATE TABLE ... AS SELECT`, `DROP TABLE` and, on a
+table created there with an explicit column list (that makes it an Iceberg table),
+`INSERT` all work through the ODBC connection. **Dremio is not the reason this entry is
+read-only.** A CTAS table is the one thing that cannot take DML:
+
+```
+INSERT INTO adbc_t VALUES (3, ...)
+-- Table ["$scratch".adbc_t] is not configured to support DML operations
+CREATE TABLE adbc_ice (i INT); INSERT INTO adbc_ice VALUES (1), (2)   -- both fine
+```
+
+The driver is. It answers `SQLBindParameter` with `HYC00 "Unsupported function"` on a
+virgin statement handle, and after a `SQLPrepare` that *succeeds* on
+`INSERT INTO adbc_ice (i) VALUES (?)` it reports `SQLNumParams` = 0 and refuses the bind
+again — exactly as the `flightsql` section documents, and confirmed here against Dremio:
+
+```
+virgin SQLBindParameter rc -1 (HYC00, 100, [Apache Arrow][Flight SQL] Unsupported function.)
+prepare rc 0    SQLNumParams n = 0    bind rc -1 (HYC00, ...)
+execute rc -1 (HY000, ... Illegal use of dynamic parameter)
+```
+
+So no parameter can reach a server that would happily take one, which rules out both the
+parameterised `INSERT` the other entries load `adbc_t` with and `adbc_ingest`, and the
+entry is `read_only=True`. `SQLExecDirect` of literal SQL works fine, so `setup` builds
+both tables itself and the read side of the workload then runs unchanged. `setup` is
+replayed on every connection (`bench/matrix_bench.py` opens several), and Dremio has no
+`CREATE OR REPLACE TABLE`, so each statement is `CREATE TABLE IF NOT EXISTS ... AS SELECT`
+— a no-op costing about half a second once the table exists, and one statement per table
+rather than a `CREATE` plus a literal `INSERT`.
+
+Two Dremio spellings the literals need:
+
+* **`_UTF8` in front of a string literal with an astral-plane character.** Dremio's
+  parser encodes an unprefixed literal in ISO-8859-1, so `SELECT '🚀'` fails with
+  `Error during planning the query` before the query runs at all, while
+  `SELECT _UTF8'héllo 🚀'` returns the emoji intact. (`é` alone is inside ISO-8859-1 and
+  needs no prefix — only the surrogate-pair characters do.)
+* **`BINARY_STRING('\x01\x02')`** for a `VARBINARY` literal. `X'0102'` is rejected
+  outright ("Unable to convert the value of `X'0102':BINARY(2)` ... to a Dremio constant
+  expression"), and `CAST(... AS VARBINARY)` only reinterprets a string's own bytes —
+  `BINARY_STRING` is the one that reads `\xNN` escapes.
+
+`adbc_big` needs 100,000 rows and Dremio has no `range()` or `generate_series()`, so it
+comes from five ten-row `VALUES` lists cross joined, with the row number computed from
+their digits. Dremio writes the Parquet file in about a third of a second.
+
+### What works
+
+The whole read side of the workload: `int32`, `double`, `string` (including
+`"héllo 🚀"` — the driver describes Dremio's `VARCHAR` as `SQL_VARCHAR`, so adbcbridge's
+reader is on its correct narrow UTF-8 path and the emoji survives), `VARBINARY` as bytes,
+`DATE`, `TIMESTAMP`, `BOOLEAN`, the all-NULL row, the 100,000-row batched read,
+`GetObjects`, `GetTableSchema` and the error text (`Object 'adbc_no_such_table' not
+found. Please check that it exists in the selected context.`). `GetObjects` works because
+the existing `no_sql_columns` quirk already covers this driver. **No driver change was
+needed for Dremio** — the third server behind this driver, and the second to need nothing
+new.
+
+Fetch: **1.1M rows/s** over the 100,000-row `adbc_big` (`bench/matrix_bench.py --rows
+10000 --fetch-rows 100000`; three runs on a loaded box gave 1.03M, 1.13M and 1.39M, so
+treat it as the same order as the other two Flight SQL entries rather than a ranking).
+There is no ingest number — nothing can be written through this driver.
+
+The entry's `extra` steps run Dremio's own catalog (`INFORMATION_SCHEMA."COLUMNS"` over a
+CTAS table, which is a real dataset in the source) and a filtered columnar scan of the
+100,000-row Parquet table.
+
+### The entry's tolerances
+
+| flag | why |
+|---|---|
+| `read_only=True` | the driver has no `SQLBindParameter`, so nothing that binds a value can run — not the parameterised `INSERT`, not `adbc_ingest`. Dremio itself writes fine; see above. `setup` builds `adbc_t` and `adbc_big` with literal SQL instead. |
+| `params=False` | the driver answers `SQLBindParameter` with `HYC00 "Unsupported function"` on a virgin statement handle; the parameterised query runs with a literal. |
+| `decimal_type="decimal128(19, 3)"` | the driver reports every `SQL_DECIMAL` as precision 19 whatever was declared, so `DECIMAL(10,3)` is described `(19, 3)`. Unlike the sqlflite case in the `flightsql` entry the *scale* is right, so nothing is lost — `12.345` arrives exact, just in a wider `decimal128`, and no `decimal_as_string` is needed. |
+
+One thing worth knowing that costs the entry nothing: Dremio's `TIMESTAMP` is
+millisecond-precision, and the driver describes it as scale 3, so `13:45:10.123456`
+would read back `.123000` — the workload's `ts_us` default already allows that, and the
+entry stores `.123` to begin with.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down dremio
+# or, if started standalone:
+docker rm -f adbcbridge-dremio
+```

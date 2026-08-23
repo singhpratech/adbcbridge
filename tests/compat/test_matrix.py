@@ -25,6 +25,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, GREPTIMEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, ARCADEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFLUXDB3_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DREMIO_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -94,6 +95,14 @@ def arcadedb_insert(name, cols, rows):
 
 
 ARCADEDB_BIG_ROWS = 100000
+
+# --- Dremio ---------------------------------------------------------------------
+# Dremio has no row-generating table function (no range(), no generate_series), so the
+# `dremio` entry's 100,000-row adbc_big comes from five ten-row VALUES lists cross
+# joined, with the row number computed from their digits.
+DREMIO_DIGITS = "(VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9))"
+DREMIO_ROWNO = "d1.n * 10000 + d2.n * 1000 + d3.n * 100 + d4.n * 10 + d5.n"
+
 DBS = {
     "sqlite": dict(
         env="SQLITE_ODBC_DRIVER", conn="Driver={drv};Database=" + os.path.join(TMP, "m.db") + ";",
@@ -780,6 +789,74 @@ DBS = {
              " COUNT(*) AS n FROM adbc_big GROUP BY bucket)", (1,)),
             ("SELECT COUNT(*), MIN(a), MAX(a) FROM adbc_big"
              " WHERE time >= '2024-02-29T13:45:10Z'", (100000, 0, 99999)),
+        ]),
+    "dremio": dict(
+        # Dremio (dremio-oss 26), a lakehouse query engine whose *native* client protocol
+        # is Arrow Flight SQL (port 32010), driven by the same Arrow Flight SQL ODBC
+        # driver as the `flightsql` and `influxdb3` entries -- the driver Dremio itself
+        # publishes, so this entry runs it against the engine it was written for.
+        # Everything the `flightsql` entry documents about that driver holds here too.
+        #   Flight SQL has no "connect to database X" step: the driver forwards every
+        # connection property it does not recognise as a gRPC header, and Dremio reads
+        # `schema` as the query context.  `$scratch` is the one writable source a stock
+        # dremio-oss has, so that is where `setup` puts its tables.  The server needs an
+        # admin user created over its REST API first; see tests/compat/README.md.
+        env="DREMIO_ODBC_DRIVER",
+        conn="Driver={drv};Host=127.0.0.1;Port=32010;UID=adbc;PWD=Adbc2026pass;"
+             "useEncryption=false;schema=$scratch;",
+        # read_only for the driver's reason alone: it answers SQLBindParameter with
+        # HYC00 "Unsupported function" on a virgin statement handle and reports 0
+        # parameter markers after a successful SQLPrepare, so neither the parameterised
+        # INSERT the other entries load adbc_t with nor adbc_ingest can go through it.
+        # (Dremio itself does write: `$scratch` takes CTAS, and a table created there
+        # with an explicit column list is an Iceberg table that takes INSERT -- but no
+        # parameter can reach the server to use it.)  SQLExecDirect of literal SQL works,
+        # so `setup` builds both tables and the read side then runs unchanged.
+        read_only=True,
+        params=False,  # no SQLBindParameter: the parameterised SELECT runs as a literal
+        # The driver reports every SQL_DECIMAL column as precision 19 -- the widest a
+        # DECIMAL(19,s) can be -- whatever was declared, so DECIMAL(10,3) is described
+        # as (19, 3).  Unlike the sqlflite case in the `flightsql` entry the *scale* is
+        # right, so nothing is lost: 12.345 arrives exact, just in a wider decimal128.
+        decimal_type="decimal128(19, 3)",
+        # Replayed on every connection (bench/matrix_bench.py opens several), so both
+        # statements are IF NOT EXISTS: Dremio has no CREATE OR REPLACE TABLE, and
+        # rebuilding these would cost a Parquet rewrite per connection.  CTAS is also
+        # the only single-statement way to load a table here -- with no parameters, the
+        # alternative is CREATE TABLE (cols) plus a literal INSERT per table.
+        setup=[
+            # ROW1/ROW2 spelled as literals.  Two Dremio-isms: `_UTF8` is required in
+            # front of a string literal holding an astral-plane character (its parser
+            # encodes an unprefixed literal as ISO-8859-1 and fails planning on the
+            # emoji), and BINARY_STRING() is how a VARBINARY literal is written.
+            "CREATE TABLE IF NOT EXISTS adbc_t AS"
+            " SELECT CAST(1 AS INTEGER) AS i, CAST(1.5 AS DOUBLE) AS f,"
+            " _UTF8'h\u00e9llo \U0001f680' AS s, BINARY_STRING('\\x01\\x02') AS b,"
+            " DATE '2024-02-29' AS d, TIMESTAMP '2024-02-29 13:45:10.123' AS ts,"
+            " CAST(12.345 AS DECIMAL(10,3)) AS n, true AS bo FROM (VALUES(1))"
+            " UNION ALL"
+            " SELECT CAST(2 AS INTEGER), CAST(NULL AS DOUBLE), CAST(NULL AS VARCHAR),"
+            " CAST(NULL AS VARBINARY), CAST(NULL AS DATE), CAST(NULL AS TIMESTAMP),"
+            " CAST(NULL AS DECIMAL(10,3)), CAST(NULL AS BOOLEAN) FROM (VALUES(1))",
+            # adbc_big, the table check_big() reads and the one bench/matrix_bench.py
+            # times a fetch of.  Dremio has no range()/generate_series, so the 100,000
+            # rows come from five cross-joined ten-row VALUES lists; it writes the
+            # Parquet file in about a third of a second.
+            "CREATE TABLE IF NOT EXISTS adbc_big AS SELECT CAST(%s AS BIGINT) AS a,"
+            " CONCAT('r', CAST(%s AS VARCHAR)) AS b FROM %s AS d1(n), %s AS d2(n),"
+            " %s AS d3(n), %s AS d4(n), %s AS d5(n)"
+            % ((DREMIO_ROWNO, DREMIO_ROWNO) + (DREMIO_DIGITS,) * 5),
+        ],
+        big_rows=100000,
+        extra=[
+            # Dremio's own catalog, over the tables `setup` just created: a CTAS table
+            # is a real dataset in the source, so INFORMATION_SCHEMA describes it.
+            ("SELECT COUNT(*) FROM INFORMATION_SCHEMA.\"COLUMNS\""
+             " WHERE TABLE_NAME = 'adbc_t'", (8,)),
+            # A columnar scan with a pushed-down filter over the 100,000-row Parquet
+            # table -- the engine's own data path, on a result the entry knows exactly.
+            ("SELECT COUNT(*), MIN(a), MAX(a) FROM adbc_big WHERE a >= 50000",
+             (50000, 50000, 99999)),
         ]),
     "access": dict(
         env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
