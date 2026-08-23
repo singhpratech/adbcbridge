@@ -34,6 +34,7 @@ from the second table to the first.
 | Citus 14.1 (PostgreSQL 18) | psqlodbc (PG wire) | PASS | no quirks; the single container must be registered as its own worker (`citus_set_coordinator_host` + `shouldhaveshards`) before `create_distributed_table()` works; ingest 107k rows/s (array binding), fetch 1.86M rows/s |
 | CrateDB 6.4 | psqlodbc (PG wire) | PASS | eventually consistent (`REFRESH TABLE`); no binary or `DATE` column type; ingest 626 rows/s, fetch 767k rows/s |
 | QuestDB 10 | psqlodbc (PG wire) | PASS | own type system behind the PG wire: standard-SQL ingest DDL, `true`/`false` boolean params, no usable parameter arrays; `SQLColumns` fails, `GetObjects` describes a zero-row SELECT instead |
+| RisingWave 3.0 | psqlodbc (PG wire) | PASS | no driver quirks; server side: no type modifiers at all (`VARCHAR`, `NUMERIC` unqualified) and writes are visible only after `FLUSH`; ingest 983 rows/s, fetch 991k rows/s |
 | MonetDB 11.55 | MonetDBODBClib | PASS | no usable parameter arrays; `SQLEndTran` unreliable under pyodbc |
 | TiDB 7.5 | MySQL Connector/ODBC (MySQL wire) | PASS | tarball driver needs `PLUGIN_DIR` for `mysql_native_password` |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
@@ -47,7 +48,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 
 | Database | Wire / driver | Server | Status |
 |---|---|---|---|
-| RisingWave | psqlodbc | `risingwavelabs/risingwave` | queued |
 | Materialize | psqlodbc | `materialize/materialized` | queued |
 | openGauss | psqlodbc | `enmotech/opengauss` | queued |
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |

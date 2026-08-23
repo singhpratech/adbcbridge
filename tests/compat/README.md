@@ -1291,6 +1291,114 @@ real SQL Server 2022 gives, so no quirk could be keyed on it even if one were ne
 `SELECT @@VERSION` is what tells them apart — it names "Microsoft Azure SQL Edge
 Developer (RTM)".
 
+## RisingWave 3
+
+RisingWave is a streaming database (materialised views kept up to date incrementally over
+streaming input). It speaks the PostgreSQL wire protocol and announces itself as
+PostgreSQL 13, so the same `psqlodbc` build used for the `postgres` entry drives it —
+there is no RisingWave ODBC driver.
+
+### Get the ODBC driver without root
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export RISINGWAVE_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d risingwave
+# or standalone:
+docker run -d --name adbcbridge-risingwave --memory=2g -p 127.0.0.1:14566:4566 \
+  -v $PWD/tests/compat/risingwave.toml:/risingwave.toml:ro \
+  risingwavelabs/risingwave:latest single_node --config-path /risingwave.toml
+```
+
+`single_node` runs the meta, compute, frontend and compactor components in one process,
+with an embedded SQLite meta store and the local filesystem as its object store — no
+external MinIO or etcd. The compose service sits in the `extra` profile so a plain
+`up -d` does not start it. It is ready in about half a minute, when the log line
+`pgwire::pg_server: server started addr="0.0.0.0:4566"` appears:
+
+```sh
+docker logs adbcbridge-risingwave 2>&1 | grep "server started"
+```
+
+**The mounted config file is not optional.** `single_node` sizes each component from the
+memory available to the process and gives the compactor an eighth of it (of which 80% is
+usable, less a fixed 128 MB metadata cache); in a container small enough to run beside the
+rest of the matrix that share lands below the compactor's own minimum, and the process
+aborts at startup on
+
+```
+thread 'rw-standalone-compactor' panicked at src/storage/compactor/src/server.rs:124:9:
+assertion failed: compactor_memory_limit_bytes > min_compactor_memory_limit_bytes as usize * 2
+```
+
+(exit 139, and it takes the whole standalone process with it, not just the compactor).
+The minimum is twice one SST — the same log line reports `sstable_size_bytes 268435456`,
+so ~537 MB — and it is a constant, so raising `--memory` is the wrong lever: 2 GB gives
+the compactor 215 MB and 3 GB gives it 322 MB, both far short, and it would take a
+container of roughly 7 GB for the derived share to clear the check.
+`tests/compat/risingwave.toml` pins `storage.compactor_memory_limit_mb = 1024` instead. It is a cap on what compaction
+may use, not an allocation — the container settles around 300 MB running the matrix.
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py risingwave
+# risingwave PASS  (PostgreSQL (via ODBC) 13.14.0)
+```
+
+### Notes
+
+No driver quirk was needed: psqlodbc drives RisingWave the way it drives PostgreSQL, and
+every part of the workload — typed parameters, NULLs, `BYTEA`, emoji, microsecond
+timestamps, parameter arrays on bulk ingest, batched reads, `GetObjects`,
+`GetTableSchema`, error text — works unchanged. Two things about the *server* shape the
+entry:
+
+* **`refresh`.** A row becomes visible to a scan only once the next barrier commits it,
+  so a `SELECT` issued immediately after an `INSERT` or an `adbc_ingest` legitimately
+  returns nothing — with the `refresh` key removed the entry fails at the first read,
+  with zero rows, every time. The entry sets `refresh="FLUSH"` and `test_matrix.py` runs
+  it after each write; `FLUSH` is RisingWave's own read-your-writes statement and waits
+  for that barrier. It takes no table name, so the `"{}"` the other entries use for one
+  simply goes unused. (`SET RW_IMPLICIT_FLUSH = true` is the session-level equivalent.)
+* **No type modifiers.** RisingWave's parser accepts no precision, length or scale on a
+  column type: `VARCHAR(50)` and `TIMESTAMP(6)` fail to parse (``expected ',' or ')'
+  after column definition, found: (``) and `NUMERIC(10,3)` parses but is rejected
+  (``unsupported data type: NUMERIC(10,3)``). The entry's DDL therefore declares `s` as
+  `VARCHAR` and `n` as `NUMERIC`. This costs the *entry* nothing else: psqlodbc's own
+  type names, which the generated ingest DDL uses (`int8`, `float8`, `bool`, `varchar`,
+  `numeric`, `date`, `bytea`, `timestamp`), are all accepted unqualified, so unlike
+  QuestDB this entry needs no `ansi_ddl_type_names` and no `ingest_types`.
+* **`decimal_type`.** A `NUMERIC` with no declared precision or scale has none to report,
+  so psqlodbc falls back to its own maximum precision (28) and RisingWave reports the
+  scale of the values actually in the result set — 3 for the `12.345` the entry stores,
+  1 for a `7.1`, and psqlodbc's default 6 for an empty result. The column arrives as
+  `decimal128(28, 3)`; the value itself is exact.
+
+Benchmark (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`): ingest 983 rows/s
+row-at-a-time, 1,707 rows/s with parameter arrays (pyodbc `executemany`: 913 rows/s),
+fetch 991k rows/s (pyodbc 476k). Ingest is slow in absolute terms because RisingWave is
+built for streaming input rather than for `INSERT`, and each statement here waits for a
+barrier; parameter arrays nearly double it, which is the largest relative gain of any
+PostgreSQL-wire entry.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down risingwave
+# or, if started standalone:
+docker rm -f adbcbridge-risingwave
+```
+
 ## Microsoft Access (MDB Tools)
 
 No server: MDB Tools reads an Access `.mdb`/`.accdb` file directly. Getting the driver

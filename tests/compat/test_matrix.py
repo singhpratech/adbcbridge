@@ -14,6 +14,8 @@ Each database is enabled by an environment variable holding the path to its ODBC
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DATABEND_ODBC_DRIVER
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER, CITUS_ODBC_DRIVER,
     QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER,
+    RISINGWAVE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -285,6 +287,27 @@ DBS = {
         decimal_type="decimal128(28, 3)",
         # QuestDB's BOOLEAN has no NULL state (like Access YESNO): row 2's bo is false.
         not_null=("bo",)),
+    "risingwave": dict(
+        # RisingWave is a streaming database that speaks the PostgreSQL wire protocol
+        # (it announces itself as PostgreSQL 13), so psqlodbc drives it.  Only the wire
+        # protocol and the catalog are PostgreSQL's: the type system is RisingWave's own
+        # and no column type takes a modifier.  VARCHAR(50) and TIMESTAMP(6) do not even
+        # parse ("expected ',' or ')' after column definition, found: (") and NUMERIC(10,3)
+        # parses but is refused ("unsupported data type: NUMERIC(10,3)"), so the columns
+        # below are declared unqualified.  psqlodbc's own type names ("int8", "float8",
+        # "bool", "varchar", "numeric") are all accepted, so the generated ingest DDL
+        # needs neither `ansi_ddl_type_names` nor `ingest_types`.
+        env="RISINGWAVE_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=14566;Database=dev;Uid=root;",
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR, b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC, bo BOOLEAN)",
+        # A write only becomes visible to a later scan once the next barrier commits it,
+        # so every write here is followed by FLUSH (which waits for that barrier).  The
+        # statement takes no table name -- "{}" simply goes unused.
+        refresh="FLUSH",
+        # An unqualified NUMERIC has no declared precision or scale: psqlodbc falls back
+        # to its own maximum precision (28), and RisingWave reports the scale of the
+        # values actually in the result set (3 for the 12.345 stored here; 6 -- psqlodbc's
+        # default -- for an empty result).
+        decimal_type="decimal128(28, 3)"),
     "firebird": dict(
         env="FIREBIRD_ODBC_DRIVER",
         conn="Driver={drv};DBNAME=inet://127.0.0.1:13050//var/lib/firebird/data/adbc.fdb;UID=adbc;PWD=adbc;CHARSET=UTF8;",
