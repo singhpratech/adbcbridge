@@ -286,3 +286,25 @@ services:
       --mysql-addr 0.0.0.0:4002 --postgres-addr 0.0.0.0:4003
     mem_limit: 1g
     ports: ["127.0.0.1:14002:4002", "127.0.0.1:14003:4003"]
+
+  # ArcadeDB: a multi-model (document/graph/key-value) server that speaks the PostgreSQL
+  # wire protocol through its PostgresProtocolPlugin, which is not loaded by default --
+  # arcadedb.server.plugins is what turns it on, and arcadedb.postgres.port pins the
+  # listener it opens (5432 is also its default, but the plugin only binds one when told).
+  # arcadedb.server.defaultDatabases creates the `adbc` database and an `adbc` user on
+  # first start; the matrix connects as `root`, whose password must be set explicitly or
+  # the server prompts for one on a terminal it does not have.
+  # In the `extra` profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d arcadedb
+  # 15441 rather than 15433: that one is yugabyte's.
+  arcadedb:
+    profiles: ["extra"]
+    image: arcadedata/arcadedb:latest
+    environment:
+      JAVA_OPTS: >-
+        -Darcadedb.server.rootPassword=Adbc2026
+        -Darcadedb.server.defaultDatabases=adbc[adbc:adbc]
+        -Darcadedb.postgres.port=5432
+        -Darcadedb.server.plugins=Postgres:com.arcadedb.postgres.PostgresProtocolPlugin
+    mem_limit: 1g
+    ports: ["127.0.0.1:15441:5432"]
