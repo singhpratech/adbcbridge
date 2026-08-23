@@ -134,6 +134,13 @@ void OdbcDelegateProxyRelease(struct OdbcDelegateProxy* proxy);
 /// Does this string look like a native ADBC URI ("postgresql://...", "sqlite:...")?
 bool OdbcDelegateIsNativeUri(const char* value);
 
+/// Look one ODBC keyword up in a connection string and then, if it is not there,
+/// in the [dsn] section of odbc.ini.  Case-insensitive on the keyword, and it
+/// understands the "{...}" quoting an ODBC value may use.  Returns a malloc'd
+/// value (which may be the empty string) or NULL when the keyword is set nowhere.
+/// Either of `conn` and `dsn` may be NULL.
+char* OdbcConnStringKeyword(const char* conn, const char* dsn, const char* key);
+
 /// Translate a native ADBC URI into an ODBC connection string, for the fallback
 /// path (ODBC cannot consume "postgresql://..." itself).  Returns an error with
 /// a diagnostic when no installed ODBC driver can serve the URI.

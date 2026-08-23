@@ -120,6 +120,59 @@ def test_release_with_open_transaction_drops_locks():
     print("RELEASE WITH OPEN TXN OK")
 
 
+def test_tune_option():
+    """adbc.odbc.tune is a database option, on by default, and only takes a bool."""
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "tune.db")
+    uri = f"Driver={SQLITE_ODBC};Database={db};"
+    kw = {"uri": uri, "adbc.odbc.delegate": "never"}
+    with dbapi.connect(driver=DRIVER, db_kwargs=kw) as conn:
+        assert conn.adbc_database.get_option("adbc.odbc.tune") == "true"
+    with dbapi.connect(driver=DRIVER, db_kwargs={**kw, "adbc.odbc.tune": "false"}) as conn:
+        assert conn.adbc_database.get_option("adbc.odbc.tune") == "false"
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 AS one")
+            assert cur.fetch_arrow_table().to_pydict()["one"] == [1]
+    try:
+        dbapi.connect(driver=DRIVER, db_kwargs={**kw, "adbc.odbc.tune": "sometimes"})
+        raise AssertionError("expected a rejected value")
+    except Exception as e:  # noqa: BLE001
+        assert "true/false" in str(e), e
+    print("TUNE OPTION OK")
+
+
+def test_statement_reuse_after_rollback():
+    """A statement executed again after a rollback must work.
+
+    Rolling back a transaction can invalidate a driver's cursor state behind the driver
+    manager's back -- the driver manager tracks cursor state too, answers SQLCloseCursor
+    with 24000 itself once it believes the cursor is closed, and the driver never hears.
+    psqlodbc with UseDeclareFetch=1 then refuses every later execute on that statement
+    with "[HY010] The cursor is open".  The reader takes a fresh statement handle on the
+    first use after a rollback; this pins that down on a driver everyone has.
+    """
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "rb.db")
+    uri = f"Driver={SQLITE_ODBC};Database={db};"
+    conn = dbapi.connect(driver=DRIVER, db_kwargs={"uri": uri, "adbc.odbc.delegate": "never"},
+                         autocommit=False)
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE rb (i INTEGER)")
+        cur.executemany("INSERT INTO rb VALUES (?)", [(i,) for i in range(100)])
+    conn.commit()
+    with conn.cursor() as cur:
+        for drain in (False, True):
+            cur.execute("SELECT i FROM rb ORDER BY i")
+            if drain:
+                assert cur.fetch_arrow_table().num_rows == 100
+            conn.rollback()  # ... with the cursor still open when drain is False
+            cur.execute("SELECT COUNT(*) FROM rb")
+            assert cur.fetchone()[0] == 100
+            conn.rollback()
+    conn.close()
+    print("STATEMENT REUSE AFTER ROLLBACK OK")
+
+
 if __name__ == "__main__":
     main()
 

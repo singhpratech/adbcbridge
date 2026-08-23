@@ -523,6 +523,12 @@ bool OdbcDelegateIsNativeUri(const char* value) {
   return FamilyFromUri(value, &rest) != FAMILY_NONE;
 }
 
+char* OdbcConnStringKeyword(const char* conn, const char* dsn, const char* key) {
+  char* v = ConnStringGet(conn, key);
+  if (v) return v;
+  return DsnGet(dsn, key);
+}
+
 // ---------------------------------------------------------------------------
 // Percent-encoding
 

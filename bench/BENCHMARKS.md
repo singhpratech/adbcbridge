@@ -398,6 +398,144 @@ The `VARCHAR(20)` numbers at the top of this file are unaffected — that column
 is bound at its declared 81 bytes either way (1,000,000 rows: 2.10 M rows/s
 before, 2.12 M after).
 
+## PostgreSQL, revisited: where the last 2.6x is
+
+The section above got the bridge to within a couple of percent of the raw-ODBC
+floor on PostgreSQL. That left a 2.6x gap to the *native* `adbc_driver_postgresql`,
+and the obvious explanations for it — psqlodbc's text protocol, and its
+`Fetch=100` cursor granularity — are **both wrong**. What the gap actually is,
+and what was done about it:
+
+Medians of 7-9 interleaved runs, PostgreSQL 16 in `adbcbridge-pg`, psqlodbc 16.00,
+`batch_size` 1024, `adbc.odbc.delegate=never`, `fetch_arrow_table()`, each rep a
+fresh process pinned with `taskset -c 3`. Run-to-run spread was 1-4% (p25..p75)
+with the box otherwise busy at load average 2-6.
+
+| Query | before | after | native | floor |
+|---|---:|---:|---:|---:|
+| `(int4, float8, varchar(20), date)`, 1,000,000 rows | 0.5705 s (1.75 M rows/s) | 0.5704 s (1.75 M) | 0.1920 s (5.21 M) | 0.4428 s (2.26 M) |
+| same, 100,000 rows | 0.0561 s (1.78 M) | 0.0563 s (1.78 M) | 0.0192 s (5.21 M) | 0.0465 s (2.15 M) |
+| `(int4, text, varchar, numeric, bool, timestamp, bytea)`, 500,000 rows | 0.6330 s (790 k) | **0.5304 s (943 k)** | 0.2030 s (2.46 M) | |
+| `(int4, bytea)`, 500,000 rows | 0.1820 s (2.75 M) | **0.1385 s (3.61 M)** | 0.0715 s (6.99 M) | |
+
+The four-column query does not move, and that is the honest headline: **on a
+query with no length-less column there was nothing left to win.** A C-level
+measurement of the same 1M-row read (no Python, no pyarrow) attributes 0.44 s to
+`SQLExecDirect` (0.21 s) plus 124 `SQLFetch` calls (0.23 s) plus **7.3 ms** of
+Arrow conversion — 1.6% of wall clock. We are marginally *faster* than
+`bench/odbc_floor.c` on the same query. The remaining 2.6x is inside psqlodbc.
+
+### The width-0 cliff: `bytea`
+
+The `TEXT` column cliff has a twin. psqlodbc describes PostgreSQL's `bytea` as
+`SQL_LONGVARBINARY` with **`column_size` 0** — no width at all, however long the
+values are — and `ApplyBindWidth()` refused to bind a column of width 0 outright.
+One unbound column sets `rows_per_fetch = 1`, so a `SELECT` with a `bytea` in it
+fetched all 500,000 rows one at a time, with a `SQLGetData` per column per row.
+
+A width of 0 from a type that has no declared length is not a different
+situation from the 8190 the same driver invents for `text`: both are guesses, and
+the reader already knows how to bind a guess — at `adbc.odbc.long_bind_bytes`
+(2 KiB), re-reading in full whatever overflows it. So it now does, whenever the
+driver offers a repair route (`getdata_repair` / `refetch_repair`, as before).
+A width of 0 from a type that *does* have a declared length still means the
+driver is saying nothing usable, and such a column stays unbound.
+
+Worth **1.19x** on a realistic seven-column row with one `bytea` in it and
+**1.31x** on `(id, bytea)`, and it costs nothing anywhere else. Output is
+byte-identical: a table of 5/200/2,000/20,000-byte `bytea` and
+10/300/5,000/40,000-character `text` values, with NULLs and empty values, hashes
+the same before and after at `batch_size` 1024 and at 7, and the Arrow schema is
+unchanged.
+
+psqlodbc's `ByteaAsLongVarBinary=0` reaches the same block cursor from the other
+end — it makes `bytea` a `SQL_VARBINARY(255)` — and was measured at 0.5425 s
+against 0.5304 s for the reader fix on the seven-column query, i.e. no better,
+while it also moves `SQLGetTypeInfo`'s name for `SQL_LONGVARBINARY` from `bytea`
+to `lo` and so breaks the DDL bulk ingest generates. It is not set.
+
+### Streaming reads: `UseDeclareFetch=1` is now free
+
+psqlodbc's default (`UseDeclareFetch=0`) is not a cursor at all: it drains the
+whole result set into its own tuple store during `SQLExecDirect`. That costs
+memory in proportion to the *result*, not to `batch_size` — 422 MB peak RSS for
+a 1M-row read of a 65 MB table — and a big enough scan is an OOM waiting to
+happen. `UseDeclareFetch=1` turns it into a server-side cursor and 158 MB, but
+used to cost 22% throughput, because each `FETCH` returns
+`max(Fetch, SQL_ATTR_ROW_ARRAY_SIZE)` rows and psqlodbc's default `Fetch` of 100
+is always beaten by our rowset, so the cursor round-trips once per rowset.
+
+With `adbc.odbc.tune` on (the default), setting `UseDeclareFetch=1` and no
+`Fetch` now gets `Fetch=8192` — eight rowsets per round trip — and streaming
+becomes free:
+
+| 1,000,000 rows, `batch_size` 1024 | time | peak RSS |
+|---|---:|---:|
+| default (whole result set buffered client-side) | 0.5738 s | 422 MB |
+| `UseDeclareFetch=1`, auto-tuned `Fetch` | 0.5723 s | 158 MB |
+| `UseDeclareFetch=1`, `adbc.odbc.tune=false` | 0.6976 s | |
+| `UseDeclareFetch=1;Fetch=1024` (caller's value, never overridden) | 0.7116 s | |
+
+`UseDeclareFetch=1` is **not** set by default: it needs a server that implements
+`DECLARE … CURSOR WITH HOLD` and `FETCH n IN …`, and psqlodbc drives eleven
+PostgreSQL-wire databases in the compat matrix (CrateDB, QuestDB, Materialize,
+RisingWave, …) whose support for that is unknown and untested here. It is an
+opt-in with a documented cost, not a default.
+
+Two other things came out of making it usable:
+
+- **Rolling back with a cursor open used to wedge the statement for good.**
+  With `UseDeclareFetch=1`, `SQLEndTran(SQL_ROLLBACK)` invalidates psqlodbc's
+  cursor state behind the driver manager's back: unixODBC then believes the
+  cursor is closed, answers `SQLCloseCursor` with 24000 itself, the driver never
+  hears, and every later execute on that statement fails `[HY010] The cursor is
+  open`. The reader now takes a fresh statement handle on the first use after a
+  rollback (`tests/test_sqlite.py::test_statement_reuse_after_rollback`).
+- The connection string is assembled once, at connect, and the auto-tune adds at
+  most one short keyword. That matters: the **length** of a psqlodbc connection
+  string moves its fetch loop by up to 10% all on its own, across a malloc
+  size-class boundary, with semantically empty padding. Any A/B on psqlodbc
+  connection options has to pad every variant to the same length or it measures
+  the allocator.
+
+### What the gap is not
+
+Measured and rejected, so nobody re-runs them:
+
+- **The text protocol is worth ~12%, not 3.7x.** The same 1M-row result set is
+  61,666,789 bytes of psqlodbc text against 55,000,203 bytes of the native
+  driver's `COPY … (FORMAT binary)` — 6.7 MB more, well under 10 ms of memcpy.
+  psqlodbc cannot be made to ask for binary anyway: `convert.c:4149` is a literal
+  `/* result format is text */ *resultFormat = 0;`, and no connection keyword or
+  `pqopt` libpq keyword reaches it.
+- **`Fetch` is inert at the default.** psqlodbc's default is
+  `UseDeclareFetch=0`, so there is no cursor and no per-100-row round trip:
+  `strace -c -e trace=network` counts 8 client messages for a 100,000-row read.
+- **The real cost is psqlodbc's allocator.** During `SQLExecDirect` it calls
+  `malloc` `(3 + ncols)` times and `free` 3 times **per row** — 7,000,054 mallocs
+  and 3.33 GB requested for 1M x 4 columns, against libpq's 1 malloc + 1 free per
+  row. Execute time tracks the malloc count at ~33 ns each across a 1-to-8-column
+  sweep. Then `SQLFetch` pays text-to-C conversion, worst for `date` (98 ms/1M
+  values) and `float8` (57 ms, exactly 1,000,000 `strtod` calls). Neither is
+  reachable from this side of the ODBC boundary.
+- **Asking for a different C type does not dodge it.** Binding `date` as
+  `SQL_C_CHAR` to parse the text ourselves costs 213-268 ms per 1M values against
+  91 ms for `SQL_C_TYPE_DATE`; `SQL_C_WCHAR` is worse than `SQL_C_CHAR` for every
+  column.
+- **Our own conversion loop has ~7 ms of headroom per 1M rows** (string bulk copy
+  4.2 ms, `date32` 3.0 ms, +2.7 ms more at 10% NULLs; fixed-width columns are a
+  `memcpy` already at memory bandwidth). Making all of it free would be 1.6% of
+  the query. Deliberately not spent.
+- **The ANSI psqlodbc build is ~5% faster** on a query with a text column
+  (0.5499 s against 0.5774 s for `psqlodbcw.so`, 7 interleaved runs): binding
+  `SQL_C_CHAR` against a Unicode driver makes unixODBC translate every value
+  UTF-8 -> UTF-16 -> UTF-8. That is a packaging choice for the *caller* — and only
+  correct with `client_encoding=UTF8` — so it is documented, not taken.
+- **Where a native ADBC driver exists, delegation already wins all of it.**
+  `adbc.odbc.delegate=auto` (the default) reports `delegated_to: postgresql` and
+  reads the four-column 1M-row query in 0.204 s. The ODBC numbers above are what happens where no native driver is
+  installed.
+
 ## Optimisation suggestions, ranked by expected gain
 
 **1. Never ship or benchmark the `-O0` build.** `-DCMAKE_BUILD_TYPE=Debug`

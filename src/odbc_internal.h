@@ -81,6 +81,12 @@
 /// Force the 32-bit-SQLLEN driver quirk on or off ("true"/"false").  Unset means
 /// autodetect from SQL_DRIVER_NAME; see OdbcReaderOptions::sqllen_32bit.
 #define ADBC_ODBC_OPTION_SQLLEN_32BIT "adbc.odbc.sqllen_32bit"
+/// Let adbcbridge add ODBC connection keywords that suit how it reads a result set,
+/// where it recognises the target driver ("true"/"false"; default true).  A keyword the
+/// caller set -- in the connection string or in the DSN -- is never overridden, and
+/// nothing that changes what a query returns is ever set.  See OdbcTuneConnectionString
+/// for the complete list of what this adds.
+#define ADBC_ODBC_OPTION_TUNE "adbc.odbc.tune"
 /// Read-only: SQL_DRIVER_NAME of the underlying ODBC driver.  ADBC_INFO_DRIVER_NAME
 /// must be a stable identity for adbcbridge itself, so the backing driver's file
 /// name is exposed here (and, as context, in ADBC_INFO_VENDOR_NAME) instead.
@@ -380,6 +386,9 @@ struct OdbcConnection {
   SQLHDBC hdbc;
   bool connected;
   bool autocommit;
+  // Bumped by every rollback.  A statement whose handle was last used before one has to
+  // take a fresh handle: see OdbcStatementEnsureHandle.
+  uint64_t rollback_epoch;
   // Multi-row INSERT ingest batching, learned once per connection (see
   // ADBC_ODBC_OPTION_ROWS_PER_INSERT).  The probe is a two-row SQLPrepare against the
   // ingest target: whether the server takes the form at all is a property of the server,
@@ -398,6 +407,8 @@ struct OdbcStatement {
   // Non-NULL when a native ADBC driver serves this statement (see OdbcConnection).
   struct OdbcProxyStatement* proxy;
   struct OdbcHandleRef* ref;
+  // OdbcConnection::rollback_epoch as of the last time `ref` was made ready.
+  uint64_t rollback_epoch;
   char* query;
   bool prepared;           // SQLPrepare has been issued for `query` on `ref->hstmt`
   bool prepare_requested;  // AdbcStatementPrepare was called; SQLPrepare is deferred

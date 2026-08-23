@@ -32,6 +32,8 @@ struct OdbcDatabase {
   char* dsn;
   char* username;
   char* password;
+  // ADBC_ODBC_OPTION_TUNE: may adbcbridge add connection keywords of its own?
+  bool tune;
   struct OdbcReaderOptions reader_opts;
   struct OdbcDelegateOptions delegate;
   // Non-NULL when a native ADBC driver serves this database: every call is
@@ -79,6 +81,7 @@ static AdbcStatusCode OdbcDatabaseNew(struct AdbcDatabase* database, struct Adbc
     InternalAdbcSetError(error, "out of memory");
     return ADBC_STATUS_INTERNAL;
   }
+  db->tune = true;
   db->reader_opts.batch_size = ADBC_ODBC_DEFAULT_BATCH_SIZE;
   db->reader_opts.max_bind_bytes = ADBC_ODBC_DEFAULT_MAX_BIND_BYTES;
   db->reader_opts.long_bind_bytes = ADBC_ODBC_DEFAULT_LONG_BIND_BYTES;
@@ -145,6 +148,8 @@ static AdbcStatusCode OdbcDatabaseSetOption(struct AdbcDatabase* database, const
   } else if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
     return OdbcParseBoolOption(key, value, &db->reader_opts.sqllen_32bit,
                                &db->reader_opts.sqllen_32bit_forced, error);
+  } else if (strcmp(key, ADBC_ODBC_OPTION_TUNE) == 0) {
+    return OdbcParseBoolOption(key, value, &db->tune, NULL, error);
   }
   InternalAdbcSetError(error, "Unknown database option %s", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
@@ -231,6 +236,9 @@ static AdbcStatusCode OdbcDatabaseGetOption(struct AdbcDatabase* database, const
   } else if (strcmp(key, ADBC_OPTION_URI) == 0) v = db->connection_string;
   else if (strcmp(key, ADBC_ODBC_OPTION_DSN) == 0) v = db->dsn;
   else if (strcmp(key, ADBC_OPTION_USERNAME) == 0) v = db->username;
+  else if (strcmp(key, ADBC_ODBC_OPTION_TUNE) == 0) {
+    v = db->tune ? ADBC_OPTION_VALUE_ENABLED : ADBC_OPTION_VALUE_DISABLED;
+  }
   else {
     InternalAdbcSetError(error, "Unknown database option %s", key);
     return ADBC_STATUS_NOT_FOUND;
@@ -252,6 +260,7 @@ static AdbcStatusCode OdbcDatabaseGetOptionInt(struct AdbcDatabase* database, co
   if (strcmp(key, ADBC_ODBC_OPTION_LONG_BIND_BYTES) == 0) { *value = db->reader_opts.long_bind_bytes; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_ROWSET_BYTES) == 0) { *value = db->reader_opts.rowset_bytes; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = db->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_TUNE) == 0) { *value = db->tune ? 1 : 0; return ADBC_STATUS_OK; }
   InternalAdbcSetError(error, "Unknown database option %s", key);
   return ADBC_STATUS_NOT_FOUND;
 }
@@ -755,6 +764,84 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   }
 }
 
+// --- Connection-keyword auto-tuning (ADBC_ODBC_OPTION_TUNE) -----------------
+//
+// A few ODBC drivers have connection keywords whose good value depends on how the
+// application reads a result set -- something the driver cannot know and the caller
+// should not have to.  Where the target driver is recognised, adbcbridge fills those in
+// itself, under three rules:
+//
+//   * a keyword the caller set, in the connection string or in the DSN, is never
+//     overridden -- the caller's value wins even where it is the slow one;
+//   * nothing that changes what a query returns is ever set.  On psqlodbc that rules out
+//     TrueIsMinus1 and LFConversion (both rewrite values), ByteaAsLongVarBinary,
+//     TextAsLongVarchar, MaxVarcharSize and UnknownSizes (all change described types or
+//     widths, and so the Arrow schema and the DDL bulk ingest generates), and
+//     UseDeclareFetch and Protocol themselves (server-side cursors and per-statement
+//     SAVEPOINTs are transaction semantics, and not every PostgreSQL-wire server behind
+//     psqlodbc has either);
+//   * "adbc.odbc.tune=false" turns the whole thing off.
+//
+// Keep every addition short and worth it.  The LENGTH of a psqlodbc connection string
+// moves its fetch loop by up to 10% on its own -- padding one with semantically empty
+// ';' characters moves a 1,000,000-row read from 0.485 s to 0.537 s as it crosses a
+// malloc size-class boundary -- so a keyword that does not buy a measurable win is not
+// free, it is a loss.
+static bool OdbcConnKeywordSet(const char* conn, const char* dsn, const char* key) {
+  char* v = OdbcConnStringKeyword(conn, dsn, key);
+  bool set = v != NULL;
+  free(v);
+  return set;
+}
+
+// Is a numeric psqlodbc keyword on?  psqlodbc reads all of these with atoi().
+static bool OdbcConnKeywordIsOn(const char* conn, const char* dsn, const char* key) {
+  char* v = OdbcConnStringKeyword(conn, dsn, key);
+  bool on = v && atoi(v) != 0;
+  free(v);
+  return on;
+}
+
+static void OdbcTuneConnectionString(const struct OdbcDatabase* db,
+                                     struct InternalAdbcStringBuilder* sb) {
+  if (!db->tune) return;
+  const char* conn = db->connection_string;
+  char* own_dsn = NULL;
+  const char* dsn = db->dsn;
+  if (!dsn) {
+    own_dsn = OdbcConnStringKeyword(conn, NULL, "DSN");
+    dsn = own_dsn;
+  }
+
+  // psqlodbc -- PostgreSQL, and the ten other PostgreSQL-wire servers it drives.
+  // "UseDeclareFetch" is psqlodbc's keyword and nobody else's, so a caller having set it
+  // identifies the driver by itself, even behind a DSN whose Driver entry names something
+  // unrecognisable.
+  if (OdbcConnKeywordIsOn(conn, dsn, "UseDeclareFetch") &&
+      !OdbcConnKeywordSet(conn, dsn, "Fetch")) {
+    // The caller has asked psqlodbc to stream the result set through a server-side cursor
+    // instead of materialising all of it client-side (422 MB of peak process RSS for a
+    // 1M-row read of a 65 MB table, against 158 MB streaming).  Each FETCH then brings
+    // back max(Fetch, SQL_ATTR_ROW_ARRAY_SIZE) rows (qresult.c:977 in psqlodbc 16), so
+    // psqlodbc's default Fetch of 100 is inert -- our rowset always wins it -- and the
+    // cursor round-trips once per rowset, which costs a quarter of the read.  1M rows of
+    // (int4, float8, varchar(20), date) from PostgreSQL 16 at batch_size 1024, medians of
+    // 7 interleaved runs: 0.724 s at the default Fetch, 0.578 s at Fetch=8192, 0.564 s at
+    // Fetch=32768 -- against 0.577 s for the same read not streaming at all.  Ask for
+    // eight rowsets per round trip, bounded so that psqlodbc's own tuple store stays
+    // small, which is the point of streaming in the first place.
+    int64_t fetch = 8192;
+    if (db->reader_opts.batch_size > 8192) {
+      fetch = 65536;
+    } else if (db->reader_opts.batch_size > 1024) {
+      fetch = db->reader_opts.batch_size * 8;
+    }
+    InternalAdbcStringBuilderAppend(sb, "Fetch=%lld;", (long long)fetch);
+  }
+
+  free(own_dsn);
+}
+
 static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
                                          struct AdbcDatabase* database,
                                          struct AdbcError* error) {
@@ -807,6 +894,7 @@ static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
   if (db->dsn) InternalAdbcStringBuilderAppend(&sb, "DSN=%s;", db->dsn);
   if (db->username) InternalAdbcStringBuilderAppend(&sb, "UID=%s;", db->username);
   if (db->password) InternalAdbcStringBuilderAppend(&sb, "PWD=%s;", db->password);
+  OdbcTuneConnectionString(db, &sb);
 
   SQLRETURN ret = SQLDriverConnect(conn->hdbc, NULL, (SQLCHAR*)sb.buffer, SQL_NTS, NULL, 0, NULL,
                                    SQL_DRIVER_NOPROMPT);
@@ -880,6 +968,7 @@ static AdbcStatusCode OdbcConnectionRollback(struct AdbcConnection* connection,
   }
   ODBC_CHECK(SQLEndTran(SQL_HANDLE_DBC, conn->hdbc, SQL_ROLLBACK), SQL_HANDLE_DBC, conn->hdbc,
              "SQLEndTran(SQL_ROLLBACK)", error);
+  conn->rollback_epoch++;
   return ADBC_STATUS_OK;
 }
 
@@ -1456,6 +1545,17 @@ static AdbcStatusCode OdbcStatementBind(struct AdbcStatement* statement, struct 
   return OdbcStatementBindStream(statement, &stream, error);
 }
 
+// Does the first diagnostic left on `hstmt` carry this SQLSTATE?
+static bool OdbcStmtStateIs(SQLHSTMT hstmt, const char* state) {
+  SQLCHAR st[6] = {0};
+  SQLINTEGER native = 0;
+  SQLSMALLINT len = 0;
+  if (!SQL_SUCCEEDED(SQLGetDiagRec(SQL_HANDLE_STMT, hstmt, 1, st, &native, NULL, 0, &len))) {
+    return false;
+  }
+  return strcmp((const char*)st, state) == 0;
+}
+
 // Ensure we own a fresh, idle statement handle.
 AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt,
                                                 struct AdbcError* error) {
@@ -1464,6 +1564,36 @@ AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt,
     OdbcHandleRefRelease(stmt->ref);
     stmt->ref = NULL;
     stmt->prepared = false;
+  }
+  if (stmt->ref && stmt->rollback_epoch != stmt->conn->rollback_epoch) {
+    // A rollback happened while this statement held its handle.  A driver whose cursor
+    // state the rollback silently invalidated cannot be told about it afterwards: the
+    // driver manager tracks cursor state too, so once it believes the cursor is closed it
+    // answers SQLCloseCursor with 24000 itself and the driver never hears.  psqlodbc with
+    // UseDeclareFetch=1 is left insisting "[HY010] The cursor is open" on every later
+    // execute of that statement, for the life of the handle.  Start again with a fresh
+    // one: allocating a statement handle is a local call on every driver in the matrix,
+    // and this only happens on the first use after a rollback.
+    OdbcHandleRefRelease(stmt->ref);
+    stmt->ref = NULL;
+    stmt->prepared = false;
+  }
+  if (stmt->ref) {
+    // Reusing the handle needs it idle.  SQLCloseCursor answers 24000 ("invalid cursor
+    // state") when there was no cursor to close at all, which is the ordinary case here.
+    // Any other refusal means the driver will not let this handle go idle again: with
+    // psqlodbc's UseDeclareFetch=1, rolling back a transaction while a cursor is still
+    // open leaves the handle insisting "[HY010] The cursor is open" for the rest of its
+    // life, and every later execute on that statement fails.  Take a fresh handle rather
+    // than a dead one -- a statement handle is cheap, and nothing is lost with it but an
+    // SQLPrepare that is re-issued on demand.
+    SQLRETURN cret = SQLCloseCursor(stmt->ref->hstmt);
+    if (!SQL_SUCCEEDED(cret) && !OdbcStmtStateIs(stmt->ref->hstmt, "24000") &&
+        !SQL_SUCCEEDED(SQLFreeStmt(stmt->ref->hstmt, SQL_CLOSE))) {
+      OdbcHandleRefRelease(stmt->ref);
+      stmt->ref = NULL;
+      stmt->prepared = false;
+    }
   }
   if (!stmt->ref) {
     SQLHSTMT hstmt = NULL;
@@ -1475,9 +1605,8 @@ AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt,
       InternalAdbcSetError(error, "out of memory");
       return ADBC_STATUS_INTERNAL;
     }
-  } else {
-    SQLCloseCursor(stmt->ref->hstmt);  // ignore "no cursor" errors
   }
+  stmt->rollback_epoch = stmt->conn->rollback_epoch;
   return ADBC_STATUS_OK;
 }
 

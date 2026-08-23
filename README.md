@@ -262,7 +262,7 @@ Options (set on the database):
 | `username`, `password` | appended as `UID=`/`PWD=` |
 | `adbc.odbc.batch_size` | rows per Arrow batch (default 1024) |
 | `adbc.odbc.max_bind_bytes` | widest value bound at the width the driver declares for it, in bytes (default 32768). Wider ones are bound at `long_bind_bytes` instead, or read with `SQLGetData` where that is not possible |
-| `adbc.odbc.long_bind_bytes` | width, in bytes, to bind a column whose declared width is past `max_bind_bytes` — a `TEXT`/`NVARCHAR(MAX)`/`LONGTEXT` column, which drivers describe by what the *type* could hold (default 2048). Values longer than this are read again in full, so this trades nothing but speed |
+| `adbc.odbc.long_bind_bytes` | width, in bytes, to bind a column whose declared width is not a real bound — a `TEXT`/`NVARCHAR(MAX)`/`LONGTEXT`/`bytea` column, which drivers describe by what the *type* could hold (past `max_bind_bytes`), or by nothing at all (a width of 0, which is how psqlodbc describes PostgreSQL's `bytea`); default 2048. Values longer than this are read again in full, so this trades nothing but speed |
 | `adbc.odbc.rowset_bytes` | ceiling on a reader's bound rowset buffers, in bytes (default 8388608). The rowset holds `batch_size` rows unless that would cost more than this, in which case it holds as many as fit |
 | `adbc.odbc.decimal_as_string` | `true` to return DECIMAL/NUMERIC as strings |
 | `adbc.odbc.delegate` | `auto` (default) / `never` / `always` — see [Native delegation](#native-delegation) |
@@ -271,7 +271,39 @@ Options (set on the database):
 | `adbc.odbc.delegate.allow_paths` | `true` to let the two options above name filesystem paths (default `false`) |
 | `adbc.odbc.delegate.last_error` | read-only: why delegation did not happen |
 | `adbc.odbc.delegated_to` | read-only: the native driver serving this database/connection, or `odbc` (empty before init) |
+| `adbc.odbc.tune` | `true` (default) / `false` — may the driver add ODBC connection keywords of its own where it recognises the target driver? See [Connection keywords set for you](#connection-keywords-set-for-you) for the complete list; `false` sends your connection string through untouched |
 | `adbc.odbc.sqllen_32bit` | `true`/`false` to force the 32-bit-`SQLLEN` driver quirk on or off. Autodetected from `SQL_DRIVER_NAME` (on for IBM Db2's `libdb2.so`), so you normally never set it. Turn it on for any other ODBC driver that was built with a 32-bit `SQLLEN`/`SQLULEN` on a 64-bit platform — the giveaway is undetected NULLs, garbage string lengths, and row counts of `4294967295`. Also settable on the connection and the statement. |
+
+### Connection keywords set for you
+
+Some ODBC drivers have connection keywords whose good value depends on how the
+application reads a result set — something the driver cannot know and you should
+not have to. Where adbcbridge recognises the target driver it fills those in
+while it assembles the connection string, under three rules: a keyword **you**
+set (in the connection string or in the DSN) is never overridden, nothing that
+changes what a query returns is ever set, and `adbc.odbc.tune=false` turns the
+whole thing off.
+
+The complete list today is one keyword:
+
+| driver | condition | what is added | why |
+|---|---|---|---|
+| psqlodbc (PostgreSQL and the ten other PostgreSQL-wire servers it drives) | you set `UseDeclareFetch=1` and no `Fetch` | `Fetch=8192` (`8 × adbc.odbc.batch_size`, clamped to 8192…65536) | `UseDeclareFetch=1` asks psqlodbc to stream the result set through a server-side cursor instead of buffering all of it client-side. Each `FETCH` then brings back `max(Fetch, rowset)` rows, so psqlodbc's default `Fetch=100` is inert — our rowset always wins it — and the cursor round-trips once per rowset. 1M rows of `(int4, float8, varchar(20), date)` at `batch_size` 1024: **0.70 s** at the default `Fetch` against **0.57 s** with this, which is exactly what the same read costs *not* streaming. Peak process RSS for that read is 158 MB streaming against 422 MB buffered |
+
+psqlodbc's other keywords were swept and are deliberately **not** set:
+`ByteaAsLongVarBinary`, `TextAsLongVarchar`, `MaxVarcharSize` and `UnknownSizes`
+change the SQL types and widths the driver reports, and so the Arrow schema and
+the DDL bulk ingest generates; `TrueIsMinus1` and `LFConversion` rewrite values;
+`UseDeclareFetch` and `Protocol` are transaction semantics (a server-side cursor
+and per-statement `SAVEPOINT`s, neither of which every PostgreSQL-wire server
+behind psqlodbc has). Everything else measured flat, within ±4% of the default
+on a 1M-row read.
+
+If you do turn `UseDeclareFetch=1` on, note that it is genuinely a different
+mode, not just a buffer size: the read becomes `O(Fetch)` in client memory
+instead of `O(result set)`, it needs a server that implements `DECLARE … CURSOR
+WITH HOLD` and `FETCH n IN …`, and rolling back a transaction with the cursor
+still open leaves the statement handle needing a fresh cursor.
 
 ## Native delegation
 
