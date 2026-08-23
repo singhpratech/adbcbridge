@@ -510,3 +510,26 @@ services:
       stack: -1
     mem_limit: 6g
     ports: ["127.0.0.1:12881:2881"]
+  # Dremio (OSS): a lakehouse query engine whose native client protocol is Arrow Flight
+  # SQL, on 32010 -- the same Arrow Flight SQL ODBC driver as the `flightsql` and
+  # `influxdb3` services connects to it (Dremio is the driver's publisher).  9047 is the
+  # web UI and REST API.  In the "extra" profile, so a plain `up -d` leaves it alone;
+  # start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d dremio
+  # A stock Dremio has no users at all and refuses every login until the first admin is
+  # created over the REST API, which has to be done once the container is up:
+  #   curl -X PUT http://127.0.0.1:9047/apiv2/bootstrap/firstuser \
+  #     -H 'Authorization: _dremionull' -H 'Content-Type: application/json' \
+  #     -d '{"userName":"adbc","firstName":"adbc","lastName":"bridge",
+  #          "email":"adbc@example.com","createdAt":1700000000000,
+  #          "password":"Adbc2026pass"}'
+  # The matrix entry's `setup` then builds its two tables itself, with CTAS into
+  # $scratch (the one writable source a stock dremio-oss has): the entry is read-only
+  # because the Arrow Flight SQL ODBC driver has no SQLBindParameter, not because Dremio
+  # cannot write.  The server takes about 15 seconds to come up and settles at ~1.5 GB
+  # resident with the image's own heap settings.  See tests/compat/README.md.
+  dremio:
+    profiles: ["extra"]
+    image: dremio/dremio-oss:latest
+    mem_limit: 5g
+    ports: ["127.0.0.1:9047:9047", "127.0.0.1:32010:32010"]
