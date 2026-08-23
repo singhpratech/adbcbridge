@@ -686,10 +686,34 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // Its SQLGetTypeInfo answers with MySQL's type system whatever the server is, so
     // ingest DDL has to fall back to portable type names.
     conn->reader_opts.ansi_ddl_type_names = true;
-    // Which of those warehouses is behind the connector?  Only GreptimeDB needs more,
-    // and only it pays for the extra query -- version() is "8.4.2-GreptimeDB-1.1.4".
+    // Which of those warehouses is behind the connector?  Only two need more, and only
+    // they pay for the extra query -- GreptimeDB's version() is "8.4.2-GreptimeDB-1.1.4".
     char version[256];
     OdbcServerVersionString(conn->hdbc, version, sizeof(version));
+    if (!version[0] || !strstr(version, "greptimedb")) {
+      // Apache Doris answers version() with a bare MySQL number ("5.7.99") that says
+      // nothing about it, so ask for the one variable that does: @@version_comment is
+      // "Doris version doris-2.1.0-...".  Only a server version() did not already
+      // identify pays for this second query.
+      char comment[256];
+      OdbcServerScalarString(conn->hdbc, "SELECT @@version_comment", comment, sizeof(comment));
+      if (strstr(comment, "doris")) {
+        // Doris is an MPP warehouse: every OLAP table has to say how its rows are
+        // spread over the backends, and a CREATE TABLE that does not is refused
+        // outright ("Create olap table should contain distribution desc").  Random
+        // distribution with an automatic bucket count is the neutral choice for a
+        // table whose columns adbc_ingest picks from the payload.
+        //   The property matters just as much: without a key clause Doris makes a
+        // duplicate-key table out of the *leading* columns, and a table whose first
+        // column is a string, float or double is then refused as well ("The olap table
+        // first column could not be float, double, string or array, struct, map").
+        // enable_duplicate_without_keys_by_default asks for a duplicate table with no
+        // key columns at all, so any column order and any column type ingests.
+        conn->reader_opts.ddl_table_options =
+            "DISTRIBUTED BY RANDOM BUCKETS AUTO"
+            " PROPERTIES (\"enable_duplicate_without_keys_by_default\" = \"true\")";
+      }
+    }
     if (strstr(version, "greptimedb")) {
       // GreptimeDB is a time-series store: every table must declare exactly one TIME
       // INDEX column, which has to be a NOT NULL TIMESTAMP ("Missing time index

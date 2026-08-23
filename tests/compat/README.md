@@ -3122,3 +3122,195 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down influxdb3
 # or, if started standalone:
 docker rm -f adbcbridge-influxdb3
 ```
+
+## Apache Doris 2.1
+
+Doris is an MPP analytic warehouse that serves the MySQL wire protocol on 9030, so it
+needs no ODBC driver of its own: the same MySQL Connector/ODBC build used for the `mysql`
+entry drives it (see [MySQL 8](#mysql-8) above for the root-free tarball, and for the
+`LD_PRELOAD` that `import pyarrow` makes necessary).
+
+```sh
+export DORIS_ODBC_DRIVER=$MYSQL_ODBC_DRIVER
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d doris
+# or standalone:
+docker run -d --name adbcbridge-doris --memory=6g \
+  -p 127.0.0.1:19031:9030 apache/doris:doris-all-in-one-2.1.0
+```
+
+The all-in-one image runs the frontend (FE) and one backend (BE) in a single container.
+The image is large (7 GB) and takes a few minutes to pull; the server itself settles at
+~2.5 GB resident under the 6 GB cap.
+
+**It is not ready when the port opens.** The FE accepts connections almost immediately,
+but the BE registers with it a little later, and until it has, every `CREATE TABLE` fails.
+The condition to wait for is `Alive: true` in `SHOW BACKENDS`:
+
+```sh
+until docker exec adbcbridge-doris \
+        mysql -uroot -P9030 -h127.0.0.1 -e 'SHOW BACKENDS\G' 2>/dev/null \
+      | grep -q 'Alive: true'; do sleep 10; done
+```
+
+SQL is on `127.0.0.1:19031`, with the image's passwordless `root` account. There is no
+user database, so the entry's `setup` runs `CREATE DATABASE IF NOT EXISTS adbc` and
+`USE adbc` — both idempotent, which matters because `bench/matrix_bench.py` replays
+`setup` on every connection it opens — and the connection string names no database.
+
+`setup` also runs
+
+```sql
+ADMIN SET FRONTEND CONFIG ('force_olap_table_replication_num' = '1')
+```
+
+because a Doris table defaults to three replicas and this cluster has one backend:
+without it every `CREATE TABLE` is refused with *"replication num should be less than the
+number of available backends. replication num is 3, available backend num is 1"*. That is
+a fact of a one-BE deployment, not of the workload, so it is set once on the FE rather
+than written into each table's DDL. (`default_replication_num` does not exist as an FE
+config in 2.1; `force_olap_table_replication_num` is the mutable knob that works.)
+
+### Run the entry
+
+```sh
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py doris
+# doris     PASS  (MySQL (via ODBC) 5.7.99)
+```
+
+### Connection string: `NO_SSPS=1` and `PLUGIN_DIR`
+
+`NO_SSPS=1` is what makes the entry work at all. Doris answers `COM_STMT_PREPARE` only
+for a point `SELECT`:
+
+```
+SQLPrepare: errCode = 2, detailMessage = Only support prepare SelectStmt point query now
+```
+
+and an `INSERT` that reaches the server-side prepare path dies inside the FE with a bare
+
+```
+SQLExecDirectW: NullPointerException, msg: null (1105)
+```
+
+With `NO_SSPS=1` the connector stops using the server-side prepare protocol and
+substitutes bound parameters into the SQL text, so every statement goes as a plain query —
+the same setting `databend` and `greptimedb` need, for the same shape of reason.
+
+`PLUGIN_DIR` is needed here as it is for TiDB, Dolt and MatrixOne: Doris offers
+`mysql_native_password`, whose *client-side* plugin Connector/ODBC 9 loads at run time from
+its compiled-in `/usr/local/mysql/lib/plugin`. The entry's connection string ends in
+`{plugin_dir}`, which `conn_uri()` expands to the tarball's own `lib/plugin` when that
+directory exists — see [TiDB](#tidb-75) for the full story.
+
+### Already covered: the Databend quirk
+
+Doris reports `SQL_TXN_CAPABLE` = `SQL_TC_NONE`, so the existing *"Connector/ODBC in front
+of a server that is not a MySQL"* quirk in `src/odbc_driver.c` fires unchanged. It is
+exactly what Doris needs. Under `NO_SSPS`, the connector writes date, timestamp and binary
+parameters as MySQL charset-introducer literals, which Doris' parser rejects:
+
+```
+INSERT INTO pc VALUES (1, _binary'2024-02-29')
+  errCode = 2, detailMessage = Syntax error in line 1
+```
+
+`temporal_binary_param_as_varchar` sends them as ordinary quoted text instead, and
+`ansi_ddl_type_names` stops generated ingest DDL from using the MySQL type names
+Connector/ODBC's `SQLGetTypeInfo` answers with whatever the server is (`long varchar` and
+`bit`, neither of which Doris has). This is also the reason plain **pyodbc cannot ingest
+into Doris at all** — the benchmark's pyodbc ingest column is empty because its `dt`
+parameter goes as `_binary'...'` with nothing to rewrite it.
+
+### Driver quirk: every table needs a distribution clause
+
+Doris is an MPP store, so a table has to say how its rows are spread over the backends:
+
+```
+CREATE TABLE t (a BIGINT, b TEXT)
+  errCode = 2, detailMessage = Create olap table should contain distribution desc
+```
+
+`adbc_ingest` builds its target table from the payload's columns and has no notion of
+distribution, so this is a *server requirement the generated DDL cannot express* — the
+case `ddl_table_options` exists for (GreptimeDB's `append_mode` is the other one). Keyed on
+Doris in `OdbcDetectQuirks`, the generated DDL becomes
+
+```sql
+CREATE TABLE t (<ingested columns>)
+  DISTRIBUTED BY RANDOM BUCKETS AUTO
+  PROPERTIES ("enable_duplicate_without_keys_by_default" = "true")
+```
+
+Random distribution with an automatic bucket count is the neutral choice for a table whose
+columns come from whatever the caller ingests. The property is not decoration: given no
+key clause, Doris makes a duplicate-key table out of the *leading* columns, and then
+refuses the table if the first of them is a string, float or double —
+
+```
+CREATE TABLE t (b TEXT, a BIGINT) DISTRIBUTED BY RANDOM BUCKETS AUTO
+  errCode = 2, detailMessage = The olap table first column could not be float, double,
+  string or array, struct, map, please use decimal or varchar instead.
+```
+
+— so an ingest payload whose first column happens to be text would fail on the `CREATE`.
+`enable_duplicate_without_keys_by_default` asks for a duplicate table with no key columns
+at all, which takes any column order and any column type.
+
+**Detecting Doris is the awkward part.** It answers `SELECT version()` with a bare
+`5.7.99` — it presents itself as a MySQL 5.7 and `SQL_DBMS_NAME` is `MySQL` — so the
+version string that identifies GreptimeDB says nothing here. The one variable that names
+it is `@@version_comment`:
+
+```
+mysql> SELECT @@version_comment;
+Doris version doris-2.1.0-rc11-91efb6a43d
+```
+
+so the quirk asks for that, and only for a connection where `version()` did not already
+identify the server, so GreptimeDB still pays for one query and MySQL, MariaDB, TiDB, Dolt,
+Percona and MatrixOne (all transactional, so outside this branch entirely) pay for none.
+
+### Entry notes
+
+| flag | why |
+|---|---|
+| `ddl` `b VARCHAR(50)` | Doris has **no binary column type at all** — its parser does not know the word (`no viable alternative at input 'VARBINARY'`). A character column carries `b"\x01\x02"` through unchanged, as for ClickHouse and Databend. |
+| `ddl … DISTRIBUTED BY RANDOM BUCKETS AUTO` | the same server requirement as above, for the one table this file writes itself. |
+| `bool_type="int8"` | `BOOLEAN` goes over the MySQL wire as `TINYINT(1)` → `SQL_TINYINT`, exactly as MySQL's own does. |
+| ``quote="`"`` | Doris **accepts** `ANSI_QUOTES` in `sql_mode` and then ignores it: with the mode set, `SELECT "a" FROM t` still returns the constant `'a'` for every row rather than the column, silently. Its identifiers are backtick-quoted, and since no `ANSI_QUOTES` is set Connector/ODBC reports the backtick as `SQL_IDENTIFIER_QUOTE_CHAR`, so `adbc_ingest` quotes correctly on its own — it is this file's SQL that has to be told. Same shape as `greptimedb`. |
+| `ingest_types={pa.float64(): pa.decimal128(12, 3)}` | Doris has `DOUBLE` but neither `DOUBLE PRECISION` nor `REAL` (`extraneous input 'PRECISION'`), and `DOUBLE PRECISION` is what the portable ingest DDL asks for. Sending that column as a decimal — a type Doris names the same way — keeps create/append/replace ingest under test. `adbc_t`'s own `f DOUBLE` column is unaffected. Same fix as `greptimedb`. |
+| `big_rows=2000` | ingest runs at ~2.2k rows/s (below), so 5000 rows would spend a couple of seconds for nothing; 2000 still crosses the reader's 1024-row batch boundary, which is what the step is for. |
+
+Everything else runs on the generic path: the emoji round-trip, `DATE`, `DATETIME(6)`
+microseconds, `DECIMAL(10,3)`, NULL parameters, affected-row counts, `GetObjects` /
+`GetTableSchema` and the error path.
+
+### Benchmark
+
+```
+ADBC_MATRIX_SUFFIX=_doris .venv/bin/python bench/matrix_bench.py \
+  --rows 10000 --fetch-rows 100000 --pyodbc-timeout 300 doris
+# fetch=1,401,474/s (pyodbc 362,998/s)  ingest=2,249/s array=2,342/s pyodbc=—/s
+```
+
+Reads are fast and ingest is not, which is what a warehouse of this shape looks like from
+a row-at-a-time client: every `INSERT` is a separate load transaction the FE publishes
+across the backend, so array binding buys nothing (2,342 against 2,249 rows/s). Bulk loads
+into Doris are meant to go through Stream Load or `INSERT INTO ... SELECT`, neither of
+which is an ODBC path. The pyodbc ingest column is empty because pyodbc cannot write a
+date into Doris at all — see the `_binary` quirk above.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down doris
+# or, if started standalone:
+docker rm -f adbcbridge-doris
+```

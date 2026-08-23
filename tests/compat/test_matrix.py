@@ -25,6 +25,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, GREPTIMEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, ARCADEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFLUXDB3_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DORIS_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -264,6 +265,64 @@ DBS = {
         ingest_types={pa.bool_(): pa.int8()},
         setup=["CREATE DATABASE IF NOT EXISTS adbc", "USE adbc",
                "SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "doris": dict(
+        # Apache Doris is an MPP analytic warehouse that serves the MySQL wire protocol on
+        # 9030, so MySQL Connector/ODBC drives it.  It announces itself as plain MySQL
+        # "5.7.99" -- only @@version_comment ("Doris version doris-2.1.0-...") names it --
+        # and it reports SQL_TC_NONE, so the connector's `myodbc + no transactions` quirk
+        # in src/odbc_driver.c applies to it exactly as it does to Databend: dates,
+        # timestamps and binaries go as quoted text rather than `_binary'...'` literals,
+        # and ingest DDL uses portable type names.
+        # The driver is the `mysql` entry's MySQL Connector/ODBC, unpacked once.
+        env="DORIS_ODBC_DRIVER",
+        # NO_SSPS=1 is what makes the entry work at all: Doris answers COM_STMT_PREPARE
+        # only for a point SELECT ("Only support prepare SelectStmt point query now"), and
+        # an INSERT prepared server-side dies inside the FE with a bare
+        # "NullPointerException, msg: null".  With NO_SSPS the connector substitutes bound
+        # parameters into the SQL text and every statement goes as a plain query.
+        # {plugin_dir}: Doris offers mysql_native_password, whose *client-side* plugin
+        # Connector/ODBC 9 loads at run time -- see conn_uri() below.
+        #   The connection string names no database: the image ships none, so `setup`
+        # creates `adbc` and switches to it (both statements idempotent, which matters
+        # because bench/matrix_bench.py replays `setup` on every connection it opens).
+        conn="Driver={drv};Server=127.0.0.1;Port=19031;User=root;NO_SSPS=1;{plugin_dir}",
+        # DISTRIBUTED BY is mandatory on every Doris OLAP table ("Create olap table should
+        # contain distribution desc"); RANDOM with an automatic bucket count is the
+        # neutral choice.  b is VARCHAR, not VARBINARY, because Doris has no binary column
+        # type at all -- the parser does not even know the word ("no viable alternative at
+        # input 'VARBINARY'") -- and a character column carries the two bytes through.
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARCHAR(50), d DATE,"
+            " ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)"
+            " DISTRIBUTED BY RANDOM BUCKETS AUTO",
+        # Doris' BOOLEAN goes over the MySQL wire as a TINYINT(1), which Connector/ODBC
+        # reports as SQL_TINYINT -> int8, exactly as MySQL's own does.
+        bool_type="int8",
+        # Doris accepts ANSI_QUOTES in sql_mode and then ignores it: with the mode set,
+        # SELECT "a" FROM t still returns the constant 'a' for every row rather than the
+        # column, silently.  Its identifiers are backtick-quoted, and Connector/ODBC
+        # reports the backtick as SQL_IDENTIFIER_QUOTE_CHAR here (no ANSI_QUOTES is set),
+        # so adbc_ingest already quotes correctly; it is this file's own SQL that has to.
+        # Same shape as the `greptimedb` entry.
+        quote="`",
+        # The generated ingest DDL asks for the portable ISO type names (see
+        # `ansi_ddl_type_names` in src/odbc_driver.c) and Doris accepts all of them --
+        # BIGINT, TEXT, DATE, BOOLEAN, DECIMAL(p,s) -- except the one for a double: it has
+        # DOUBLE but neither "DOUBLE PRECISION" nor "REAL" ("extraneous input
+        # 'PRECISION'").  Sending that column as a decimal, a type it does name the same
+        # way, keeps the whole ingest -- create, append, replace -- under test.  adbc_t's
+        # own `f DOUBLE` column is unaffected.  Same fix as `greptimedb`.
+        ingest_types={pa.float64(): pa.decimal128(12, 3)},
+        # force_olap_table_replication_num=1: the all-in-one image is a single backend and
+        # Doris defaults every table to three replicas, so any CREATE TABLE would fail
+        # with "replication num should be less than the number of available backends".
+        # This is a deployment fact of a one-BE cluster, not something a table's DDL should
+        # carry, so it is set once on the FE here rather than in the ingest DDL.
+        setup=["ADMIN SET FRONTEND CONFIG ('force_olap_table_replication_num' = '1')",
+               "CREATE DATABASE IF NOT EXISTS adbc", "USE adbc"],
+        # Each INSERT is a separate load transaction the FE publishes across the backend,
+        # which runs at a few hundred rows/s however the rows are bound; 2000 still crosses
+        # the reader's 1024-row batch boundary, which is what the step is for.
+        big_rows=2000),
     "greptimedb": dict(
         # GreptimeDB is a time-series database that serves *both* the PostgreSQL wire
         # (4003) and the MySQL wire (4002).  This entry uses the MySQL one, driven by
