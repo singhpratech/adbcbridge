@@ -1,5 +1,8 @@
 build/
 .venv/
+.venv-validation/
 __pycache__/
+.pytest_cache/
 *.db
 .claude/
+tests/validation-upstream/
