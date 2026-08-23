@@ -91,6 +91,12 @@ Planned: conformance suite, prebuilt binaries.
 
 The bridge runs within 7% of the raw ODBC floor; the remaining cost is the ODBC driver itself.
 
+That floor is also the ceiling for a single connection, so beating a native ADBC driver
+means doing work it does not: splitting one query across several connections. On 10 M
+rows of PostgreSQL, adbcbridge is 0.36× the native `adbc_driver_postgresql` on one
+connection, reaches parity at four partitions and **1.54×** at eight — see
+[Partitioned reads](#partitioned-reads-executepartitions) and `bench/BENCHMARKS.md`.
+
 ### Rust
 
 `bench/rust/` runs the same read and bulk-ingest workload from Rust, comparing the bridge
@@ -265,6 +271,8 @@ Options (set on the database):
 | `adbc.odbc.long_bind_bytes` | width, in bytes, to bind a column whose declared width is past `max_bind_bytes` — a `TEXT`/`NVARCHAR(MAX)`/`LONGTEXT` column, which drivers describe by what the *type* could hold (default 2048). Values longer than this are read again in full, so this trades nothing but speed |
 | `adbc.odbc.rowset_bytes` | ceiling on a reader's bound rowset buffers, in bytes (default 8388608). The rowset holds `batch_size` rows unless that would cost more than this, in which case it holds as many as fit |
 | `adbc.odbc.decimal_as_string` | `true` to return DECIMAL/NUMERIC as strings |
+| `adbc.odbc.partitions` | how many partitions `AdbcStatementExecutePartitions` should split a query into — `0` (default) chooses from the table's size, `1` never splits. Set on the statement. See [Partitioned reads](#partitioned-reads-executepartitions) |
+| `adbc.odbc.prefetch` | rowsets kept in flight on a background fetch thread, so `SQLFetch` for the next one overlaps the Arrow conversion of the current one — `0` (default) is off, `1` is double buffering, up to `8`. Settable on the database, the connection or the statement. See [Prefetch](#prefetch) |
 | `adbc.odbc.delegate` | `auto` (default) / `never` / `always` — see [Native delegation](#native-delegation) |
 | `adbc.odbc.delegate.driver` | force a specific native driver: a bare name (`postgresql`) or manifest name; a path only with `allow_paths` |
 | `adbc.odbc.delegate.search_path` | extra directories to search for native drivers (`:`-separated); needs `allow_paths` |
@@ -556,6 +564,126 @@ server with no multi-row `VALUES` at all is found the same way — by a two-row
 
 A failure part way through is unchanged by any of this: the whole ingest is one
 transaction, so it commits completely or leaves nothing behind.
+
+## Partitioned reads (`ExecutePartitions`)
+
+One connection reading a large table is one CPU decoding it. ADBC's partition contract
+exists for exactly that: `AdbcStatementExecutePartitions` hands back N opaque
+descriptors, and `AdbcConnectionReadPartition` turns any one of them back into a stream
+— on any connection, in any order, in any process. adbcbridge implements both, so N
+connections can read one query in parallel and the pieces concatenate.
+
+```python
+import concurrent.futures, pyarrow
+import adbc_driver_manager.dbapi as dbapi
+
+def open_conn():
+    return dbapi.connect(driver="libadbc_driver_odbc.so", db_kwargs={
+        "adbc.odbc.connection_string": "Driver=PostgreSQL Unicode;Server=...;"})
+
+with open_conn() as conn, conn.cursor() as cur:
+    cur.adbc_statement.set_options(**{"adbc.odbc.partitions": "8"})
+    cur.adbc_statement.set_sql_query("SELECT id, val, txt, dt FROM bench")
+    descriptors, schema, _ = cur.adbc_statement.execute_partitions()
+
+def read(descriptor):                      # one connection per partition
+    with open_conn() as conn:
+        stream = conn.adbc_connection.read_partition(descriptor)
+        return pyarrow.RecordBatchReader._import_from_c(stream.address).read_all()
+
+with concurrent.futures.ThreadPoolExecutor(len(descriptors)) as pool:
+    table = pyarrow.concat_tables(list(pool.map(read, descriptors)))
+```
+
+`bench/partition_bench.py` is that client, benchmarked against the native
+`adbc_driver_postgresql`; the numbers are in
+[`bench/BENCHMARKS.md`](bench/BENCHMARKS.md).
+
+**How the split is made.** On PostgreSQL, every heap tuple has a `ctid` of
+`(block, offset)` and `tid` compares lexicographically, so the table's blocks are a
+total order that slices the heap with no index, no key column and no sort:
+
+```sql
+SELECT … FROM t WHERE ctid >= '(lo,0)'::tid AND ctid < '(hi,0)'::tid
+```
+
+Tuple offsets are 1-based, so `'(N,0)'` is a point strictly *between* blocks: no tuple
+can land on both sides of a boundary or on neither. The block count comes from one
+`pg_relation_size` query, the first slice is left unbounded below and the last unbounded
+above, and PostgreSQL 14+ executes each slice as a TID Range Scan — so a slice reads only
+its own blocks rather than filtering a full sequential scan.
+
+**When it falls back to one partition.** A wrong split is silent data loss rather than an
+error, so the driver splits only what it can prove, and returns a single descriptor
+carrying the original query — always correct, never slower than not calling
+`ExecutePartitions` — for everything else:
+
+| case | why |
+|---|---|
+| anything but a bare `SELECT <list> FROM <one table>` | a `WHERE`, `JOIN`, `ORDER BY`, `GROUP BY`, `LIMIT`, `DISTINCT`, `UNION`, subquery, CTE, aggregate or any parenthesis at all |
+| any quoting or comment in the SQL | the scanner does not track quotes, so it refuses rather than mistake a keyword inside a literal for a keyword |
+| a statement with bound parameters | a descriptor carries SQL text; there is nowhere to put them |
+| a view, foreign table, or partitioned parent | no heap of its own, so `pg_relation_size` reports zero blocks |
+| an empty table | nothing to slice |
+| any backend that is not PostgreSQL | `ctid` is PostgreSQL's; every other server gets one partition |
+| `adbc.odbc.partitions=1` | the explicit off switch |
+
+**Snapshot semantics.** Partitions are read on separate connections and therefore under
+separate snapshots. Against a table being written concurrently, the union of the slices
+is not a point-in-time view — that is inherent to ADBC's partition model, which has
+nowhere to carry a shared snapshot, and is why partitioning is opt-in. Against a table
+that is not being written, the slices reproduce the unpartitioned read exactly: same
+rows, same schema, no duplicates, no gaps, whatever order they are read in.
+
+When the connection is [delegated to a native ADBC driver](#native-delegation), both
+entry points forward to that driver and its own partitioning (or its own refusal)
+applies.
+
+## Prefetch
+
+`SQLFetch` blocks on the socket while the CPU is idle, and the conversion into Arrow then
+runs while the socket is idle. `adbc.odbc.prefetch=1` overlaps them: a background thread
+fetches the next rowset into a second set of bound buffers while the calling thread
+converts the current one. Higher values keep more rowsets in flight, up to 8.
+
+```python
+conn = dbapi.connect(driver="libadbc_driver_odbc.so", db_kwargs={
+    "adbc.odbc.connection_string": "...",
+    "adbc.odbc.prefetch": "1"})
+```
+
+It is **off by default**, because whether it is safe is a property of the ODBC driver
+underneath and no driver can be asked. Two things make it safe where it does engage:
+
+* The statement handle is owned by exactly one thread at a time. The fetch thread owns it
+  from `pthread_create` to `pthread_join` and the calling thread touches it only outside
+  that window, so no two ODBC calls on one handle are ever concurrent.
+* It engages only when every column is bound at a width that cannot truncate. Repairing a
+  truncated value means `SQLGetData` or `SQLFetchScroll` on a row the fetch thread has
+  already read past, so a column bound narrower than its declared width (a `TEXT` or
+  `NVARCHAR(MAX)`; see `adbc.odbc.long_bind_bytes`) turns prefetch off for that query
+  rather than racing for the cursor. So does a column the driver cannot bind at all, and
+  a driver that fetches one row at a time.
+
+Falling back is silent and changes nothing about the rows. Errors are unchanged too: a
+failure part way through a result set arrives at the same row it would have without
+prefetch, and releasing a stream early stops the fetch thread before the handle is freed.
+
+**It is worth very little in practice**, and the reason is worth knowing: most ODBC
+drivers have already buffered the whole result set client-side by the time `SQLFetch` is
+called, so there is no socket wait left to hide. Measured on 1,000,000 rows (medians of
+5, `bench/prefetch_bench.py`):
+
+| driver | prefetch=1 | prefetch=2 |
+|---|---:|---:|
+| psqlodbc, default | 1.00× | 1.01× |
+| psqlodbc, `UseDeclareFetch=1` | 1.06× | 1.10× |
+| sqliteodbc | 1.01× | 1.01× |
+| MariaDB Connector/ODBC | 1.04× | 0.93× |
+
+Only psqlodbc's cursor mode leaves a real socket wait inside `SQLFetch`, and even there
+it buys 6–10%. For a big PostgreSQL read, [partitioning](#partitioned-reads-executepartitions)
+is the mechanism that pays.
 
 ## Use from C#
 
