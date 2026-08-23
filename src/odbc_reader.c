@@ -359,6 +359,15 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_WCHAR:
     case SQL_WVARCHAR:
     case SQL_WLONGVARCHAR:
+      if (opts->wchar_as_utf8) {  // see OdbcReaderOptions::wchar_as_utf8
+        c->kind = FETCH_CHAR; c->c_type = SQL_C_CHAR;
+        c->elem_size = (SQLLEN)c->column_size * 4 + 1;
+        if (c->column_size == 0 || c->elem_size > opts->max_bind_bytes ||
+            c->sql_type == SQL_WLONGVARCHAR) {
+          c->bound = false;
+        }
+        break;
+      }
       c->kind = FETCH_WCHAR; c->c_type = SQL_C_WCHAR;
       c->elem_size = ((SQLLEN)c->column_size + 1) * (SQLLEN)sizeof(SQLWCHAR);
       if (c->column_size == 0 || c->elem_size > opts->max_bind_bytes ||

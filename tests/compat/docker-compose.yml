@@ -32,3 +32,9 @@ services:
     privileged: true
     environment: { LICENSE: accept, DB2INST1_PASSWORD: Adbc2026, DBNAME: adbc }
     ports: ["127.0.0.1:50000:50000"]
+  firebird:
+    image: firebirdsql/firebird:5
+    # UTF8 default charset: the matrix connects with CHARSET=UTF8 and stores emoji.
+    environment: { FIREBIRD_ROOT_PASSWORD: adbc, FIREBIRD_USER: adbc, FIREBIRD_PASSWORD: adbc,
+                   FIREBIRD_DATABASE: adbc.fdb, FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8 }
+    ports: ["127.0.0.1:13050:3050"]

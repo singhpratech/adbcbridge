@@ -101,20 +101,19 @@ reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
 | SQLite 3.45 | sqliteodbc 0.99991 | PASS |
 | DuckDB (latest) | duckdb-odbc | PASS (driver quirks handled: 2048-row vectors, no `SQL_BIT` params) |
 | PostgreSQL 16 | psqlodbc 16 | PASS |
-| MariaDB 11 / MySQL | MariaDB Connector/ODBC 3.1 | PASS |
+| MariaDB 11 | MariaDB Connector/ODBC 3.1 | PASS |
 | SQL Server 2022 | msodbcsql 18 | PASS (incl. `NVARCHAR(MAX)` via chunked `SQLGetData`) |
 | Oracle 23ai Free | Instant Client ODBC 23 | PASS (set `NLS_LANG=.AL32UTF8` for non-ASCII; 64-bit ints sent as numeric text — driver lacks `SQL_C_SBIGINT`) |
 | ClickHouse 26 | clickhouse-odbc 1.5 | PASS (NULL params need `SQLDescribeParam`; no affected-row counts; `Nullable()` DDL wrapper on ingest) |
 | MySQL 8.4 | MySQL Connector/ODBC 9.4 (and MariaDB Connector/ODBC 3.1) | PASS |
 | CockroachDB 26.3 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; declare a PRIMARY KEY or the synthesised hidden `rowid` shows up in `GetObjects`) |
+| MonetDB 11.55 (Dec2025-SP3) | MonetDBODBClib 11.55 | PASS |
 | IBM Db2 12.1 | Db2 CLI driver (clidriver `libdb2.so`) | PASS (driver quirk handled: 32-bit `SQLLEN` — see `adbc.odbc.sqllen_32bit`) |
+| Firebird 5 | Firebird ODBC 3.5.0-rc1 | PASS (driver quirk handled: `SQL_C_WCHAR` sized in 4-byte `wchar_t`) |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
-Per-database driver setup and the exact commands are in
-| MonetDB 11.55 (Dec2025-SP3) | MonetDBODBClib 11.55 | PASS |
+Per-database driver setup (root-free) and run commands: [`tests/compat/README.md`](tests/compat/README.md).
 
-Per-database setup (including how to fetch each ODBC driver without root) is in
-[`tests/compat/README.md`](tests/compat/README.md).
 
 ## Build
 
