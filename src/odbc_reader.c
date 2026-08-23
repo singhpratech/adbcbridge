@@ -121,7 +121,9 @@ enum OdbcFetchKind {
   FETCH_BINARY,   // SQL_C_BINARY -> binary
   FETCH_DATE,     // DATE_STRUCT -> date32
   FETCH_TIME,     // TIME_STRUCT -> time32[s]
+  FETCH_TIME64,   // SQL_C_CHAR "HH:MM:SS[.frac]" -> time64[us]
   FETCH_TIMESTAMP,// TIMESTAMP_STRUCT -> timestamp[us|ns]
+  FETCH_TIMESTAMP_TZ,  // SQL_C_CHAR ISO-8601 with offset -> timestamp[us, UTC]
   FETCH_DECIMAL,  // SQL_C_CHAR -> decimal128
   FETCH_BOOL_STR, // SQL_C_CHAR ('t'/'1'/'true') -> bool (PostgreSQL, DuckDB report bool as char)
 };
@@ -145,6 +147,7 @@ struct OdbcColumn {
 
 static bool IsUnsigned(SQLHSTMT hstmt, SQLUSMALLINT col) {
   SQLLEN v = SQL_FALSE;
+  if (!hstmt) return false;
   if (SQL_SUCCEEDED(SQLColAttribute(hstmt, col, SQL_DESC_UNSIGNED, NULL, 0, NULL, &v))) {
     return v == SQL_TRUE;
   }
@@ -161,6 +164,52 @@ static bool TypeNameIsBool(SQLHSTMT hstmt, SQLUSMALLINT col) {
     if (name[i] >= 'A' && name[i] <= 'Z') name[i] = (SQLCHAR)(name[i] - 'A' + 'a');
   }
   return strcmp((const char*)name, "bool") == 0 || strcmp((const char*)name, "boolean") == 0;
+}
+
+// Case-insensitive substring search (needle must be lowercase).
+static bool ContainsFold(const char* hay, const char* needle) {
+  size_t nl = strlen(needle);
+  if (nl == 0) return true;
+  for (const char* p = hay; *p; p++) {
+    size_t i = 0;
+    while (i < nl) {
+      char ch = p[i];
+      if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+      if (ch != needle[i]) break;
+      i++;
+    }
+    if (i == nl) return true;
+  }
+  return false;
+}
+
+// Some drivers report a timezone-aware timestamp as a plain SQL_TYPE_TIMESTAMP
+// (PostgreSQL's "timestamptz", Oracle's "TIMESTAMP WITH TIME ZONE", ...).  The
+// only portable hint is the driver's own type name.
+static bool IsTimestampWithTimezone(SQLHSTMT hstmt, SQLUSMALLINT col) {
+  SQLCHAR name[128] = {0};
+  SQLSMALLINT len = 0;
+  if (!hstmt) return false;
+  if (!SQL_SUCCEEDED(SQLColAttribute(hstmt, col, SQL_DESC_TYPE_NAME, name, sizeof(name), &len,
+                                     NULL))) {
+    return false;
+  }
+  name[sizeof(name) - 1] = '\0';
+  return ContainsFold((const char*)name, "with time zone") ||
+         ContainsFold((const char*)name, "timestamptz") ||
+         ContainsFold((const char*)name, "timestampoffset");
+}
+
+// Fetch a column as SQL_C_CHAR, with a buffer big enough for `column_size`
+// characters but never smaller than `minimum` (drivers report column_size 0 for
+// types whose length they don't track).  Falls back to SQLGetData if that would
+// exceed the caller's binding budget.
+static void UseTextBuffer(struct OdbcColumn* c, const struct OdbcReaderOptions* opts,
+                          SQLLEN minimum) {
+  c->c_type = SQL_C_CHAR;
+  c->elem_size = (SQLLEN)c->column_size + 8;
+  if (c->elem_size < minimum) c->elem_size = minimum;
+  if (c->elem_size > opts->max_bind_bytes) c->bound = false;
 }
 
 static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn* c,
@@ -223,13 +272,62 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       break;
     case SQL_TYPE_TIME:
     case SQL_TIME:
-      c->kind = FETCH_TIME; c->c_type = SQL_C_TYPE_TIME; c->elem_size = sizeof(TIME_STRUCT);
+    case SQL_SS_TIME2:
+      // TIME_STRUCT has no sub-second field, so a column with fractional
+      // seconds has to come across as text.
+      if (c->decimal_digits > 0) {
+        c->kind = FETCH_TIME64;
+        UseTextBuffer(c, opts, 40);
+      } else {
+        c->kind = FETCH_TIME; c->c_type = SQL_C_TYPE_TIME; c->elem_size = sizeof(TIME_STRUCT);
+      }
+      break;
+    case SQL_TYPE_TIME_WITH_TIMEZONE:
+      // Arrow has no time-with-timezone type; keep the driver's text form.
+      c->kind = FETCH_CHAR;
+      UseTextBuffer(c, opts, 40);
+      break;
+    case SQL_SS_TIMESTAMPOFFSET:
+    case SQL_TYPE_TIMESTAMP_WITH_TIMEZONE:
+      c->kind = FETCH_TIMESTAMP_TZ;
+      c->unit = NANOARROW_TIME_UNIT_MICRO;
+      UseTextBuffer(c, opts, 80);
       break;
     case SQL_TYPE_TIMESTAMP:
     case SQL_TIMESTAMP:
+      if (IsTimestampWithTimezone(hstmt, icol)) {
+        c->kind = FETCH_TIMESTAMP_TZ;
+        c->unit = NANOARROW_TIME_UNIT_MICRO;
+        UseTextBuffer(c, opts, 80);
+        break;
+      }
       c->kind = FETCH_TIMESTAMP; c->c_type = SQL_C_TYPE_TIMESTAMP;
       c->elem_size = sizeof(TIMESTAMP_STRUCT);
       c->unit = c->decimal_digits > 6 ? NANOARROW_TIME_UNIT_NANO : NANOARROW_TIME_UNIT_MICRO;
+      break;
+    case SQL_GUID:
+      // 36 characters, or 38 with the braces some drivers add.
+      c->kind = FETCH_CHAR;
+      UseTextBuffer(c, opts, 64);
+      break;
+    case SQL_INTERVAL_YEAR:
+    case SQL_INTERVAL_MONTH:
+    case SQL_INTERVAL_DAY:
+    case SQL_INTERVAL_HOUR:
+    case SQL_INTERVAL_MINUTE:
+    case SQL_INTERVAL_SECOND:
+    case SQL_INTERVAL_YEAR_TO_MONTH:
+    case SQL_INTERVAL_DAY_TO_HOUR:
+    case SQL_INTERVAL_DAY_TO_MINUTE:
+    case SQL_INTERVAL_DAY_TO_SECOND:
+    case SQL_INTERVAL_HOUR_TO_MINUTE:
+    case SQL_INTERVAL_HOUR_TO_SECOND:
+    case SQL_INTERVAL_MINUTE_TO_SECOND:
+      // Arrow's interval types cannot represent every ODBC interval qualifier
+      // (day-to-second with a leading precision, year-to-month, ...), so the
+      // driver's textual rendering is the lossless choice.
+      c->kind = FETCH_CHAR;
+      UseTextBuffer(c, opts, 64);
       break;
     case SQL_BINARY:
     case SQL_VARBINARY:
@@ -254,7 +352,6 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_CHAR:
     case SQL_VARCHAR:
     case SQL_LONGVARCHAR:
-    case SQL_GUID:
     default:
       // Anything unknown: ask the driver for a string representation.
       c->kind = FETCH_CHAR; c->c_type = SQL_C_CHAR;
@@ -355,9 +452,21 @@ static AdbcStatusCode BuildSchema(const struct OdbcColumn* cols, SQLSMALLINT n,
                                             NANOARROW_TIME_UNIT_SECOND, NULL),
                  error);
         goto named;
+      case FETCH_TIME64:
+        CHECK_NA(INTERNAL,
+                 ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIME64,
+                                            NANOARROW_TIME_UNIT_MICRO, NULL),
+                 error);
+        goto named;
       case FETCH_TIMESTAMP:
         CHECK_NA(INTERNAL,
                  ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIMESTAMP, c->unit, NULL),
+                 error);
+        goto named;
+      case FETCH_TIMESTAMP_TZ:
+        CHECK_NA(INTERNAL,
+                 ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIMESTAMP,
+                                            NANOARROW_TIME_UNIT_MICRO, "UTC"),
                  error);
         goto named;
       case FETCH_DECIMAL:
@@ -400,7 +509,118 @@ static int64_t DaysFromCivil(int64_t y, unsigned m, unsigned d) {
   return era * 146097 + (int64_t)doe - 719468;
 }
 
-// Append a UTF-16 buffer (n units) to a utf8 string array.
+// Scan up to `max_digits` ASCII digits at s[*pos]; false if there are none.
+static bool ScanUInt(const char* s, size_t len, size_t* pos, int max_digits, int64_t* out) {
+  int64_t v = 0;
+  int n = 0;
+  while (*pos < len && n < max_digits && s[*pos] >= '0' && s[*pos] <= '9') {
+    v = v * 10 + (s[*pos] - '0');
+    (*pos)++;
+    n++;
+  }
+  if (n == 0) return false;
+  *out = v;
+  return true;
+}
+
+// Scan ".ffffff" (or ",ffffff") into microseconds, truncating extra digits.
+static void ScanFraction(const char* s, size_t len, size_t* pos, int64_t* out_micros) {
+  *out_micros = 0;
+  if (*pos >= len || (s[*pos] != '.' && s[*pos] != ',')) return;
+  (*pos)++;
+  int digits = 0;
+  while (*pos < len && s[*pos] >= '0' && s[*pos] <= '9') {
+    if (digits < 6) {
+      *out_micros = *out_micros * 10 + (s[*pos] - '0');
+      digits++;
+    }
+    (*pos)++;
+  }
+  while (digits < 6) {
+    *out_micros *= 10;
+    digits++;
+  }
+}
+
+static void SkipBlanks(const char* s, size_t len, size_t* pos) {
+  while (*pos < len && (s[*pos] == ' ' || s[*pos] == '\t' || s[*pos] == '\0')) (*pos)++;
+}
+
+// "HH:MM[:SS[.frac]]" -> microseconds since midnight.
+static bool ParseTimeMicros(const char* s, size_t len, int64_t* out) {
+  size_t p = 0;
+  int64_t h = 0, m = 0, sec = 0, frac = 0;
+  SkipBlanks(s, len, &p);
+  if (!ScanUInt(s, len, &p, 2, &h)) return false;
+  if (p >= len || s[p] != ':') return false;
+  p++;
+  if (!ScanUInt(s, len, &p, 2, &m)) return false;
+  if (p < len && s[p] == ':') {
+    p++;
+    if (!ScanUInt(s, len, &p, 2, &sec)) return false;
+  }
+  ScanFraction(s, len, &p, &frac);
+  SkipBlanks(s, len, &p);
+  if (p != len) return false;
+  if (h > 23 || m > 59 || sec > 59) return false;
+  *out = ((h * 60 + m) * 60 + sec) * 1000000LL + frac;
+  return true;
+}
+
+// "YYYY-MM-DD[ T]HH:MM[:SS[.frac]][Z|(+|-)HH[:]MM]" -> microseconds since the
+// Unix epoch in UTC.  A missing offset is taken as UTC.
+static bool ParseTimestampUtcMicros(const char* s, size_t len, int64_t* out) {
+  size_t p = 0;
+  int64_t y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0, frac = 0, offset_secs = 0;
+  SkipBlanks(s, len, &p);
+  if (!ScanUInt(s, len, &p, 4, &y)) return false;
+  if (p >= len || s[p] != '-') return false;
+  p++;
+  if (!ScanUInt(s, len, &p, 2, &mo)) return false;
+  if (p >= len || s[p] != '-') return false;
+  p++;
+  if (!ScanUInt(s, len, &p, 2, &d)) return false;
+  if (p < len && (s[p] == ' ' || s[p] == 'T' || s[p] == 't')) {
+    p++;
+    SkipBlanks(s, len, &p);
+    if (!ScanUInt(s, len, &p, 2, &h)) return false;
+    if (p >= len || s[p] != ':') return false;
+    p++;
+    if (!ScanUInt(s, len, &p, 2, &mi)) return false;
+    if (p < len && s[p] == ':') {
+      p++;
+      if (!ScanUInt(s, len, &p, 2, &sec)) return false;
+    }
+    ScanFraction(s, len, &p, &frac);
+  }
+  SkipBlanks(s, len, &p);
+  if (p < len && (s[p] == 'Z' || s[p] == 'z')) {
+    p++;
+  } else if (p < len && (s[p] == '+' || s[p] == '-')) {
+    int sign = s[p] == '-' ? -1 : 1;
+    int64_t oh = 0, om = 0;
+    p++;
+    if (!ScanUInt(s, len, &p, 2, &oh)) return false;
+    if (p < len && s[p] == ':') {
+      p++;
+      if (!ScanUInt(s, len, &p, 2, &om)) return false;
+    } else if (p < len && s[p] >= '0' && s[p] <= '9') {
+      if (!ScanUInt(s, len, &p, 2, &om)) return false;
+    }
+    if (oh > 23 || om > 59) return false;
+    offset_secs = sign * (oh * 3600 + om * 60);
+  }
+  SkipBlanks(s, len, &p);
+  if (p != len) return false;
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || sec > 59) return false;
+  int64_t secs = DaysFromCivil(y, (unsigned)mo, (unsigned)d) * 86400 + h * 3600 + mi * 60 + sec;
+  *out = (secs - offset_secs) * 1000000LL + frac;
+  return true;
+}
+
+// Append a UTF-16 buffer (n units) to a utf8 string array.  Surrogate pairs
+// become 4-byte sequences (non-BMP characters such as emoji); an unpaired
+// surrogate becomes U+FFFD so the output is always valid UTF-8.
 static ArrowErrorCode AppendUtf16(struct ArrowArray* arr, const SQLWCHAR* w, size_t n,
                                   struct ArrowBuffer* scratch) {
   scratch->size_bytes = 0;
@@ -409,12 +629,16 @@ static ArrowErrorCode AppendUtf16(struct ArrowArray* arr, const SQLWCHAR* w, siz
   size_t k = 0;
   for (size_t i = 0; i < n; i++) {
     uint32_t cp = (uint16_t)w[i];
-    if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < n) {
-      uint32_t lo = (uint16_t)w[i + 1];
+    if (cp >= 0xD800 && cp <= 0xDBFF) {
+      uint32_t lo = (i + 1 < n) ? (uint16_t)w[i + 1] : 0;
       if (lo >= 0xDC00 && lo <= 0xDFFF) {
         cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
         i++;
+      } else {
+        cp = 0xFFFD;  // high surrogate with no low surrogate following
       }
+    } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+      cp = 0xFFFD;  // low surrogate with no high surrogate preceding
     }
     if (cp < 0x80) {
       o[k++] = (uint8_t)cp;
@@ -635,6 +859,8 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
     case FETCH_U16: CHECK_NA(INTERNAL, ArrowArrayAppendUInt(arr, *(const SQLUSMALLINT*)data), error); break;
     case FETCH_U32: CHECK_NA(INTERNAL, ArrowArrayAppendUInt(arr, *(const SQLUINTEGER*)data), error); break;
     case FETCH_U64: CHECK_NA(INTERNAL, ArrowArrayAppendUInt(arr, *(const SQLUBIGINT*)data), error); break;
+    // NaN and +/-Inf are passed through verbatim: they are valid Arrow float
+    // values, so they must not be turned into nulls or rejected here.
     case FETCH_F32: CHECK_NA(INTERNAL, ArrowArrayAppendDouble(arr, *(const SQLREAL*)data), error); break;
     case FETCH_F64: CHECK_NA(INTERNAL, ArrowArrayAppendDouble(arr, *(const SQLDOUBLE*)data), error); break;
     case FETCH_CHAR: {
@@ -667,6 +893,26 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
     case FETCH_TIME: {
       const TIME_STRUCT* t = (const TIME_STRUCT*)data;
       CHECK_NA(INTERNAL, ArrowArrayAppendInt(arr, t->hour * 3600 + t->minute * 60 + t->second), error);
+      break;
+    }
+    case FETCH_TIME64: {
+      int64_t v = 0;
+      if (!ParseTimeMicros((const char*)data, len, &v)) {
+        InternalAdbcSetError(error, "Could not parse time value '%.*s' for column %s", (int)len,
+                             (const char*)data, c->name);
+        return ADBC_STATUS_INVALID_DATA;
+      }
+      CHECK_NA(INTERNAL, ArrowArrayAppendInt(arr, v), error);
+      break;
+    }
+    case FETCH_TIMESTAMP_TZ: {
+      int64_t v = 0;
+      if (!ParseTimestampUtcMicros((const char*)data, len, &v)) {
+        InternalAdbcSetError(error, "Could not parse timestamp value '%.*s' for column %s",
+                             (int)len, (const char*)data, c->name);
+        return ADBC_STATUS_INVALID_DATA;
+      }
+      CHECK_NA(INTERNAL, ArrowArrayAppendInt(arr, v), error);
       break;
     }
     case FETCH_TIMESTAMP: {

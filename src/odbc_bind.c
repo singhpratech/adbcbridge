@@ -312,6 +312,23 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
         status = SlotFromArrow(&slots[i], &svs[i], view.children[i], row, &stmt->reader_opts, error);
         if (status != ADBC_STATUS_OK) break;
         struct ParamSlot* p = &slots[i];
+        if (p->indicator == SQL_NULL_DATA) {
+          // Bind NULLs with the driver's own idea of the parameter type when it can
+          // tell us (SQLDescribeParam), a NULL value pointer and SQL_C_DEFAULT -- the
+          // combination every driver we have met encodes correctly (pyodbc does the same).
+          SQLSMALLINT dtype = 0, ddigits = 0, dnullable = 0;
+          SQLULEN dsize = 0;
+          if (SQL_SUCCEEDED(SQLDescribeParam(hstmt, (SQLUSMALLINT)(i + 1), &dtype, &dsize, &ddigits,
+                                             &dnullable)) &&
+              dtype != 0 && dtype != SQL_UNKNOWN_TYPE) {
+            p->sql_type = dtype;
+            p->column_size = dsize ? dsize : 1;
+            p->decimal_digits = ddigits;
+          }
+          p->c_type = SQL_C_DEFAULT;
+          p->data = NULL;
+          p->buffer_length = 0;
+        }
         SQLRETURN r = SQLBindParameter(hstmt, (SQLUSMALLINT)(i + 1), SQL_PARAM_INPUT, p->c_type,
                                        p->sql_type, p->column_size, p->decimal_digits,
                                        (SQLPOINTER)p->data, p->buffer_length, &p->indicator);
