@@ -376,9 +376,72 @@ tuning drawn from this benchmark should be re-validated against a client/server
 ODBC driver, where the 71%/22%/7% split will look completely different and
 optimisations #2, #5 and #6 will matter far more than they do here.
 
+## A note on the write path
+
+Everything above is the read path. Bulk ingest and `executemany` are measured
+separately by `bench/ingest_bench.py` (SQLite) and `bench/matrix_bench.py` (every
+database in the compatibility matrix); the per-database numbers live in
+`bench/MATRIX_BENCHMARKS.md`.
+
+Two things dominate write throughput, and neither is Arrow work:
+
+1. **Commits.** With the connection in autocommit, every bound row is its own
+   transaction — a round trip and, for most engines, an fsync. Ingest and
+   `executemany` therefore turn autocommit off for the duration of the execute
+   and commit once at the end. This is worth two to three orders of magnitude on
+   its own and applies to every driver that reports `SQL_TXN_CAPABLE`.
+2. **Executes.** With `adbc.odbc.array_binding` (default on), each Arrow batch is
+   bound as a column-wise ODBC parameter array and goes out in one `SQLExecute`
+   instead of one per row. Fixed-width columns are bound straight onto the Arrow
+   buffers; variable-length columns are staged into a per-column buffer sized to
+   the batch's longest value. Drivers whose parameter arrays cannot be trusted
+   (DuckDB, clickhouse-odbc, Firebird's OdbcFb) opt out and keep the batched commit.
+
+Ingesting 20,000 rows of `(int32, float64, string, date32)` into a table the
+benchmark created, on a connection in autocommit, rows per second. "Before" is
+the same code with neither change; `ab` is `adbc.odbc.array_binding`, forced on
+the statement so both paths can be measured on every driver:
+
+| Database | Before, ab=off | Before, ab=on | After, ab=off | After, ab=on (default) |
+|---|---:|---:|---:|---:|
+| SQLite 3.45 | 340 | 424 | 315,287 | 279,621 |
+| DuckDB | 10,131 | wrong row count | 16,421 | *quirked off* |
+| PostgreSQL 16 | 410 | **wrong: reported 2 rows** | 9,087 | 76,071 |
+| MariaDB 11 | 280 | **error 22007** | 11,209 | 40,706 |
+| MySQL 8.4 | 120 | 132 | 8,459 | 7,944 |
+| SQL Server 2022 | 94 | 101 | 6,859 | 122,768 |
+| Oracle 23ai | 313 | 303,154 | 10,679 | 244,875 |
+| IBM Db2 12.1 | 373 | 251,599 | 15,183 | 270,476 |
+| Firebird 5 | 96 | silently drops rows | 5,301 | *quirked off* |
+| ClickHouse 26 | 16 | silently drops rows | 16 | *quirked off* |
+
+Read the columns as the two changes in turn. **After, ab=off** is the batched
+commit alone: 25x to 900x, and it is what the drivers with no usable parameter
+arrays get. **After, ab=on** adds the parameter arrays on top, worth another 4x
+to 18x wherever the driver turns them into one round trip; MySQL's connector
+walks the array itself, so there it is a wash, and SQLite's driver is already
+in-process.
+
+The "Before, ab=on" column is why array binding used to be opt-in: forced on, it
+reported two rows for a 20,000-row insert on PostgreSQL and failed outright on
+MariaDB. Those are the bugs this work fixed. Three drivers -- DuckDB,
+clickhouse-odbc and Firebird's OdbcFb -- accept the parameter-array attributes
+and then quietly execute only part of the array, so they opt out in
+`OdbcDetectQuirks` and keep the batched commit.
+
+Numbers were taken while the same containers were serving other work, so treat
+them as orders of magnitude rather than to three significant figures.
+
+The remaining floor is the driver's own per-statement cost. clickhouse-odbc is
+the outlier: it speaks HTTP, has no transactions to batch and no usable parameter
+arrays, so its ingest rate stays at the driver's request-per-row rate.
+
 ## Files
 
 - `bench/fetch_bench.py` — the benchmark harness (all three paths, batch-size
   sweep, per-column attribution, unbound-column cliff, cProfile).
 - `bench/odbc_floor.c` — raw `SQLBindCol`/`SQLFetch` floor, built on demand by
   the harness with `cc -O2 ... -lodbc`.
+- `bench/ingest_bench.py`, `bench/matrix_bench.py` — the write path.
+- `bench/verify_array_binding.py` — differential check that array binding and the
+  row-at-a-time fallback produce identical data and identical rows-affected.

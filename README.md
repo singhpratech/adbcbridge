@@ -99,17 +99,17 @@ reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
 | Database | ODBC driver | Status |
 |---|---|---|
 | SQLite 3.45 | sqliteodbc 0.99991 | PASS |
-| DuckDB (latest) | duckdb-odbc | PASS (driver quirks handled: 2048-row vectors, no `SQL_BIT` params) |
+| DuckDB (latest) | duckdb-odbc | PASS (driver quirks handled: 2048-row vectors, no `SQL_BIT` params, no usable parameter arrays) |
 | PostgreSQL 16 | psqlodbc 16 | PASS |
 | MariaDB 11 | MariaDB Connector/ODBC 3.1 | PASS |
 | SQL Server 2022 | msodbcsql 18 | PASS (incl. `NVARCHAR(MAX)` via chunked `SQLGetData`) |
 | Oracle 23ai Free | Instant Client ODBC 23 | PASS (set `NLS_LANG=.AL32UTF8` for non-ASCII; 64-bit ints sent as numeric text — driver lacks `SQL_C_SBIGINT`) |
-| ClickHouse 26 | clickhouse-odbc 1.5 | PASS (NULL params need `SQLDescribeParam`; no affected-row counts; `Nullable()` DDL wrapper on ingest) |
+| ClickHouse 26 | clickhouse-odbc 1.5 | PASS (NULL params need `SQLDescribeParam`; no affected-row counts; `Nullable()` DDL wrapper on ingest; no usable parameter arrays) |
 | MySQL 8.4 | MySQL Connector/ODBC 9.4 (and MariaDB Connector/ODBC 3.1) | PASS |
 | CockroachDB 26.3 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; declare a PRIMARY KEY or the synthesised hidden `rowid` shows up in `GetObjects`) |
 | MonetDB 11.55 (Dec2025-SP3) | MonetDBODBClib 11.55 | PASS |
 | IBM Db2 12.1 | Db2 CLI driver (clidriver `libdb2.so`) | PASS (driver quirk handled: 32-bit `SQLLEN` — see `adbc.odbc.sqllen_32bit`) |
-| Firebird 5 | Firebird ODBC 3.5.0-rc1 | PASS (driver quirk handled: `SQL_C_WCHAR` sized in 4-byte `wchar_t`) |
+| Firebird 5 | Firebird ODBC 3.5.0-rc1 | PASS (driver quirks handled: `SQL_C_WCHAR` sized in 4-byte `wchar_t`, no usable parameter arrays) |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
 Per-database driver setup (root-free) and run commands: [`tests/compat/README.md`](tests/compat/README.md).
@@ -381,7 +381,12 @@ Options (set on the statement):
 
 | key | meaning |
 |---|---|
-| `adbc.odbc.array_binding` | `false` (default; opt-in while it is verified across the compatibility matrix) — `true` binds each Arrow batch as an ODBC parameter array, so bulk ingest and `executemany` issue one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE` fall back automatically. Reported rows-affected is identical in both modes. |
+| `adbc.odbc.array_binding` | `true` (default) — binds each Arrow batch as a column-wise ODBC parameter array, so bulk ingest and `executemany` issue one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE`, or that cannot account for every parameter set they were handed, fall back automatically; DuckDB and clickhouse-odbc, whose parameter arrays silently drop values, default to `false` and can be forced back on with this option. Reported rows-affected is identical in both modes. |
+
+Bulk ingest and `executemany` also batch their commits: when the connection is in
+autocommit and more than one row is bound, the driver turns autocommit off for the
+duration and commits once at the end (rolling back if the execute fails), instead of
+paying a commit per row. A transaction the caller opened themselves is left alone.
 
 ## Use from C#
 

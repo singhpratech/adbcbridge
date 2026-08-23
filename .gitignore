@@ -10,3 +10,4 @@ dist/
 private/
 *.egg-info/
 tests/java/target/
+build-*/

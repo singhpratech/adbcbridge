@@ -5,7 +5,9 @@
 Every case is ingested twice -- once with ``adbc.odbc.array_binding=true`` and
 once with the row-at-a-time fallback -- and the data read back must be
 byte-identical between the two modes.  Also exercises the batch-level fallbacks
-(values wider than 32 KiB) and the option's own validation.
+(values wider than 32 KiB), the option's own validation, and the transaction
+batching that both modes share: a multi-row execute commits once at the end, a
+transaction the caller opened stays theirs to commit, and a failure rolls back.
 
 Usage::
 
@@ -30,8 +32,13 @@ SQLITE = os.environ.get("SQLITE_ODBC_DRIVER", "SQLite3")
 OPT = "adbc.odbc.array_binding"
 
 
-def conn_for(db):
-    return dbapi.connect(driver=DRIVER, db_kwargs={"uri": f"Driver={SQLITE};Database={db};"})
+def conn_for(db, **kwargs):
+    return dbapi.connect(driver=DRIVER, db_kwargs={"uri": f"Driver={SQLITE};Database={db};"},
+                         **kwargs)
+
+
+def tmpdb(name):
+    return os.path.join(tempfile.mkdtemp(), name)
 
 
 def ingest_roundtrip(tbl, arr):
@@ -108,6 +115,20 @@ check("timestamp-units", pa.table({
                    pa.timestamp("ns")),
 }))
 
+# A stream whose first batch falls back (a value wider than the staging cap) and
+# whose later batches use parameter arrays again.  Some drivers keep per-execute
+# state that only survives this ordering if the parameters are reset in between --
+# MariaDB Connector/ODBC segfaulted on it.
+mixed_batches = pa.Table.from_batches([
+    pa.record_batch({"i": pa.array(range(200), pa.int64()),
+                     "s": pa.array(["x" * 40000] + [f"a{i}" for i in range(199)])}),
+    pa.record_batch({"i": pa.array(range(200, 400), pa.int64()),
+                     "s": pa.array([f"b{i}" for i in range(200)])}),
+    pa.record_batch({"i": pa.array(range(400, 600), pa.int64()),
+                     "s": pa.array([f"c{i}" for i in range(200)])}),
+])
+check("fallback-then-array", mixed_batches)
+
 # Sliced (offset != 0) arrays exercise the direct-bind offset arithmetic.
 big = pa.table({
     "i64": pa.array(range(N), pa.int64()),
@@ -181,6 +202,61 @@ assert by_name["delete-no-match"] == 0, ca
 assert by_name["delete-match"] == 300, ca
 assert by_name["remaining"] == 700, ca
 print("ok  executemany DML rowcount parity:", ca)
+
+# --- transaction batching --------------------------------------------------
+# Multi-row executes turn autocommit off for the duration and commit once at the
+# end.  A transaction the caller opened themselves must be left alone: their
+# rollback still has to undo everything.
+db = tmpdb("txn.db")
+with conn_for(db, autocommit=True) as conn:
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE t (a INTEGER)")
+conn = conn_for(db, autocommit=False)
+with conn.cursor() as cur:
+    cur.executemany("INSERT INTO t VALUES (?)", [(i,) for i in range(500)])
+    cur.execute("SELECT COUNT(*) FROM t")
+    assert cur.fetchone()[0] == 500, "rows should be visible inside the transaction"
+conn.rollback()
+with conn.cursor() as cur:
+    cur.execute("SELECT COUNT(*) FROM t")
+    got = cur.fetchone()[0]
+assert got == 0, f"the caller's rollback must undo the whole executemany, got {got}"
+conn.close()
+print("ok  caller's transaction respected (rollback undid executemany)")
+
+# In autocommit the rows are committed by the time the execute returns, without
+# the caller doing anything.
+db = tmpdb("auto.db")
+conn = conn_for(db, autocommit=True)
+with conn.cursor() as cur:
+    cur.execute("CREATE TABLE t (a INTEGER)")
+    cur.executemany("INSERT INTO t VALUES (?)", [(i,) for i in range(500)])
+conn.close()
+with conn_for(db, autocommit=True) as conn:  # fresh connection: only committed rows
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM t")
+        got = cur.fetchone()[0]
+assert got == 500, f"autocommit execute must commit, got {got}"
+print("ok  autocommit executemany committed once at the end")
+
+# A failure part-way through rolls the whole ingest back rather than leaving a
+# half-filled table behind.
+db = tmpdb("fail.db")
+conn = conn_for(db, autocommit=True)
+with conn.cursor() as cur:
+    cur.execute("CREATE TABLE t (a INTEGER PRIMARY KEY)")
+    try:
+        cur.executemany("INSERT INTO t VALUES (?)", [(i % 400,) for i in range(800)])
+        raise AssertionError("expected a duplicate-key error")
+    except dbapi.Error as e:
+        print("ok  duplicate key rejected:", type(e).__name__)
+conn.close()
+with conn_for(db, autocommit=True) as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM t")
+        got = cur.fetchone()[0]
+assert got == 0, f"a failed executemany must roll back, got {got} rows"
+print("ok  failed executemany rolled back")
 
 # Explicitly disabling array binding must still work end to end.
 tmp = tempfile.mkdtemp()

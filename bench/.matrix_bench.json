@@ -1,53 +1,82 @@
 {
+ "sqlite": {
+  "vendor": "SQLite (via ODBC) 3.45.1",
+  "rows": 20000,
+  "ingest": 0.03196744599699741,
+  "adbc": 0.032290721996105276,
+  "pyodbc": 0.022930952000024263,
+  "pyodbc_err": null
+ },
  "duckdb": {
-  "vendor": "DuckDB ",
-  "rows": 50000,
-  "ingest": 6.816112644999521,
-  "adbc": 0.02191274099459406,
+  "vendor": "DuckDB (via ODBC) ",
+  "rows": 20000,
+  "ingest": 1.074620486004278,
+  "adbc": 0.008060034997470211,
   "pyodbc": null,
   "pyodbc_err": "('42000', '[42000] ODBC_DuckDB->PrepareStmt\\nCatalog Error: Table with name adbc"
  },
  "postgres": {
-  "vendor": "PostgreSQL 16.0.15",
-  "rows": 50000,
-  "ingest": 310.6490835779987,
-  "adbc": 0.034596664998389315,
-  "pyodbc": 0.06161631799477618,
+  "vendor": "PostgreSQL (via ODBC) 16.0.15",
+  "rows": 20000,
+  "ingest": 0.3791398940011277,
+  "adbc": 0.012620844994671643,
+  "pyodbc": 0.03455595800187439,
   "pyodbc_err": null
  },
  "mariadb": {
-  "vendor": "MariaDB 11.08.000008",
-  "rows": 50000,
-  "ingest": 279.37347040900204,
-  "adbc": 0.019066202999965753,
-  "pyodbc": 0.08740665199729847,
-  "pyodbc_err": null
- },
- "sqlite": {
-  "vendor": "SQLite 3.45.1",
+  "vendor": "MariaDB (via ODBC) 11.08.000008",
   "rows": 20000,
-  "ingest": 312.2807823839976,
-  "adbc": 0.0311869039942394,
-  "pyodbc": 0.023399248995701782,
+  "ingest": 0.267950692003069,
+  "adbc": 0.006208464998053387,
+  "pyodbc": 0.0417396339980769,
   "pyodbc_err": null
  },
  "mysql": {
-  "vendor": "MySQL 8.4.11",
+  "vendor": "MySQL (via ODBC) 8.4.11",
   "rows": 20000,
-  "ingest": 276.5983346770008,
-  "adbc": 0.017654645998845808,
-  "pyodbc": 0.02576557300199056,
+  "ingest": 2.4110140850025346,
+  "adbc": 0.01731228800053941,
+  "pyodbc": 0.05160569099825807,
   "pyodbc_err": null
  },
  "mssql": {
-  "vendor": "Microsoft SQL Server 16.00.4250",
+  "vendor": "Microsoft SQL Server (via ODBC) 16.00.4250",
   "rows": 20000,
-  "ingest": 323.1557087609981,
-  "adbc": 0.00946266199753154,
-  "pyodbc": 0.03357322100055171,
+  "ingest": 0.1602264399989508,
+  "adbc": 0.0076079470018157735,
+  "pyodbc": 0.02318165900214808,
   "pyodbc_err": null
  },
  "oracle": {
-  "error": "ProgrammingError: NOT_FOUND: [ODBC] SQLExecute failed"
+  "vendor": "Oracle (via ODBC) 23.26.0200",
+  "rows": 20000,
+  "ingest": 0.07513757899869233,
+  "adbc": 0.010560422000708058,
+  "pyodbc": 0.09209877999819582,
+  "pyodbc_err": null
+ },
+ "db2": {
+  "vendor": "DB2/LINUXX8664 (via ODBC) 12.01.0500",
+  "rows": 20000,
+  "ingest": 0.06825019099778729,
+  "adbc": 0.003495662000204902,
+  "pyodbc": 0.028206619004777167,
+  "pyodbc_err": null
+ },
+ "firebird": {
+  "vendor": "Firebird (via ODBC) 06.03.1812 LI-V Firebird 5.0",
+  "rows": 20000,
+  "ingest": 3.958345206003287,
+  "adbc": 0.03073125499940943,
+  "pyodbc": null,
+  "pyodbc_err": "('0000', '[0000] [ (0) (SQLDriverConnect)')"
+ },
+ "clickhouse": {
+  "vendor": "ClickHouse (via ODBC) 26.7.5.10",
+  "rows": 300,
+  "ingest": 18.660146260997863,
+  "adbc": 0.006163115998788271,
+  "pyodbc": 0.007458587002474815,
+  "pyodbc_err": null
  }
 }
