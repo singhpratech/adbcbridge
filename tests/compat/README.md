@@ -1676,3 +1676,130 @@ This row moves back out of "Known not to work" if sqld ever restores a PostgreSQ
 listener, or if a libSQL ODBC driver appears; the entry would then look like the other
 PG-wire entries, with SQLite's type affinity driving the tolerance flags (the `sqlite`
 entry's `decimal_type="string"` is the likely starting point).
+
+## MatrixOne 4.2
+
+MatrixOne is a hyper-converged (HTAP) database that speaks the MySQL wire protocol — it
+announces itself as `8.0.30-MatrixOne-v4.2.0` — so it needs no ODBC driver of its own:
+the same MySQL Connector/ODBC build used for the `mysql` entry drives it (see
+[MySQL 8](#mysql-8) above for the root-free tarball, and for the `LD_PRELOAD` that
+`import pyarrow` makes necessary).
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d matrixone
+# or standalone:
+docker run -d --name adbcbridge-matrixone --memory=2g \
+  -p 127.0.0.1:16001:6001 matrixorigin/matrixone:latest
+```
+
+One container holds the whole cluster (log service, TN and CN in one process); it is
+ready in about 20 s and settles at ~800 MiB resident under the 2 GB cap. Its log has no
+single "ready" line, so wait for the MySQL handshake on the port instead:
+
+```sh
+until timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/16001; head -c 40 <&3' \
+        | grep -qa MatrixOne; do sleep 2; done
+# [<NUL>8.0.30-MatrixOne-v4.2.0 ...
+```
+
+SQL is on `127.0.0.1:16001`, with the image's built-in `dump` / `111` account. There is
+no user database at all (only `mo_catalog`, `system`, `mysql`, …), so the entry's `setup`
+runs `CREATE DATABASE IF NOT EXISTS adbc` and `USE adbc` — both idempotent, which matters
+because `bench/matrix_bench.py` replays `setup` on every connection it opens — and the
+connection string names no database.
+
+### Run the entry
+
+```sh
+export MATRIXONE_ODBC_DRIVER=$MYSQL_ODBC_DRIVER   # the Connector/ODBC tarball's libmyodbc9w.so
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py matrixone
+# matrixone PASS  (MySQL (via ODBC) 8.0.30-MatrixOne-v4.2.0)
+```
+
+`PLUGIN_DIR` is needed here for the same reason as for TiDB and Dolt: MatrixOne offers
+only `mysql_native_password`, whose *client-side* plugin Connector/ODBC 9 loads at run
+time from its compiled-in `/usr/local/mysql/lib/plugin`. The entry's connection string
+ends in `{plugin_dir}`, which `conn_uri()` expands to the tarball's own `lib/plugin`
+when that directory exists — see [TiDB](#tidb-75) for the full story.
+
+### Quirks
+
+Everything else in the standard workload runs on the generic path: the emoji round-trip,
+`VARBINARY(10)`, `DATETIME(6)` microseconds, `DECIMAL(10,3)`, NULL parameters,
+affected-row counts and the 5000-row batched ingest and read. `BOOLEAN` is `TINYINT(1)`
+as in MySQL (`bool_type="int8"`) and `adbc_ingest`'s double-quoted identifiers need
+`ANSI_QUOTES` in `sql_mode`, exactly as for MySQL. Three things are MatrixOne's own.
+
+**A table with no PRIMARY KEY gets a hidden column.** MatrixOne synthesises
+`__mo_fake_pk_col` (a `BIGINT UNSIGNED` auto-increment) for a table declared without a
+key, and `information_schema.columns` — hence `SQLColumns`, hence `GetObjects` and
+`GetTableSchema` — reports it as a 9th column, although `SELECT *` never returns it. The
+entry declares `i INT PRIMARY KEY`, the same fix the `cockroachdb` entry uses for the
+synthesised `rowid` there.
+
+**A parameter bound into a `BIT` column takes the server down.** This is not a driver
+problem: it reproduces with plain pyodbc, and the failure is a *server abort*, not an
+error return.
+
+```
+malloc(): unaligned fastbin chunk detected
+SIGABRT: abort
+... github.com/matrixorigin/matrixone/pkg/common/malloc._Cfunc_calloc
+```
+
+Against `CREATE TABLE t (v bit)`, an inserted literal (`VALUES (1)`, `VALUES (NULL)`)
+is stored and read back correctly, but over the binary protocol a bound integer `1` fails
+with `data out of range: data type bit(1), value 1 (1690)`, a bound `NULL` is silently
+stored as *false*, and a mixed batch of the three corrupts the server's heap and kills the
+process — every connection drops with `Lost connection to MySQL server during query`.
+Connector/ODBC's `SQLGetTypeInfo` names `BIT` for a boolean, so the ingest DDL asks for
+exactly that column type. The entry therefore sends the boolean column as `int8` →
+`TINYINT`, which MatrixOne handles correctly, with the same `ingest_types` mechanism the
+`cratedb` entry uses for its missing `DATE`:
+
+```python
+ingest_types={pa.bool_(): pa.int8()},
+```
+
+That keeps create/append/replace ingest under test. MatrixOne's own `BOOL` column type is
+unaffected — `adbc_t`'s `bo BOOLEAN` round-trips fine; it is `BIT` specifically that is
+broken.
+
+**It describes a TEXT column as five characters** (`SQLDescribeCol` reports
+`SQL_WLONGVARCHAR`, column size 5, octet length 0) no matter how long its values are —
+while a `VARCHAR(50)` result column comes back the other way round, with the type maximum
+4,294,967,295. The over-large half was already handled (`long_bind_bytes`); the too-small
+half was not, and it is much more expensive: bound at five characters, *every* row of a
+`long varchar` column comes back truncated and has to be re-read with `SQLGetData`, which
+read 100,000 rows at **3.2k rows/s** — slower than not binding at all. So
+`ApplyBindWidth()` in `src/odbc_reader.c` now treats a small width on a no-declared-length
+column (`SQL_LONGVARCHAR` / `SQL_WLONGVARCHAR` / `SQL_LONGVARBINARY`) the same way it
+already treated an implausibly large one: the driver's number is a guess either way, so
+the column is bound at `long_bind_bytes` and only values that outgrow *that* are re-read.
+The same read then runs at **2.05M rows/s**. This is a generic reader fix, keyed on the
+SQL type rather than on a driver name; it cannot make any other database's binding
+narrower, since it only ever raises a width.
+
+### Benchmark
+
+```
+ADBC_MATRIX_SUFFIX=_matrixone .venv/bin/python bench/matrix_bench.py \
+  --rows 10000 --fetch-rows 100000 matrixone
+# fetch=2,045,021/s (pyodbc 900,455/s)  ingest=4,115/s array=4,356/s pyodbc=4,213/s
+```
+
+Ingest is slow in absolute terms and identical for all three clients (~4.2k rows/s), so it
+is the server, not the binding path: MatrixOne commits a transaction per `INSERT` into its
+log service, and parameter arrays do not become a multi-row `INSERT` on this wire.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down matrixone
+# or, if started standalone:
+docker rm -f adbcbridge-matrixone
+```

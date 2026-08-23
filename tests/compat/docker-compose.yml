@@ -143,3 +143,15 @@ services:
     environment: { ACCEPT_EULA: "1", MSSQL_SA_PASSWORD: "Adbc!Bridge2026" }
     mem_limit: 2g
     ports: ["127.0.0.1:14332:1433"]
+  # MatrixOne: a hyper-converged (HTAP) database speaking the MySQL wire protocol on
+  # 6001, driven by MySQL Connector/ODBC.  In the "extra" profile, so a plain `up -d`
+  # leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d matrixone
+  # The image ships the built-in `dump`/`111` account and no user database; the matrix
+  # entry's `setup` creates `adbc` itself.  Port 16001 keeps it clear of the other
+  # MySQL-wire entries.
+  matrixone:
+    image: matrixorigin/matrixone:latest
+    profiles: ["extra"]
+    mem_limit: 2g
+    ports: ["127.0.0.1:16001:6001"]

@@ -308,6 +308,16 @@ static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions*
     c->bound = false;
     return;
   }
+  // A guess can be too small as well as too large: MatrixOne describes a TEXT column as
+  // five characters (and octet length 0) however long its values are, so binding what it
+  // says would truncate -- and re-read -- every single row, which is slower than not
+  // binding at all (a 100,000-row read runs at 3k rows/s that way, 900k bound wide).
+  // Since the width of such a column is a guess either way, bind it at the same
+  // `long_bind_bytes` an over-large guess is clamped to; the values that outgrow that are
+  // re-read exactly as before.
+  if (no_declared_length && repairable && c->elem_size < opts->long_bind_bytes) {
+    c->elem_size = opts->long_bind_bytes;
+  }
   if (c->elem_size > opts->max_bind_bytes) {
     if (!repairable) {
       c->bound = false;
