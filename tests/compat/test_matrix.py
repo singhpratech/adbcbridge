@@ -71,7 +71,13 @@ def run(name, cfg):
         k, v = kv.split("=", 1)
         os.environ.setdefault(k, v)
     uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv)
-    conn = dbapi.connect(driver=DRIVER, db_kwargs={"uri": uri}, autocommit=True)
+    # This matrix exists to exercise the ODBC path, so native delegation (which
+    # would take over for e.g. SQLite/PostgreSQL) is switched off here.
+    conn = dbapi.connect(
+        driver=DRIVER,
+        db_kwargs={"uri": uri, "adbc.odbc.delegate": "never"},
+        autocommit=True,
+    )
     info = conn.adbc_get_info()
     ident = cfg.get("ident", lambda x: x)  # how the server stores unquoted names
     T, ING = ident("adbc_t"), ident("adbc_ing")

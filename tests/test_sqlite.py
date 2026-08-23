@@ -25,7 +25,11 @@ SQLITE_ODBC = os.environ.get("SQLITE_ODBC_DRIVER", "SQLite3")
 
 def connect(path):
     uri = f"Driver={SQLITE_ODBC};Database={path};"
-    return dbapi.connect(driver=DRIVER, db_kwargs={"uri": uri})
+    # These are tests of the ODBC path; keep native delegation (which would hand
+    # SQLite over to adbc_driver_sqlite when it is installed) out of the way.
+    return dbapi.connect(
+        driver=DRIVER, db_kwargs={"uri": uri, "adbc.odbc.delegate": "never"}
+    )
 
 def main():
     tmp = tempfile.mkdtemp()

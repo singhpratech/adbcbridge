@@ -294,4 +294,9 @@ def driver_path() -> str:
 
 def default_environment() -> dict[str, typing.Any]:
     """Environment defaults so the suite can run without manual exports."""
-    return {"ADBCBRIDGE_VALIDATION_URI": connection_uri()}
+    return {
+        "ADBCBRIDGE_VALIDATION_URI": connection_uri(),
+        # The suite validates the ODBC path; native delegation would otherwise
+        # hand SQLite over to adbc_driver_sqlite whenever that package is around.
+        "ADBC_ODBC_DELEGATE": "never",
+    }
