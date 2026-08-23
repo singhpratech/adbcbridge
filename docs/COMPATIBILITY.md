@@ -21,6 +21,7 @@ from the second table to the first.
 | DuckDB | duckdb-odbc | PASS | no usable parameter arrays |
 | PostgreSQL 16 | psqlodbc | PASS | native delegation to `adbc_driver_postgresql` when installed |
 | MariaDB 11 | MariaDB Connector/ODBC | PASS | |
+| MariaDB ColumnStore 23.02 | MariaDB Connector/ODBC (MariaDB wire) | PASS | columnar engine inside MariaDB 11.1: standard-SQL ingest DDL (`LONG VARCHAR`/`BIT` rejected), no `VARBINARY` column type; needs `columnstore_cache_inserts=ON` (bound-parameter inserts are ~2 rows/s without it) and `provision` to start the backend processes; ingest 14.9k rows/s (54.6k with array binding), fetch 1.41M rows/s |
 | MySQL 8.4 | MySQL Connector/ODBC | PASS | driver executes parameter arrays row by row |
 | Dolt 2.3.1 (MySQL 8.0.33 wire) | MySQL Connector/ODBC | PASS | `mysql_native_password` only, so the connector needs `PLUGIN_DIR` |
 | SQL Server 2022 | msodbcsql 18 | PASS | |
@@ -54,7 +55,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Database | Wire / driver | Server | Status |
 |---|---|---|---|
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |
-| MariaDB ColumnStore | MariaDB Connector/ODBC | `mariadb/columnstore` | queued |
 | MongoDB (BI Connector) | MySQL Connector/ODBC | `mongo` + `mongosqld` | queued |
 | Apache Ignite | ignite-odbc | `apacheignite/ignite` | queued |
 | Vertica CE | Vertica ODBC | `vertica/vertica-ce` | queued |

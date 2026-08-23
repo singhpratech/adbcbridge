@@ -115,6 +115,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | DuckDB (latest) | duckdb-odbc | PASS (driver quirks handled: 2048-row vectors, no `SQL_BIT` params, no usable parameter arrays) |
 | PostgreSQL 16 | psqlodbc 16 | PASS |
 | MariaDB 11 | MariaDB Connector/ODBC 3.1 | PASS |
+| MariaDB ColumnStore 23.02 (MariaDB 11.1) | MariaDB Connector/ODBC 3.1 | PASS (driver quirk handled: ColumnStore rejects `maodbc`'s own `LONG VARCHAR`/`BIT` type names, so ingest DDL falls back to standard SQL names; server side: no `VARBINARY` column type, and `columnstore_cache_inserts=ON` is what makes parameterised inserts more than ~2 rows/s) |
 | SQL Server 2022 | msodbcsql 18 | PASS (incl. `NVARCHAR(MAX)` via chunked `SQLGetData`) |
 | Oracle 23ai Free | Instant Client ODBC 23 | PASS (set `NLS_LANG=.AL32UTF8` for non-ASCII; 64-bit ints sent as numeric text — driver lacks `SQL_C_SBIGINT`) |
 | ClickHouse 26 | clickhouse-odbc 1.5 | PASS (NULL params need `SQLDescribeParam`; no affected-row counts; `Nullable()` DDL wrapper on ingest; no usable parameter arrays) |

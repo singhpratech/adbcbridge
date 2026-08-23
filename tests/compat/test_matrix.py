@@ -20,6 +20,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER, OPENGAUSS_ODBC_DRIVER
     QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MATRIXONE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFORMIX_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, COLUMNSTORE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -60,6 +61,25 @@ DBS = {
         env="MARIADB_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=13306;Database=adbc;User=adbc;Password=adbc;",
         ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "columnstore": dict(
+        # MariaDB ColumnStore is the columnar storage engine inside a MariaDB server
+        # (this image is MariaDB 11.1 + ColumnStore 23.02), so MariaDB Connector/ODBC
+        # drives it and the `mariadb` entry's wire-level tolerances apply unchanged:
+        # BOOLEAN is TINYINT(1) -> int8, and the double-quoted identifiers adbc_ingest
+        # emits need ANSI_QUOTES.
+        env="COLUMNSTORE_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=13313;Database=adbc;User=adbc;Password=Adbc!Bridge2026;",
+        # ENGINE=Columnstore on adbc_t, and default_storage_engine in `setup` for every
+        # table the driver's generated ingest DDL creates: the server's default engine is
+        # still InnoDB, so without both the workload would run against a plain MariaDB and
+        # never touch the columnar engine this entry exists to cover.
+        #   b is BLOB, not VARBINARY: ColumnStore refuses the type outright ("Varbinary is
+        # currently not supported by Columnstore") while BLOB round-trips bytes.
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b BLOB, d DATE,"
+            " ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN) ENGINE=Columnstore",
+        bool_type="int8",
+        setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')",
+               "SET SESSION default_storage_engine = Columnstore"]),
     "oracle": dict(
         env="ORACLE_ODBC_DRIVER", conn="Driver={drv};DBQ=127.0.0.1:11521/FREEPDB1;UID=adbc;PWD=adbc;",
         ddl="CREATE TABLE adbc_t (i NUMBER(10), f BINARY_DOUBLE, s VARCHAR2(50), b RAW(10), d DATE, ts TIMESTAMP(6), n NUMBER(10,3), bo BOOLEAN)",

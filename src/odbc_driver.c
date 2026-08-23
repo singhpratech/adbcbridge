@@ -434,16 +434,16 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
   return OdbcConnectionHeld(conn, key, error);
 }
 
-// Lowercased SELECT version() of the server behind the connection, or "" if it cannot
-// be had.  One driver can front many different servers -- psqlodbc drives every
-// PostgreSQL-wire backend and reports the same SQL_DRIVER_NAME and SQL_DBMS_NAME for
-// all of them -- and version() is the only thing that tells those apart.
-static void OdbcServerVersionString(SQLHDBC hdbc, char* out, size_t out_size) {
+// Lowercased first column of the first row of `sql`, or "" if it cannot be had.  One
+// driver can front many different servers -- psqlodbc drives every PostgreSQL-wire
+// backend and reports the same SQL_DRIVER_NAME and SQL_DBMS_NAME for all of them -- so
+// where the driver name says nothing, ask the server itself.  Errors are swallowed: a
+// server that does not understand the query simply is not the one being looked for.
+static void OdbcServerScalarString(SQLHDBC hdbc, const char* sql, char* out, size_t out_size) {
   out[0] = '\0';
   SQLHSTMT hstmt = NULL;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return;
-  if (SQL_SUCCEEDED(SQLExecDirect(hstmt, (SQLCHAR*)"SELECT version()", SQL_NTS)) &&
-      SQL_SUCCEEDED(SQLFetch(hstmt))) {
+  if (SQL_SUCCEEDED(SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
     SQLLEN ind = 0;
     if (!SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_CHAR, out, (SQLLEN)out_size, &ind)) ||
         ind == SQL_NULL_DATA) {
@@ -454,6 +454,12 @@ static void OdbcServerVersionString(SQLHDBC hdbc, char* out, size_t out_size) {
   for (char* c = out; *c; c++) {
     if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
   }
+}
+
+// Lowercased SELECT version() of the server behind the connection, or "" if it cannot
+// be had.
+static void OdbcServerVersionString(SQLHDBC hdbc, char* out, size_t out_size) {
+  OdbcServerScalarString(hdbc, "SELECT version()", out, out_size);
 }
 
 // Per-driver workarounds, keyed on SQL_DRIVER_NAME (or SQL_DBMS_NAME for a driver that
@@ -566,6 +572,21 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // MariaDB's maximum TIME scale is 6.
     conn->reader_opts.fractional_time_type_format = "TIME(%d)";
     conn->reader_opts.fractional_time_max_digits = 6;
+    // MariaDB ColumnStore is a storage engine inside an ordinary MariaDB server, so the
+    // driver name and version() are a plain MariaDB's and say nothing about it; ask the
+    // server whether the engine is there instead.  Its DDL parser accepts only its own
+    // list of type names, and two of the names maodbc's SQLGetTypeInfo answers with are
+    // not on it: SQL_LONGVARCHAR is "LONG VARCHAR" and SQL_BIT is "BIT", both refused
+    // with "The syntax or the data type(s) is not supported by Columnstore" even though
+    // the types themselves (MEDIUMTEXT, TINYINT) exist there.  The standard spellings
+    // TEXT and BOOLEAN are accepted, so spell generated ingest DDL in those -- which
+    // plain MariaDB accepts just as well, so this costs an InnoDB table nothing.
+    char engines[64];
+    OdbcServerScalarString(conn->hdbc,
+                           "SELECT COUNT(*) FROM information_schema.engines"
+                           " WHERE engine = 'Columnstore' AND support IN ('YES', 'DEFAULT')",
+                           engines, sizeof(engines));
+    if (engines[0] != '\0' && engines[0] != '0') conn->reader_opts.ansi_ddl_type_names = true;
   }
   if (strstr((const char*)name, "odbcfb")) {
     // Firebird's OdbcFb sizes SQL_C_WCHAR buffers in wchar_t (4 bytes) while unixODBC
