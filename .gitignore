@@ -1,4 +1,7 @@
 build/
 .venv/
+.venv-validation/
 __pycache__/
+.pytest_cache/
 *.db
+tests/validation-upstream/
