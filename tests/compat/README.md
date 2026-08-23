@@ -1651,6 +1651,134 @@ could avoid it, and the ANSI driver has no such problem and loses nothing: use i
 Note that both builds report `SQL_DRIVER_NAME` as `virtodbc.so`, so the quirks above are
 keyed on a name that matches either.
 
+## Arrow Flight SQL (sqlflite 1.5.5 / DuckDB 1.1.1)
+
+Arrow Flight SQL is a wire protocol, not a database: a server answers `CommandStatement*`
+RPCs and hands back Arrow record batches. The one ODBC driver for it is the Arrow Flight
+SQL ODBC driver Dremio publishes (`github.com/dremio/flightsql-odbc`, shipped as
+`arrow-flight-sql-odbc-driver`), so everything the `flightsql` entry works around is that
+driver's, not any one server's. The server used here is `voltrondata/sqlflite`, which
+puts DuckDB behind a Flight SQL service.
+
+Server:
+
+```sh
+docker run -d --name adbcbridge-flightsql --memory=2g \
+  -e SQLFLITE_PASSWORD=adbc -e TLS_ENABLED=0 -e PRINT_QUERIES=0 \
+  -p 127.0.0.1:31337:31337 voltrondata/sqlflite:latest
+```
+
+(or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d flightsql`;
+it is in the `extra` profile, so a plain `up -d` leaves it alone). It is ready in about a
+second — `SQLFlite server - started` in `docker logs`. `SQLFLITE_PASSWORD` is mandatory:
+without one the server exits at startup. The user name is sqlflite's own default,
+`sqlflite_username`. The image ships a DuckDB database holding TPC-H at scale factor
+0.01, which the entry's `extra` steps read.
+
+Driver — the `.rpm` from Dremio's download site, unpacked without root (there is no
+`.deb`; `7z` turns the RPM into a cpio archive, which `cpio` extracts into a prefix of
+your choosing):
+
+```sh
+mkdir -p /tmp/dbs/flightsql && cd /tmp/dbs/flightsql
+curl -sLO https://download.dremio.com/arrow-flight-sql-odbc-driver/arrow-flight-sql-odbc-driver-LATEST.x86_64.rpm
+7z x -y arrow-flight-sql-odbc-driver-LATEST.x86_64.rpm     # -> *.cpio
+mkdir -p ex && cd ex && cpio -idmu --no-absolute-filenames < ../*.cpio
+# -> ex/opt/arrow-flight-sql-odbc-driver/lib64/libarrow-odbc.so.0.9.7.479
+```
+
+The library needs nothing beyond a stock glibc host (`ldd` reports no missing
+dependencies — Arrow, gRPC and Protobuf are all linked in), so no `LD_LIBRARY_PATH` entry
+is needed for it.
+
+Run the entry:
+
+```sh
+export FLIGHTSQL_ODBC_DRIVER=/tmp/dbs/flightsql/ex/opt/arrow-flight-sql-odbc-driver/lib64/libarrow-odbc.so.0.9.7.479
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py flightsql
+# flightsql PASS  (sqlflite (via ODBC) 00.00.0000.duckdb v1.1.1)
+```
+
+Entry notes: the read side of the workload is exact. Every column type round-trips —
+`BLOB` as bytes, `DATE`, microsecond `TIMESTAMP`, `BOOLEAN` as `bool`, and `"héllo 🚀"`
+with its astral-plane emoji intact — and `SELECT`, the 100,000-row batched read,
+`GetObjects`, `GetTableSchema` and the error path all behave. The write side does not
+exist at all; see quirk 1.
+
+### Driver quirk 1: no `SQLBindParameter`, so the entry is `read_only`
+
+The driver answers `SQLBindParameter` with `HYC00 "Unsupported function"` on a *virgin*
+statement handle, before any SQL has been seen:
+
+```c
+SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
+SQLINTEGER v = 42; SQLLEN ind = 4;
+SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER, 0, 0, &v, 0, &ind);
+/* SQL_ERROR, HYC00 [Apache Arrow][Flight SQL] (100) Unsupported function. */
+```
+
+So nothing that binds a parameter can run: not the parameterised `INSERT` the other
+entries load `adbc_t` with, and not `adbc_ingest`. `SQLPrepare` succeeds on a statement
+containing `?`, but `SQLNumParams` then reports 0 markers and there is no way to supply a
+value. (`SQLRowCount` also returns -1 after a literal `INSERT`, so there would be no
+affected-row count to check either.)
+
+This is not something adbcbridge can work around — parameter binding *is* the write path
+— so the entry uses the existing `read_only` tolerance flag, as the `access` entry does
+for MDB Tools. `SQLExecDirect` of literal SQL works fine, so the entry's `setup` builds
+`adbc_t` (the same eight columns and the same two rows, spelled as literals) and
+`adbc_big` (100,000 rows from DuckDB's `range()`), and the whole read side of the
+workload then runs unchanged against them. `setup` is replayed on every connection —
+`bench/matrix_bench.py` opens several — so each statement is `CREATE OR REPLACE`.
+
+### Driver quirk 2: `SQLColumns` segfaults on the first `SQLFetch`
+
+`SQLColumns` returns `SQL_SUCCESS` and describes all 18 result columns, and then the
+first `SQLFetch` on that cursor segfaults inside the driver — with **no** bound columns at
+all, so this is not a binding-width problem and there is nothing a caller can do
+differently:
+
+```c
+SQLColumns(stmt, NULL, 0, NULL, 0, (SQLCHAR*)"adbc_t", SQL_NTS, NULL, 0);  /* SQL_SUCCESS */
+SQLNumResultCols(stmt, &n);                                               /* n == 18 */
+SQLFetch(stmt);                                                           /* SIGSEGV */
+```
+
+It happens for any table, including the server's own TPC-H tables, and whether or not the
+catalog and schema are given (passing a catalog that matches nothing returns an empty
+result set, which fetches without crashing — the crash is in producing the first row).
+`SQLTables` and `SQLPrimaryKeys` are fine, and `SQLStatistics` is honestly reported as
+`HYC00 Unsupported function`.
+
+A crash leaves no return code to fall back on, so the call has to be skipped outright.
+adbcbridge already has the fallback this needs: `AppendColumnsViaDescribe`
+(`src/odbc_objects.c`) reads a table's columns off the result-set metadata of
+`SELECT * FROM <table> WHERE 1=0`, which is where `GetTableSchema` gets them from anyway.
+Until now it only ran after `SQLColumns` *failed*; the new `no_sql_columns` reader option
+makes `AppendColumns` take it unconditionally. `OdbcDetectQuirks` (`src/odbc_driver.c`)
+sets it from `SQL_DRIVER_NAME`, which this driver reports as
+`Arrow Flight ODBC Driver`.
+
+### Driver quirk 3: every `DECIMAL` is described as `(19, 0)`
+
+The driver describes any `SQL_DECIMAL` column with precision 19 and scale 0 whatever was
+declared — `DECIMAL(10,3)` and a `12.345::DECIMAL(10,3)` literal both come back that way
+— while sending the digits themselves in full. Taken at face value that scale rounds
+`12.345` to `12`, so the entry sets `adbc.odbc.decimal_as_string` and expects `n` as a
+string, exactly as the `databend` entry does for the same reason.
+
+### A trap that is not a quirk here: `SQL_C_WCHAR` and astral-plane characters
+
+The driver's wide path throws on anything outside the BMP —
+`SQLGetData(..., SQL_C_WCHAR, ...)` on a value containing `🚀` fails with
+`HY000 wstring_convert::from_bytes` — while its narrow path is correct UTF-8. It costs
+nothing here, because the driver describes DuckDB's `VARCHAR` as `SQL_VARCHAR` (not
+`SQL_WVARCHAR`), so adbcbridge's reader is on the narrow path already and the emoji
+round-trips. Should a Flight SQL server ever cause a column to be described as
+`SQL_WVARCHAR`, the existing `wchar_as_utf8` option (Firebird's OdbcFb and Virtuoso both
+need it) is the fix, added to the same `arrow flight` block in `OdbcDetectQuirks`.
+
 ## H2 (PostgreSQL mode) — does not work with psqlodbc
 
 H2 has no ODBC driver of its own. Its server mode can speak the PostgreSQL v3 wire

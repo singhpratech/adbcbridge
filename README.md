@@ -135,6 +135,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | Databend 1.2 | MySQL Connector/ODBC 9.4 (MySQL wire protocol) | PASS (server has no prepared statements, so the connector runs with `NO_SSPS=1`; driver quirks handled: `_binary` literals for date/timestamp/binary params, MySQL type names in ingest DDL) |
 | Azure SQL Edge 16.0 | msodbcsql 18 | PASS (no quirks; the SQL Server 2022 engine, so it takes the same path as SQL Server 2022 — it even reports `SQL_DBMS_NAME` "Microsoft SQL Server") |
 | OpenLink Virtuoso 7.2 | Virtuoso ODBC (`virtodbc.so`, ANSI build) | PASS (driver quirks handled: no `SQL_C_WCHAR` — UTF-8 on the narrow path instead, 64-bit ints sent as numeric text, no usable parameter arrays for dates; the Unicode build `virtodbcu.so` crashes unixODBC's ANSI translation on the first failed statement) |
+| Arrow Flight SQL (sqlflite 1.5.5, DuckDB 1.1.1) | Arrow Flight SQL ODBC 0.9.7 (Dremio) | PASS, read side only — the driver has no `SQLBindParameter` at all, so nothing can be written through it (driver quirks handled: `SQLColumns` segfaults on the first `SQLFetch`, so `GetObjects` describes a zero-row SELECT instead; every `DECIMAL` is described as `(19, 0)`, so decimals are read as exact text) |
 | Microsoft Access `.mdb`/`.accdb` | MDB Tools 1.0 (`odbc-mdbtools`) | PASS, read side only — the driver executes no DDL/DML and has no `SQLBindParameter` (32-bit `SQLLEN`, as Db2) |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.

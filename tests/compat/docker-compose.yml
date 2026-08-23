@@ -167,3 +167,17 @@ services:
     environment: { DBA_PASSWORD: adbc }
     mem_limit: 2g
     ports: ["127.0.0.1:11111:1111"]
+  # Arrow Flight SQL: voltrondata/sqlflite serves a DuckDB database over Flight SQL on
+  # 31337, which the Arrow Flight SQL ODBC driver connects to.  In the "extra" profile,
+  # so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d flightsql
+  # TLS_ENABLED=0 keeps the server on plain gRPC -- the matrix entry's connection string
+  # says useEncryption=false to match.  SQLFLITE_PASSWORD is mandatory (the server exits
+  # at startup without one) and pairs with sqlflite's default user name
+  # `sqlflite_username`.  PRINT_QUERIES=0 stops it echoing every statement to its log.
+  flightsql:
+    profiles: ["extra"]
+    image: voltrondata/sqlflite:latest
+    environment: { SQLFLITE_PASSWORD: adbc, TLS_ENABLED: "0", PRINT_QUERIES: "0" }
+    mem_limit: 2g
+    ports: ["127.0.0.1:31337:31337"]

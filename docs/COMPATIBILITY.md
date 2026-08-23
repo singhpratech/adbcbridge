@@ -41,6 +41,7 @@ from the second table to the first.
 | Databend | MySQL Connector/ODBC (MySQL wire) | PASS | no prepared statements (`NO_SSPS=1`); `_binary` literals; MySQL type names in ingest DDL |
 | Azure SQL Edge 16.0 | msodbcsql 18 | PASS | SQL Server 2022 engine; no quirks |
 | OpenLink Virtuoso 7.2 | Virtuoso ODBC (`virtodbc.so`) | PASS | ODBC-native server; no `SQL_C_WCHAR` (UTF-8 narrow path), no `SQL_C_SBIGINT`, date parameter arrays repeat row 0; no `BOOLEAN` type; ingest 11.9k rows/s, fetch 1.04M rows/s |
+| Arrow Flight SQL (sqlflite 1.5.5 / DuckDB 1.1.1) | Flight SQL ODBC (Dremio, open source) | PASS (read) | driver has no `SQLBindParameter` at all, so no writes; `SQLColumns` segfaults on the first `SQLFetch`, so `GetObjects` describes a zero-row SELECT instead (`no_sql_columns`); every `DECIMAL` described as (19,0); fetch 1.32M rows/s |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 
 ## Driver available, free server available — queued for verification
@@ -59,7 +60,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Apache Ignite | ignite-odbc | `apacheignite/ignite` | queued |
 | Vertica CE | Vertica ODBC | `vertica/vertica-ce` | queued |
 | OpenSearch | opensearch-sql-odbc | `opensearchproject/opensearch` | queued |
-| Arrow Flight SQL (any server) | Flight SQL ODBC (Dremio, open source) | `voltrondata/sqlflite` | queued |
 | Apache Doris | MySQL Connector/ODBC | `apache/doris` | queued (large) |
 | StarRocks | MySQL Connector/ODBC | `starrocks/allin1-ubuntu` | queued (large) |
 | Exasol | Exasol ODBC | `exasol/docker-db` | needs privileged container + 4 GB |

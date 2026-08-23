@@ -216,6 +216,13 @@ struct OdbcReaderOptions {
   bool wchar_as_utf8;
   // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
   bool no_describe_param;
+  // Driver quirk: never call SQLColumns -- its result set cannot be fetched.  The Arrow
+  // Flight SQL ODBC driver returns SQL_SUCCESS from SQLColumns and describes all 18
+  // result columns, then segfaults inside the first SQLFetch on that cursor, with no
+  // bound columns at all.  A crash leaves no return code to fall back on, so the call
+  // has to be skipped: GetObjects describes "SELECT * FROM <table> WHERE 1=0" instead,
+  // which is where GetTableSchema already gets a table's columns from.
+  bool no_sql_columns;
   // Driver quirk: DDL type for a TIME column with fractional seconds, e.g. "Time64(%d)";
   // the %d takes the fractional digit count.  Used for drivers whose SQLGetTypeInfo TIME
   // type is whole-second and takes no CREATE_PARAMS, so nothing in the ODBC metadata can
