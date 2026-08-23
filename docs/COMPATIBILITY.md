@@ -44,6 +44,7 @@ from the second table to the first.
 | openGauss 6.0 | psqlodbc (PG wire) | PASS | no quirks: a PostgreSQL 9.2 fork, driven by the `postgres` entry's types unchanged; server-side setup only (`CAP_SYS_NICE` for the MOT engine's `mbind()`, `max_process_memory` >= 2 GB, and a role created after start-up because the initial user cannot log in remotely); ingest 9.5k rows/s (36.9k with array binding), fetch 1.30M rows/s |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 | Materialize 26.38 | psqlodbc (PG wire) | PASS | streaming warehouse; PostgreSQL SQL layer, so no driver quirks -- but no `SAVEPOINT`, so psqlodbc needs `Protocol=7.4-0` for an ingest big enough to split into a second batch; `NUMERIC` is 39 digits, past decimal128, so it reads back as an exact string; also ingests into and reads back an incrementally maintained `MATERIALIZED VIEW`; ingest 6.5k rows/s (array binding), fetch 248k rows/s |
+| MatrixOne 4.2 (MySQL 8.0.30 wire) | MySQL Connector/ODBC (MySQL wire) | PASS | `mysql_native_password` only, so the connector needs `PLUGIN_DIR`; a table without a PRIMARY KEY gets a hidden `__mo_fake_pk_col` that `SQLColumns` reports; a parameter bound into a `BIT` column aborts the server, so ingest sends booleans as `TINYINT`; describes a TEXT column as 5 characters (driver fix: bind a no-declared-length column at `long_bind_bytes`); ingest 4.4k rows/s, fetch 2.05M rows/s |
 
 ## Driver available, free server available — queued for verification
 
@@ -52,7 +53,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Database | Wire / driver | Server | Status |
 |---|---|---|---|
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |
-| MatrixOne | MySQL Connector/ODBC | `matrixorigin/matrixone` | queued |
 | MariaDB ColumnStore | MariaDB Connector/ODBC | `mariadb/columnstore` | queued |
 | MongoDB (BI Connector) | MySQL Connector/ODBC | `mongo` + `mongosqld` | queued |
 | IBM Informix | Db2 clidriver (DRDA) | `icr.io/informix/informix-developer-database` | queued |

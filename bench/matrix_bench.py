@@ -325,6 +325,7 @@ if args._child:
     cfg = m.DBS[name]
     for kv in cfg.get("unicode_env", "").split():
         k, v = kv.split("=", 1); os.environ.setdefault(k, v)
+    uri = m.conn_uri(name, cfg, drv)
     ident = cfg.get("ident", lambda x: x)
     if fn_name == "ingest":
         res = attempt(time_pyodbc_ingest, uri, cfg, ident, make_table(args.rows, cfg))

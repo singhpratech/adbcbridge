@@ -19,6 +19,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER
     QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MATERIALIZE_ODBC_DRIVER
     QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER, OPENGAUSS_ODBC_DRIVER
+    QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MATRIXONE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -160,6 +161,40 @@ DBS = {
         env="PERCONA_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=13312;Database=adbc;User=adbc;Password=adbc;",
         ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "matrixone": dict(
+        # MatrixOne is a hyper-converged (HTAP) database that speaks the MySQL wire
+        # protocol -- it announces itself as "8.0.30-MatrixOne-v4.2.0" -- so MySQL
+        # Connector/ODBC drives it and the `mysql` entry's DDL and tolerances mostly
+        # apply: BOOLEAN is reported as SQL_TINYINT -> int8, and the double-quoted
+        # identifiers adbc_ingest emits need ANSI_QUOTES.
+        #   The stock image ships the built-in `dump`/`111` account and no user
+        # database at all, so `setup` creates `adbc` and switches to it; the
+        # connection string therefore names no database.  Both statements are
+        # idempotent, which matters because bench/matrix_bench.py replays `setup` on
+        # every connection it opens.
+        # {plugin_dir}: MatrixOne authenticates with mysql_native_password, whose
+        # *client-side* plugin Connector/ODBC 9 loads at run time -- see conn_uri().
+        env="MATRIXONE_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=16001;User=dump;Password=111;{plugin_dir}",
+        # The PRIMARY KEY is required, not decorative: MatrixOne gives a table declared
+        # without one a hidden "__mo_fake_pk_col", which information_schema.columns --
+        # and so SQLColumns/GetObjects -- reports as a 9th column even though SELECT *
+        # never returns it.  (Same shape as CockroachDB's synthesised "rowid".)
+        ddl="CREATE TABLE adbc_t (i INT PRIMARY KEY, f DOUBLE, s VARCHAR(50), b VARBINARY(10),"
+            " d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
+        bool_type="int8",
+        # MatrixOne's BIT column cannot take a parameter over the MySQL binary protocol
+        # at all: binding an integer 1 fails with "data out of range: data type bit(1),
+        # value 1", binding NULL silently stores false, and a mixed batch of the three
+        # aborts the whole server ("malloc(): unaligned fastbin chunk detected" -- it
+        # corrupts its own heap and the process dies).  That is what the ingest DDL asks
+        # for by default, since Connector/ODBC's SQLGetTypeInfo names BIT for a boolean.
+        # Sending the column as int8 -> TINYINT, which MatrixOne handles correctly,
+        # keeps the whole ingest (create/append/replace) under test.  Its own BOOLEAN
+        # column type is unaffected: adbc_t's `bo` round-trips fine.
+        ingest_types={pa.bool_(): pa.int8()},
+        setup=["CREATE DATABASE IF NOT EXISTS adbc", "USE adbc",
+               "SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
     "db2": dict(
         env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
@@ -445,6 +480,15 @@ def conn_uri(name, cfg, drv=None):
     keeps those plugins next to the driver, so point PLUGIN_DIR there when that directory
     exists; a packaged install has no such directory and keeps its own -- correct --
     compiled-in default.
+    `{drv}` expands to the driver library and `{drvdir}` to the directory holding it,
+    for the rare connection option that must point at a file shipped beside the driver.
+    `{plugin}` and `{plugin_dir}` (two spellings of the same thing) expand to a
+    `PLUGIN_DIR=` setting for the drivers that need one: MySQL Connector/ODBC loads
+    client-side authentication plugins from the directory it was *built* with
+    cannot load them, and a server still using mysql_native_password (TiDB, Dolt,
+    Databend, MatrixOne) refuses the connection. The tarball keeps those plugins next to
+    the driver, so point PLUGIN_DIR there when that directory exists; a packaged install
+    has no such directory and keeps its own -- correct -- compiled-in default.
     """
     if drv is None:
         drv = os.environ[cfg["env"]]
@@ -453,6 +497,10 @@ def conn_uri(name, cfg, drv=None):
     plugin = "PLUGIN_DIR=%s;" % pdir if os.path.isdir(pdir) else ""
     return os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(
         drv=drv, drvdir=drvdir, plugin=plugin, plugin_dir=plugin)
+    drvdir = os.path.dirname(drv)
+    pdir = os.path.join(drvdir, "plugin")
+    return os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(
+        drv=drv, drvdir=drvdir, plugin=plugin_dir, plugin_dir=plugin_dir)
 
 
 def run(name, cfg):
