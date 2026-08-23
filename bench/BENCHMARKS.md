@@ -241,6 +241,12 @@ So on three of the eight drivers in the compat matrix the read path is
 byte-for-byte what it was, and the drivers that do get the new path are exactly
 the ones that advertise support for it.
 
+**That gate turned out to be too trusting.** Three of those drivers advertise
+`SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER` and then do not honour
+`SQLSetPos` — see [The `TEXT` column cliff](#the-text-column-cliff), which
+corrects them in `OdbcDetectQuirks` and adds a second repair route for the
+drivers that have none.
+
 ### Column-at-a-time conversion
 
 Separately, `ReaderNextBatch()` now converts a rowset **column by column** instead
@@ -280,6 +286,118 @@ cc -O2 -o odbc_floor bench/odbc_floor.c -lodbc
           DATE '2024-01-01' + (i % 365) AS dt FROM generate_series(1,1000000) i" 8192
 ```
 
+## The `TEXT` column cliff
+
+Everything above reads a table declared `VARCHAR(20)`. Read a table that a bulk
+*ingest* created and the same query was 2.4x slower — 0.69 M rows/s against
+SQLite where `odbc-api` did 2.04 M — because of one column.
+
+### Root cause
+
+An Arrow `utf8` column has no length, so `adbc_ingest` creates the widest text
+type the database has: `longvarchar` on SQLite, `TEXT`/`LONGTEXT` on
+MySQL/MariaDB, `VARCHAR(MAX)` on SQL Server. Reading one back, `SQLDescribeCol`
+answers with what the *type* could hold rather than with anything the table
+holds:
+
+| Driver | `SQLDescribeCol` on the `txt` column | bound buffer it implies |
+|---|---:|---:|
+| sqliteodbc | `SQL_LONGVARCHAR`, 65,536 chars | 262,145 B |
+| MariaDB Connector/ODBC | `SQL_LONGVARCHAR`, 16,777,215 | 67 MB |
+| MySQL Connector/ODBC | `SQL_WLONGVARCHAR`, 16,777,215 | 134 MB |
+| psqlodbc | `SQL_LONGVARCHAR`, 8,190 | 32,761 B |
+| msodbcsql 18 | `SQL_LONGVARCHAR`, 2,147,483,647 | 8.6 GB |
+
+`ClassifyColumn()` refused to bind anything that wide, and **one unbound column
+costs the whole result set its block cursor**: `SQLGetData` needs the cursor
+positioned on a single row, so `ReaderBind()` dropped `SQL_ATTR_ROW_ARRAY_SIZE`
+to 1. Every column then came back one row per `SQLFetch`, through the per-value
+append path instead of the column-at-a-time one — 100,000 `SQLFetch` calls where
+odbc-api made 13. odbc-api never falls off this cliff because it clamps text
+buffers to a caller-chosen width (`arrow-odbc`'s `with_max_text_size`, 1024 in
+`bench/rust`) and keeps its 8192-row rowset.
+
+### The fix
+
+Bind such a column narrow — `adbc.odbc.long_bind_bytes`, 2 KiB — and read the
+values that overflow it again, in full. What made that possible was finding a
+repair route that each driver actually honours, rather than trusting
+`SQL_GETDATA_EXTENSIONS`, which three of the five drivers overstate:
+
+| Driver | `SQLSetPos` + `SQLGetData` on a bound column of a block cursor | `SQLFetchScroll(SQL_FETCH_ABSOLUTE)` on the forward-only cursor |
+|---|---|---|
+| sqliteodbc | advertises `SQL_GD_BOUND`; reads the wrong row | **works** (advertised only for the static cursor) |
+| MariaDB Connector/ODBC | advertises all three bits; answers row 1 and `SQL_NO_DATA` for the rest | **works** |
+| MySQL Connector/ODBC | **works** | refused, as advertised |
+| psqlodbc | **works** | refused, as advertised |
+| msodbcsql 18 | does not advertise `SQL_GD_BOUND`; `SQLSetPos` fails | refused, as advertised |
+| DuckDB | advertises all three bits; `SQLSetPos` fails outright | refused |
+
+So the reader now knows two ways back to a clipped value — re-read it where it
+sits (`getdata_repair`), or re-read its whole rowset one row at a time with
+`SQLFetchScroll(SQL_FETCH_ABSOLUTE)` and resume (`refetch_repair`) — and binds a
+length-less column only when it has one. The drivers that overstate their
+`SQL_GETDATA_EXTENSIONS` are corrected in `OdbcDetectQuirks`, and sqliteodbc's
+understated `SQL_CA1_ABSOLUTE` likewise. Where neither route exists — SQL Server —
+the column stays unbound exactly as before.
+
+Two smaller pieces come with it:
+
+- `adbc.odbc.rowset_bytes` (8 MiB) caps the rowset by bytes as well as by rows,
+  so a wide bound column shrinks the rowset instead of allocating hundreds of
+  megabytes. It also cut psqlodbc's rowset from 33 MB to 8 MB.
+- A clipped value used to be returned as a silent prefix. It is now always read
+  again, on every driver that can — `tests/c/test_driver.c` reads a 200,000-byte
+  value off a column sqliteodbc describes as 255 characters and gets all of it,
+  where before it got 1,020 bytes and no diagnostic.
+
+**Why 2 KiB.** Because sqliteodbc null-fills a bound buffer, its cost is the
+buffer width, not the value length. 100,000 rows, `SELECT *`, one column bound at:
+
+| bound width | 1 KiB | 2 KiB | 4 KiB | 16 KiB | 32 KiB | 256 KiB (declared) |
+|---|---:|---:|---:|---:|---:|---:|
+| rows/s | 1.72 M | 1.63 M | 1.46 M | 0.99 M | 0.73 M | 0.17 M |
+
+2 KiB is the widest setting that costs nothing over 1 KiB, and it is wide enough
+that the repair path stays exceptional. If it does not — if most rowsets need
+repairing — the reader notices after four of them and drops to one row per
+fetch, which is what an unbound column would have cost from the start.
+
+### Results
+
+`SELECT *` of 100,000 rows of `(int32, float64, utf8, date32)` from a table
+`adbc_ingest` created, `adbc.odbc.delegate=never`, medians of three
+before/after rounds interleaved so drift cannot favour one build:
+
+| Database | before | after | |
+|---|---:|---:|---:|
+| SQLite (sqliteodbc) | 691,000 | **1,645,000** | **2.38x** |
+| MariaDB 11 (maodbc) | 1,971,000 | **2,717,000** | **1.38x** |
+| MySQL 8.4 (Connector/ODBC) | 1,213,000 | **1,443,000** | **1.19x** |
+| PostgreSQL 16 (psqlodbc) | 1,826,000 | 1,867,000 | 1.02x |
+| SQL Server 2022 (msodbcsql 18) | 826,000 | 825,000 | 1.00x |
+
+And against the Rust crates on the same query (`bench/rust`, `SELECT id, val,
+txt, dt`, 100,000 rows, two interleaved rounds), as a fraction of `odbc-api`'s
+raw row-set read:
+
+| Database | ADBC before | ADBC after | odbc-api | before | after |
+|---|---:|---:|---:|---:|---:|
+| SQLite | 735,000 | **1,910,000** | 2,050,000 | 0.36x | **0.94x** |
+| MariaDB | 1,842,000 | **2,860,000** | 2,890,000 | 0.62x | **1.02x** |
+| MySQL | 1,209,000 | **1,513,000** | 1,760,000 | 0.69x | **0.92x** |
+| PostgreSQL | 1,940,000 | 2,054,000 | 2,090,000 | 0.93x | 0.98x |
+| SQL Server | 831,000 | 844,000 | 810,000 | ~1.0x | ~1.0x |
+
+SQL Server is unchanged by design: msodbcsql offers neither repair route, so
+`VARCHAR(MAX)` stays unbound there and the read stays one row per `SQLFetch`.
+Its `odbc-api` figure swings between 0.44 M and 0.87 M rows/s run to run, so read
+that row as "about the same", not to three digits.
+
+The `VARCHAR(20)` numbers at the top of this file are unaffected — that column
+is bound at its declared 81 bytes either way (1,000,000 rows: 2.10 M rows/s
+before, 2.12 M after).
+
 ## Optimisation suggestions, ranked by expected gain
 
 **1. Never ship or benchmark the `-O0` build.** `-DCMAKE_BUILD_TYPE=Debug`
@@ -292,11 +410,16 @@ where the fetch loop rather than `SQLExecDirect` dominates, this is worth
 considerably more than 8.8%.
 
 **2. Stop letting one unbound column force row-at-a-time fetching for the
-entire result set.** *Measured: 2.7x.* **Done** — but not the way this entry
-proposed; see [Postgres: native vs bridge vs floor](#postgres-native-vs-bridge-vs-floor).
-`SQLSetPos` per row turned out to be 8x *worse* on psqlodbc, so long columns are
-now bound at their declared width with a `SQLGetData` repair for the values that
-truncate. `ReaderBind()` does:
+entire result set.** *Measured: 2.7x, then 2.4x again.* **Done, twice** — and
+not the way this entry proposed either time. `SQLSetPos` per row turned out to
+be 8x *worse* on psqlodbc, so long columns are bound and only the values that
+truncate are re-read; see
+[Postgres: native vs bridge vs floor](#postgres-native-vs-bridge-vs-floor).
+Binding them *at their declared width* then left the same cliff in place for
+every driver whose declared width is a type maximum, which
+[The `TEXT` column cliff](#the-text-column-cliff) closes. The original text
+follows, since it is still the clearest statement of the problem.
+`ReaderBind()` used to do:
 
 ```c
 r->rows_per_fetch = all_bound ? (SQLULEN)r->opts.batch_size : 1;
@@ -321,7 +444,10 @@ SQL_LOCK_NO_CHANGE)` before calling `SQLGetData`. Gate it on
 today's `rows_per_fetch = 1` when the driver does not advertise it. Highest-value
 change in our own code, by a wide margin.
 
-**3. Bound the *rowset* in bytes, not just each value.** `max_bind_bytes` caps
+**3. Bound the *rowset* in bytes, not just each value.** **Done** —
+`adbc.odbc.rowset_bytes`, default 8 MiB; see
+[The `TEXT` column cliff](#the-text-column-cliff). The original entry:
+`max_bind_bytes` caps
 `c->elem_size`, but the allocation in `ReaderBind()` is
 `calloc(rows_per_fetch, elem_size)` **per column**. At `batch_size=65536` with a
 column that sizes out at the 32768-byte cap, that is a 2.1 GB allocation for one

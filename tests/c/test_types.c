@@ -155,6 +155,45 @@ static void TestClassifyStringy(void) {
   CHECK_TRUE(!c.bound);
 }
 
+// How wide a variable-length column is bound, and when it is not bound at all.
+static void TestClassifyBindWidth(void) {
+  // A driver that cannot get back to a clipped value: a length-less type, and any
+  // declared width past max_bind_bytes, are read with SQLGetData instead.
+  struct OdbcColumn c = Classify(SQL_VARCHAR, 20, 0, NULL);
+  CHECK_TRUE(c.bound);
+  CHECK_I64(c.elem_size, 20 * 4 + 1);
+  CHECK_TRUE(!Classify(SQL_LONGVARCHAR, 20, 0, NULL).bound);
+  CHECK_TRUE(!Classify(SQL_WLONGVARCHAR, 20, 0, NULL).bound);
+  CHECK_TRUE(!Classify(SQL_LONGVARBINARY, 20, 0, NULL).bound);
+  CHECK_TRUE(!Classify(SQL_VARCHAR, 65536, 0, NULL).bound);
+  CHECK_TRUE(!Classify(SQL_VARCHAR, 0, 0, NULL).bound);
+
+  // A driver that can: the same columns are bound, narrow, and the values that
+  // overflow that width are re-read (see RepairRowset() / getdata_repair).
+  struct OdbcReaderOptions repair = kDefaultOpts;
+  repair.getdata_bound = true;
+  repair.refetch_repair = true;
+  repair.long_bind_bytes = ADBC_ODBC_DEFAULT_LONG_BIND_BYTES;
+  c = Classify(SQL_LONGVARCHAR, 65536, 0, &repair);
+  CHECK_I64(c.kind, FETCH_CHAR);
+  CHECK_TRUE(c.bound);
+  CHECK_I64(c.elem_size, ADBC_ODBC_DEFAULT_LONG_BIND_BYTES);
+  // Inside max_bind_bytes the declared width is honoured as it always was.
+  c = Classify(SQL_LONGVARCHAR, 2000, 0, &repair);
+  CHECK_TRUE(c.bound);
+  CHECK_I64(c.elem_size, 2000 * 4 + 1);
+  // SQL_C_WCHAR buffers stay a whole number of UTF-16 code units.
+  repair.long_bind_bytes = 4095;
+  c = Classify(SQL_WLONGVARCHAR, 16777215, 0, &repair);
+  CHECK_I64(c.kind, FETCH_WCHAR);
+  CHECK_TRUE(c.bound);
+  CHECK_I64(c.elem_size % (SQLLEN)sizeof(SQLWCHAR), 0);
+  CHECK_TRUE(c.elem_size <= 4095);
+  // SQL_GD_BOUND is what both repair routes end in; without it, nothing is capped.
+  repair.getdata_bound = false;
+  CHECK_TRUE(!Classify(SQL_LONGVARCHAR, 65536, 0, &repair).bound);
+}
+
 static void TestClassifyDecimal(void) {
   // Representable as decimal128.
   struct OdbcColumn c = Classify(SQL_DECIMAL, 10, 3, NULL);
@@ -331,6 +370,7 @@ int main(void) {
   TestClassifyTime();
   TestClassifyTimestamp();
   TestClassifyStringy();
+  TestClassifyBindWidth();
   TestClassifyDecimal();
   TestSchemaFormats();
   TestParseTime();
