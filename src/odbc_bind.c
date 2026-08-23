@@ -2216,7 +2216,13 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
       break;
     case NANOARROW_TYPE_HALF_FLOAT:
     case NANOARROW_TYPE_FLOAT: CHAIN("REAL", SQL_REAL, SQL_FLOAT, SQL_DOUBLE); break;
-    case NANOARROW_TYPE_DOUBLE: CHAIN("DOUBLE PRECISION", SQL_DOUBLE, SQL_FLOAT); break;
+    // "DOUBLE", not the ISO "DOUBLE PRECISION": this fallback is only reached when the
+    // driver's own type names are unusable (ansi_ddl_type_names), which in practice
+    // means an analytic engine behind someone else's wire protocol, and those parse the
+    // one-word spelling far more reliably.  StarRocks rejects "DOUBLE PRECISION"
+    // outright ("Unexpected input ','"); MySQL/MariaDB (and ColumnStore), QuestDB and
+    // Databend all name the type DOUBLE and accept "DOUBLE PRECISION" only as an alias.
+    case NANOARROW_TYPE_DOUBLE: CHAIN("DOUBLE", SQL_DOUBLE, SQL_FLOAT); break;
     case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING:
     case NANOARROW_TYPE_STRING_VIEW:
       CHAIN("TEXT", SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_VARCHAR); break;

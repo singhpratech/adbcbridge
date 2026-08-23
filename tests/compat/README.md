@@ -3122,3 +3122,204 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down influxdb3
 # or, if started standalone:
 docker rm -f adbcbridge-influxdb3
 ```
+
+## StarRocks 4.1
+
+[StarRocks](https://www.starrocks.io/) is an MPP columnar warehouse that serves the MySQL
+wire protocol on 9030 — its FE announces itself as `8.0.33` and `version()` returns that
+too — so it needs no ODBC driver of its own: the same MySQL Connector/ODBC build used for
+the `mysql` entry drives it (see [MySQL 8](#mysql-8) above for the root-free tarball, and
+for the `LD_PRELOAD` that `import pyarrow` makes necessary). Only the wire protocol is
+MySQL's; the SQL dialect, the type names and the transaction model are StarRocks' own,
+and that is where all of this entry's work is.
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d starrocks
+# or standalone:
+docker run -d --name adbcbridge-starrocks --memory=5g \
+  -p 127.0.0.1:19030:9030 starrocks/allin1-ubuntu:latest
+```
+
+`allin1-ubuntu` runs the FE (frontend/coordinator, a JVM) and one BE (backend) in the one
+container. It is ready in well under a minute; wait for the BE to register rather than
+for the port, because the FE accepts connections a few seconds before it has a backend to
+plan against:
+
+```sh
+until docker exec adbcbridge-starrocks \
+        mysql -h127.0.0.1 -P9030 -uroot -e 'SHOW BACKENDS\G' 2>/dev/null \
+      | grep -q 'Alive: true'; do sleep 5; done
+# Version: 4.1.4-...   Alive: true   MemLimit: 4.050GB
+```
+
+The BE sizes its own memory limit from the container's, so `--memory` is the only knob
+needed. SQL is on `127.0.0.1:19030` with the built-in passwordless `root`. There is no
+user database, so the entry's `setup` runs `CREATE DATABASE IF NOT EXISTS adbc` and
+`USE adbc` — both idempotent, which matters because `bench/matrix_bench.py` replays
+`setup` on every connection it opens — and the connection string names no database.
+
+`CREATE TABLE` needs no `DISTRIBUTED BY` and no `replication_num`: StarRocks 3.1 and later
+pick a random bucket distribution for a table that does not ask for one, and the single-BE
+image defaults the replication factor to 1.
+
+### Run the entry
+
+```sh
+export STARROCKS_ODBC_DRIVER=$MYSQL_ODBC_DRIVER   # the Connector/ODBC tarball's libmyodbc9w.so
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py starrocks
+# starrocks PASS  (MySQL (via ODBC) 8.0.33)
+```
+
+`PLUGIN_DIR` is needed here for the same reason as for TiDB, Dolt and MatrixOne:
+StarRocks offers only `mysql_native_password`, whose *client-side* plugin Connector/ODBC 9
+loads at run time from its compiled-in `/usr/local/mysql/lib/plugin`. The entry's
+connection string ends in `{plugin_dir}`, which `conn_uri()` expands to the tarball's own
+`lib/plugin` when that directory exists — see [TiDB](#tidb-75) for the full story.
+
+### `NO_SSPS=1`: no prepared statements but `SELECT`
+
+StarRocks answers `COM_STMT_PREPARE` for anything other than a `SELECT` with
+
+```
+1295: Getting analyzing error. Detail message:
+      This command is not supported in the prepared statement protocol yet.
+```
+
+which reaches adbcbridge as `SQLPrepare failed` on the parameterised `INSERT`. It is not a
+matter of switching the feature on — `enable_prepare_stmt` is already `true`, and
+`PREPARE s FROM 'INSERT INTO t VALUES (?,?)'` fails the same way in the `mysql` client, on
+a duplicate-key table and on a `PRIMARY KEY` table alike, while `PREPARE` of a `SELECT`
+succeeds. So the entry sets `NO_SSPS=1`, exactly as `databend` does: Connector/ODBC then
+stops using the server-side prepare protocol and substitutes bound parameters into the SQL
+text, and every statement goes as a plain query.
+
+### Driver quirk: `_binary` literals (`temporal_binary_param_as_varchar`)
+
+In `NO_SSPS` mode Connector/ODBC writes every parameter whose *SQL* type is not character
+or numeric as a MySQL charset-introducer literal — `_binary'2024-02-29'` for a
+`SQL_TYPE_DATE`, `_binary'…'` for a `SQL_TYPE_TIMESTAMP` or a `SQL_VARBINARY`. Introducers
+are MySQL/MariaDB syntax, and StarRocks' parser rejects them:
+
+```
+1064: Getting syntax error at line 1, column 33.
+      Detail message: Unexpected input ''2024-02-29''
+```
+
+`temporal_binary_param_as_varchar` — the existing `OdbcDetectQuirks` flag for MySQL
+Connector/ODBC in front of a server that reports `SQL_TXN_CAPABLE = SQL_TC_NONE`, which is
+how a non-MySQL MySQL-wire warehouse identifies itself — binds those three as
+`SQL_VARCHAR` text instead, so the driver emits an ordinary quoted literal. StarRocks
+coerces all three from one: a plain `'…'` literal holding the raw bytes lands in a
+`VARBINARY` column as those bytes (`hex(b)` → `0102`).
+
+That flag was already declared, documented and set for this exact case, but its
+implementation had been dropped in a bad merge conflict resolution (`552622b`, which was
+meant only to fold `ignore_driver_type_names` into `ansi_ddl_type_names`) — it was dead
+code on `main`, and Databend, the server it was written for, was relying on it. Restoring
+it is `src/odbc_bind.c`: the `SQL_C_CHAR` paths in `SlotFromArrowValue()` for
+binary/`DATE32`/`TIMESTAMP`, the `TimestampTextFromStruct()` helper they render through,
+and the three `*supported = false` returns in `ArrayParamPlan()` that send such a batch
+row-at-a-time (a driver that substitutes parameters into the SQL text sends one statement
+per set either way, so nothing is lost).
+
+### Driver quirk: MySQL type names in ingest DDL (`ansi_ddl_type_names`)
+
+The same `SQL_TC_NONE` branch sets `ansi_ddl_type_names`, and StarRocks needs it for the
+same two names MariaDB ColumnStore did: Connector/ODBC's `SQLGetTypeInfo` answers with
+MySQL's type system whatever the server is, so `SQL_LONGVARCHAR` is `long varchar` and
+`SQL_BIT` is `bit`, and StarRocks rejects both (`Unexpected input 'VARCHAR'`,
+`Unexpected input ')'`). The portable names `TEXT` and `BOOLEAN` are accepted — `TEXT`
+becomes `varchar(65533)`.
+
+One portable name had to change for StarRocks, in `ColumnTypeSql()`: the fallback for a
+double was the ISO spelling `DOUBLE PRECISION`, which StarRocks does not parse at all
+(`CREATE TABLE t (c DOUBLE PRECISION)` → `Unexpected input ','`). It is now `DOUBLE`. This
+fallback is only ever reached when the driver's own type names are unusable, which in
+practice means an analytic engine behind someone else's wire protocol — and MySQL/MariaDB
+(hence ColumnStore), QuestDB and Databend all *name* the type `DOUBLE` and accept
+`DOUBLE PRECISION` only as an alias, so the one-word spelling is strictly the safer of the
+two here. The `questdb` entry, the other user of `ansi_ddl_type_names`, was re-run to
+confirm it.
+
+### Entry notes: no `ANSI_QUOTES`, and a wider `DECIMAL`
+
+**StarRocks has no double-quoted-identifier mode.** Every other MySQL-wire entry puts
+`ANSI_QUOTES` in `sql_mode` so that the double-quoted identifiers `adbc_ingest` emits
+parse. StarRocks accepts the *value* — `SET SESSION sql_mode = CONCAT(@@sql_mode,
+',ANSI_QUOTES')` succeeds and `@@sql_mode` reads back `ANSI_QUOTES,ONLY_FULL_GROUP_BY` —
+but its parser ignores it: `SELECT "i" FROM t` still returns the string `i`, and
+`CREATE TABLE "q" ("a" BIGINT)` is a syntax error. Nothing in `src/` had to change, because
+nothing there hard-codes the quote: `OdbcQuoteChar()` asks the driver for
+`SQL_IDENTIFIER_QUOTE_CHAR`, and Connector/ODBC correctly answers the backtick when the
+session has no `ANSI_QUOTES`, so ingest already quotes the way the server wants. What did
+have to change is `tests/compat/test_matrix.py`, which wrote its own reads of the ingested
+table with literal `"`; those now go through a `qi()` helper and the entry's
+``quote="`"``. Every other entry keeps the default `"`.
+
+**`DECIMAL(10,3)` reads back as `decimal128(12, 3)`.** StarRocks describes a decimal
+column at the *display* width MySQL uses on the wire — 12, the ten digits plus the sign and
+the decimal point — where a real MySQL reports the declared precision, and Connector/ODBC
+passes that through as the `SQL_DECIMAL` precision. No digits are lost (the scale is right
+and `12.345` round-trips exactly), so this is one tolerance flag,
+`decimal_type="decimal128(12, 3)"`, not a driver fix.
+
+Everything else in the standard workload runs on the generic path: the emoji round-trip,
+`VARBINARY(10)`, `DATE`, `DATETIME` microseconds, NULL parameters, affected-row counts,
+`GetObjects`/`GetTableSchema`, and the batched ingest and read. `BOOLEAN` is stored as a
+`TINYINT` and described as `SQL_TINYINT`, so `bool_type="int8"` as for MySQL.
+
+### Ingest is ~10 rows/s, and that is the server
+
+Every StarRocks `INSERT` is its own load transaction whose version has to publish before
+the statement returns, and that costs a flat ~100 ms whatever the statement holds. It is
+not the driver and not adbcbridge — the `mysql` client inside the container measures the
+same thing:
+
+```sh
+# 100 single-row INSERTs, straight from the container's own client
+docker exec adbcbridge-starrocks mysql -h127.0.0.1 -P9030 -uroot -e "$SQL"
+# 100 single-row inserts: 10.09s
+```
+
+Since `NO_SSPS` makes the connector send one statement per parameter set, and a parameter
+array is not a multi-row `INSERT` on this wire, single-row ingest runs at that rate for
+every client. The entry therefore sets `big_rows=2000` — still across the reader's
+1024-row batch boundary, which is what that step is for, without spending eight minutes on
+it — and the benchmark below uses `--rows 300`. Reads are unaffected and fast.
+
+### Benchmark
+
+```
+ADBC_MATRIX_SUFFIX=_starrocks .venv/bin/python bench/matrix_bench.py \
+  --rows 300 --fetch-rows 2000 --pyodbc-timeout 300 starrocks
+# fetch=406,335/s (pyodbc 305,290/s)  ingest=10/s array=10/s pyodbc=failed
+```
+
+Reads are ordinary: 406k rows/s against pyodbc's 305k on the same 2000-row table. Ingest
+is the ~100 ms per `INSERT` above, identical with and without array binding because the
+connector sends one statement per set either way.
+
+The pyodbc ingest column is not a timeout — it is the `_binary` literal, which pyodbc has
+no way around:
+
+```
+ProgrammingError: ('42000', '[42000] [MySQL][ODBC 9.4(w) Driver][mysqld-8.0.33]
+  Getting syntax error at line 1, column ...')
+```
+
+pyodbc binds a `datetime` parameter as `SQL_TYPE_TIMESTAMP`, Connector/ODBC renders that
+as `_binary'...'` under `NO_SSPS`, and StarRocks' parser rejects it. adbcbridge writes the
+same table because `temporal_binary_param_as_varchar` sends those parameters as text
+instead.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down starrocks
+# or, if started standalone:
+docker rm -f adbcbridge-starrocks
+```
