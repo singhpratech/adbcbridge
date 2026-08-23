@@ -144,7 +144,10 @@ def test_connect_uses_driver_path_by_default(driver, uri):
 
 
 @requires_sqlite
-def test_roundtrip_with_parameters_and_options(driver, uri):
+def test_roundtrip_with_parameters_and_options(driver, uri, monkeypatch):
+    # This test exercises the ODBC path itself (batch_size is an ODBC-path option);
+    # keep the SQLite target from being delegated to adbc_driver_sqlite.
+    monkeypatch.setenv("ADBC_ODBC_DELEGATE", "never")
     with adbcbridge.connect(
         uri=uri, driver_path=driver, autocommit=True, batch_size=64
     ) as conn:
@@ -261,7 +264,8 @@ def test_cli_driver_path(driver):
 
 @requires_sqlite
 def test_cli_query(driver, uri):
-    env = dict(os.environ, ADBC_ODBC_DRIVER=driver)
+    # "rows affected" is an ODBC-path behaviour; pin the CLI to it.
+    env = dict(os.environ, ADBC_ODBC_DRIVER=driver, ADBC_ODBC_DELEGATE="never")
     assert run_cli(uri, "x", env=env).returncode != 0  # not a subcommand
 
     proc = run_cli("query", uri, "CREATE TABLE t (i INTEGER, s TEXT)", env=env)
