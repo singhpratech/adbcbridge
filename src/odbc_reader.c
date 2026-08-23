@@ -292,6 +292,13 @@ static inline bool TruncationRepairable(const struct OdbcReaderOptions* opts) {
 // that are re-read in full.  Re-reading needs a driver that can go back to a row (see
 // TruncationRepairable); without one the column stays unbound, which costs the whole
 // result set its block cursor because SQLGetData needs a one-row rowset.
+// IBM's CLI driver (clidriver's libdb2, which speaks DRDA to Db2 and to Informix) does
+// not describe a large-object byte column as SQL_LONGVARBINARY: it reports its own type
+// code, SQL_BLOB from sqlcli1.h, which no other driver uses.  Left unrecognised the
+// column falls through to the reader's text default, where the driver hands the bytes
+// back hex-encoded ("0102" for b"\x01\x02") instead of as bytes.
+#define ODBC_SQL_BLOB_IBM (-98)
+
 static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions* opts) {
   if (c->column_size == 0) {  // no width to bind against
     c->bound = false;
@@ -302,7 +309,8 @@ static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions*
   // safe where a value that outgrows the buffer can be read again.
   const bool no_declared_length = c->sql_type == SQL_LONGVARCHAR ||
                                   c->sql_type == SQL_WLONGVARCHAR ||
-                                  c->sql_type == SQL_LONGVARBINARY;
+                                  c->sql_type == SQL_LONGVARBINARY ||
+                                  c->sql_type == ODBC_SQL_BLOB_IBM;
   const bool repairable = TruncationRepairable(opts) && opts->long_bind_bytes > 0;
   if (no_declared_length && !repairable) {
     c->bound = false;
@@ -499,6 +507,7 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_BINARY:
     case SQL_VARBINARY:
     case SQL_LONGVARBINARY:
+    case ODBC_SQL_BLOB_IBM:
       c->kind = FETCH_BINARY; c->c_type = SQL_C_BINARY;
       c->elem_size = (SQLLEN)c->column_size;
       ApplyBindWidth(c, opts);

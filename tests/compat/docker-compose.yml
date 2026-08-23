@@ -214,3 +214,26 @@ services:
     profiles: ["extra"]
     mem_limit: 2g
     ports: ["127.0.0.1:16001:6001"]
+  # IBM Informix 15 (developer edition).  In the "extra" profile, so a plain `up -d`
+  # leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d informix
+  # 9089 is the DRDA listener (the server's `informix_dr` alias); 9088 is Informix's own
+  # SQLI protocol, which no ODBC driver here speaks.
+  #   Do NOT add `privileged: true`: in a privileged container `sudo` inside this image
+  # fails PAM account management, and the entrypoint drives its whole setup through
+  # `sudo`, so the server never gets a DBSERVERNAME and never starts.
+  #   GL_USEGLU=1 gives the server ICU-backed Unicode: without it a four-byte UTF-8
+  # character (an emoji) in a parameter is rejected as an illegal character.
+  #   DELIMIDENT=y makes the server read "..." as a delimited identifier rather than a
+  # string literal, which is what the quoted identifiers adbc_ingest emits need.  For a
+  # DRDA session this is set in the *server* environment; there is no client-side or
+  # session-level equivalent.
+  #   The image creates no user database, so create one -- with a UTF-8 locale, which is
+  # not the image default -- once the container is up.  See README.md.
+  informix:
+    profiles: ["extra"]
+    image: icr.io/informix/informix-developer-database:latest
+    hostname: informix
+    environment: { LICENSE: accept, GL_USEGLU: "1", DELIMIDENT: "y" }
+    mem_limit: 2g
+    ports: ["127.0.0.1:19089:9089"]
