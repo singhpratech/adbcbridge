@@ -973,6 +973,111 @@ static void AppendQualifiedName(struct InternalAdbcStringBuilder* sb, const char
   InternalAdbcStringBuilderAppend(sb, "%s%s%s", q, table, q);
 }
 
+static bool EqualsIgnoreCase(const char* a, const char* b) {
+  for (;; a++, b++) {
+    char x = *a, y = *b;
+    if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+    if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+    if (x != y) return false;
+    if (!x) return true;
+  }
+}
+
+static SQLCHAR* IngestPat(const char* s) { return (s && *s) ? (SQLCHAR*)s : NULL; }
+static SQLSMALLINT IngestPatLen(const char* s) { return (s && *s) ? SQL_NTS : 0; }
+
+// SQL_ATTR_CURRENT_CATALOG, or NULL when the backend has no catalogs.
+static char* IngestCurrentCatalog(struct OdbcConnection* conn) {
+  SQLCHAR buf[1024] = {0};
+  SQLINTEGER len = 0;
+  if (!SQL_SUCCEEDED(
+          SQLGetConnectAttr(conn->hdbc, SQL_ATTR_CURRENT_CATALOG, buf, sizeof(buf), &len)))
+    return NULL;
+  if (buf[0] == '\0') return NULL;
+  return strdup((const char*)buf);
+}
+
+// Does the ingest target already exist?  SQLTables' table argument is a pattern,
+// so the returned TABLE_NAME is compared exactly.  Best effort: a driver that
+// cannot answer leaves *exists false, and the CREATE below reports the conflict
+// through its own diagnostics instead.
+static void IngestTableExists(struct OdbcConnection* conn, const char* catalog, const char* schema,
+                              const char* table, bool* exists) {
+  *exists = false;
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt))) return;
+  if (SQL_SUCCEEDED(SQLTables(hstmt, IngestPat(catalog), IngestPatLen(catalog), IngestPat(schema),
+                              IngestPatLen(schema), (SQLCHAR*)table, SQL_NTS, NULL, 0))) {
+    char buf[512];
+    SQLLEN ind = 0;
+    while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
+      if (SQL_SUCCEEDED(SQLGetData(hstmt, 3, SQL_C_CHAR, buf, sizeof(buf), &ind)) &&
+          ind != SQL_NULL_DATA && EqualsIgnoreCase(buf, table)) {
+        *exists = true;
+        break;
+      }
+    }
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+}
+
+// create_append over an existing table can only append if every bound column is
+// actually there.  When it is not, the table "already exists" as something other
+// than what the caller asked to create, which is ADBC_STATUS_ALREADY_EXISTS --
+// not the NOT_FOUND the backend would report for the unknown column at INSERT
+// time.  Best effort: a driver that cannot list the columns yields OK and the
+// INSERT surfaces whatever it surfaces.
+static AdbcStatusCode IngestCheckAppendable(struct OdbcConnection* conn, const char* catalog,
+                                            const char* schema, const char* table,
+                                            const struct ArrowSchema* bound,
+                                            struct AdbcError* error) {
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt))) return ADBC_STATUS_OK;
+  char** names = NULL;
+  size_t n = 0, cap = 0;
+  if (SQL_SUCCEEDED(SQLColumns(hstmt, IngestPat(catalog), IngestPatLen(catalog), IngestPat(schema),
+                               IngestPatLen(schema), (SQLCHAR*)table, SQL_NTS, NULL, 0))) {
+    char buf[512];
+    SQLLEN ind = 0;
+    while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
+      if (!SQL_SUCCEEDED(SQLGetData(hstmt, 4, SQL_C_CHAR, buf, sizeof(buf), &ind)) ||
+          ind == SQL_NULL_DATA)
+        continue;
+      if (n == cap) {
+        size_t next = cap ? cap * 2 : 16;
+        char** p = realloc(names, next * sizeof(*p));
+        if (!p) break;
+        names = p;
+        cap = next;
+      }
+      names[n] = strdup(buf);
+      if (!names[n]) break;
+      n++;
+    }
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+
+  AdbcStatusCode status = ADBC_STATUS_OK;
+  for (int64_t i = 0; n > 0 && i < bound->n_children; i++) {
+    const char* want = bound->children[i]->name ? bound->children[i]->name : "";
+    bool found = false;
+    for (size_t j = 0; j < n; j++) {
+      if (EqualsIgnoreCase(names[j], want)) { found = true; break; }
+    }
+    if (!found) {
+      InternalAdbcSetError(error,
+                           "Table \"%s\" already exists and has no column \"%s\"; "
+                           "cannot append the bound data to it",
+                           table, want);
+      status = ADBC_STATUS_ALREADY_EXISTS;
+      break;
+    }
+  }
+  for (size_t j = 0; j < n; j++) free(names[j]);
+  free(names);
+  return status;
+}
+
 static AdbcStatusCode ExecSimple(struct OdbcConnection* conn, const char* sql, bool ignore_error,
                                  struct AdbcError* error) {
   SQLHSTMT hstmt = NULL;
@@ -1018,12 +1123,22 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
     stmt->ref = NULL;
     stmt->prepared = false;
   }
+  bool create_append = strcmp(mode, ADBC_INGEST_OPTION_MODE_CREATE_APPEND) == 0;
   if (strcmp(mode, ADBC_INGEST_OPTION_MODE_REPLACE) == 0) {
     InternalAdbcStringBuilderAppend(&sb, "DROP TABLE ");
     AppendQualifiedName(&sb, q, stmt->ingest_catalog, stmt->ingest_schema, stmt->ingest_table);
     ExecSimple(conn, sb.buffer, /*ignore_error=*/true, error);
     sb.size = 0;
   }
+  // Catalog lookups below must be scoped to the database the CREATE targets, or a
+  // same-named table in another database (MariaDB, SQL Server) answers for it.
+  char* current_catalog = NULL;
+  const char* probe_catalog = stmt->ingest_catalog;
+  if (!probe_catalog || !*probe_catalog) {
+    current_catalog = IngestCurrentCatalog(conn);
+    probe_catalog = current_catalog;
+  }
+
   if (do_create) {
     InternalAdbcStringBuilderAppend(&sb, "CREATE %sTABLE ", stmt->ingest_temporary ? "TEMPORARY " : "");
     AppendQualifiedName(&sb, q, stmt->ingest_catalog, stmt->ingest_schema, stmt->ingest_table);
@@ -1050,14 +1165,30 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
     }
     InternalAdbcStringBuilderAppend(&sb, ")");
     if (status == ADBC_STATUS_OK) {
-      bool ignore = strcmp(mode, ADBC_INGEST_OPTION_MODE_CREATE_APPEND) == 0;
-      status = ExecSimple(conn, sb.buffer, ignore, error);
-      if (status == ADBC_STATUS_UNKNOWN || status == ADBC_STATUS_INVALID_ARGUMENT) {
-        status = ADBC_STATUS_ALREADY_EXISTS;
+      status = ExecSimple(conn, sb.buffer, /*ignore_error=*/false, error);
+      if (status != ADBC_STATUS_OK && status != ADBC_STATUS_ALREADY_EXISTS) {
+        // OdbcSetError already maps SQLSTATE 42S01 and vendor "already exists"
+        // messages.  For the backends that report neither, ask the catalog
+        // directly rather than surfacing a generic failure -- but only after the
+        // CREATE has actually failed, so a stale or over-broad catalog answer can
+        // never make us skip DDL that was needed.
+        bool exists = false;
+        IngestTableExists(conn, probe_catalog, stmt->ingest_schema, stmt->ingest_table, &exists);
+        if (exists) status = ADBC_STATUS_ALREADY_EXISTS;
+      }
+      if (create_append && status == ADBC_STATUS_ALREADY_EXISTS) {
+        // create_append may append into what is already there -- but only if every
+        // bound column exists.  Otherwise the table exists as something other than
+        // what the caller asked to create, which stays ALREADY_EXISTS.
+        status = IngestCheckAppendable(conn, probe_catalog, stmt->ingest_schema,
+                                       stmt->ingest_table, &schema, error);
+        // Recovered: drop the CREATE's diagnostic so we do not return a stale error.
+        if (status == ADBC_STATUS_OK && error && error->release) error->release(error);
       }
     }
     sb.size = 0;
   }
+  free(current_catalog);
   if (status != ADBC_STATUS_OK) {
     InternalAdbcStringBuilderReset(&sb);
     schema.release(&schema);

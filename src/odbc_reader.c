@@ -51,14 +51,6 @@ SQLLEN OdbcRowCount(SQLHSTMT hstmt, bool sqllen_32bit) {
   return OdbcReadLen(&count, sqllen_32bit);
 }
 
-SQLRETURN OdbcGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT c_type, SQLPOINTER buf,
-                      SQLLEN buf_len, SQLLEN* indicator, bool sqllen_32bit) {
-  SQLLEN ind = 0;
-  SQLRETURN ret = SQLGetData(hstmt, col, c_type, buf, buf_len, &ind);
-  if (indicator) *indicator = OdbcReadLen(&ind, sqllen_32bit);
-  return ret;
-}
-
 // ---------------------------------------------------------------------------
 // Errors
 
@@ -83,6 +75,23 @@ static AdbcStatusCode SqlStateToStatus(const char* s) {
   return ADBC_STATUS_UNKNOWN;
 }
 
+// Case-insensitive substring search over a possibly non-NUL-terminated buffer.
+static bool HaystackContains(const char* hay, size_t hay_len, const char* needle) {
+  size_t nlen = strlen(needle);
+  if (nlen == 0 || hay_len < nlen) return false;
+  for (size_t i = 0; i + nlen <= hay_len; i++) {
+    size_t j = 0;
+    while (j < nlen) {
+      char a = hay[i + j], b = needle[j];
+      if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+      if (a != b) break;
+      j++;
+    }
+    if (j == nlen) return true;
+  }
+  return false;
+}
+
 AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const char* context,
                             struct AdbcError* error) {
   SQLCHAR sqlstate[6] = {0};
@@ -96,8 +105,36 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
 
   SQLSMALLINT rec = 1;
   bool first = true;
+  bool says_already_exists = false;
   while (SQL_SUCCEEDED(SQLGetDiagRec(handle_type, handle, rec, sqlstate, &native, msg,
                                      sizeof(msg), &msg_len))) {
+    // SQLGetDiagRec fills at most sizeof(msg)-1 bytes plus a NUL, but reports
+    // the *untruncated* message length in msg_len.  Using that length against
+    // `msg` reads past the end of the buffer, so a longer diagnostic (an MSSQL
+    // RAISERROR, an Oracle error stack) is re-fetched into a buffer that fits.
+    const char* text = (const char*)msg;
+    size_t text_len = msg_len > 0 ? (size_t)msg_len : 0;
+    char* heap = NULL;
+    if (text_len > sizeof(msg) - 1) {
+      if (text_len > 32000) text_len = 32000;  // SQLSMALLINT buffer length
+      heap = calloc(text_len + 1, 1);
+      SQLSMALLINT full_len = 0;
+      if (heap && SQL_SUCCEEDED(SQLGetDiagRec(handle_type, handle, rec, sqlstate, &native,
+                                              (SQLCHAR*)heap, (SQLSMALLINT)(text_len + 1),
+                                              &full_len))) {
+        text = heap;
+        if (full_len > 0 && (size_t)full_len < text_len) text_len = (size_t)full_len;
+      } else {
+        // No second buffer: report only the bytes the first call really wrote.
+        free(heap);
+        heap = NULL;
+        const char* nul = memchr(msg, '\0', sizeof(msg));
+        text_len = nul ? (size_t)(nul - (const char*)msg) : sizeof(msg) - 1;
+      }
+    }
+    if (HaystackContains(text, text_len, "already exists")) {
+      says_already_exists = true;
+    }
     if (first) {
       status = SqlStateToStatus((const char*)sqlstate);
       if (error) {
@@ -107,12 +144,18 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
       first = false;
     }
     InternalAdbcStringBuilderAppend(&sb, "\n  [%s] (%d) %.*s", (const char*)sqlstate,
-                                    (int)native, (int)msg_len, (const char*)msg);
+                                    (int)native, (int)text_len, text);
     if (error) {
       InternalAdbcAppendErrorDetail(error, "odbc.sqlstate", (const uint8_t*)sqlstate, 5);
     }
+    free(heap);
     rec++;
   }
+  // Not every backend reports "object already exists" with SQLSTATE 42S01:
+  // SQLiteODBC uses HY000 with "table X already exists", and other drivers pass
+  // a vendor message through unmapped.  Fall back to the message text when the
+  // SQLSTATE carried no usable meaning.
+  if (status == ADBC_STATUS_UNKNOWN && says_already_exists) status = ADBC_STATUS_ALREADY_EXISTS;
   if (error) InternalAdbcSetError(error, "%s", sb.buffer ? sb.buffer : "[ODBC] unknown error");
   InternalAdbcStringBuilderReset(&sb);
   return status;

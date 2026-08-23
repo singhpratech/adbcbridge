@@ -65,6 +65,13 @@
 /// Force the 32-bit-SQLLEN driver quirk on or off ("true"/"false").  Unset means
 /// autodetect from SQL_DRIVER_NAME; see OdbcReaderOptions::sqllen_32bit.
 #define ADBC_ODBC_OPTION_SQLLEN_32BIT "adbc.odbc.sqllen_32bit"
+/// Read-only: SQL_DRIVER_NAME of the underlying ODBC driver.  ADBC_INFO_DRIVER_NAME
+/// must be a stable identity for adbcbridge itself, so the backing driver's file
+/// name is exposed here (and, as context, in ADBC_INFO_VENDOR_NAME) instead.
+#define ADBC_ODBC_OPTION_DRIVER_NAME "adbc.odbc.driver_name"
+/// Read-only: SQL_DRIVER_NAME of the underlying ODBC driver.  ADBC_INFO_DRIVER_NAME
+/// must be a stable identity for adbcbridge itself, so the backing driver's file
+/// name is exposed here (and, as context, in ADBC_INFO_VENDOR_NAME) instead.
 
 #define ADBC_ODBC_DEFAULT_BATCH_SIZE 1024
 #define ADBC_ODBC_DEFAULT_MAX_BIND_BYTES 32768
@@ -182,8 +189,16 @@ static inline void OdbcIndicatorSet(SQLLEN* base, size_t row, SQLLEN value, bool
 SQLLEN OdbcRowCount(SQLHSTMT hstmt, bool sqllen_32bit);
 
 /// SQLGetData with a quirk-aware StrLen_or_Ind out-parameter.
-SQLRETURN OdbcGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT c_type, SQLPOINTER buf,
-                      SQLLEN buf_len, SQLLEN* indicator, bool sqllen_32bit);
+// SQLGetData with the indicator read at the driver's SQLLEN width.  static inline so
+// the unit tests, which include a single translation unit, can use it too.
+static inline SQLRETURN OdbcGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT c_type,
+                                    SQLPOINTER buf, SQLLEN buf_len, SQLLEN* indicator,
+                                    bool sqllen_32bit) {
+  SQLLEN ind = 0;
+  SQLRETURN ret = SQLGetData(hstmt, col, c_type, buf, buf_len, &ind);
+  if (indicator) *indicator = OdbcReadLen(&ind, sqllen_32bit);
+  return ret;
+}
 
 struct OdbcDatabase;
 
