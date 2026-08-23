@@ -474,3 +474,39 @@ services:
       nproc: 8192
     mem_limit: 4g
     ports: ["127.0.0.1:15433:5433"]
+  # OceanBase CE: a distributed HTAP database whose MySQL mode serves the MySQL wire
+  # protocol on 2881, driven by MySQL Connector/ODBC.  In the "extra" profile, so a plain
+  # `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d oceanbase
+  #
+  # MODE=SLIM is the setting that makes this entry practical, and it is not a size knob:
+  # it selects the image's `fastboot` path, which unpacks a *prebuilt* single-node cluster
+  # (squashfs images of the data and clog directories) and starts it, instead of having
+  # `obd` deploy a cluster and create a tenant from scratch.  The default MODE=MINI takes
+  # the second path and does not finish here: creating the tenant ends in
+  # `ALTER SYSTEM LOAD MODULE DATA module = timezone`, which loads 118,610 rows into
+  # mysql.time_zone_transition at a few rows a second on this box -- hours, against the
+  # 1000 s ob_query_timeout obd sets, so the tenant create times out and the boot fails.
+  # SLIM skips it: the prebuilt store already has the tenant and its timezone tables.
+  # Booting takes about a minute and peaks at ~4.0 GiB, inside mem_limit 6g.
+  #
+  # OB_TENANT_NAME/OB_TENANT_PASSWORD/OB_DATABASE are still honoured on the SLIM path:
+  # after the cluster is up the entrypoint waits for the tenant, creates OB_DATABASE in
+  # it and sets root's password.  Wait for "boot success" in the log rather than for the
+  # port -- the MySQL listener answers well before the tenant does.
+  #
+  # ulimits.nofile is a hard requirement, not tuning: obd refuses to work below 20000 open
+  # files (OBD-1007) and Docker's default is 1024.
+  oceanbase:
+    profiles: ["extra"]
+    image: oceanbase/oceanbase-ce:latest
+    environment:
+      MODE: SLIM
+      OB_TENANT_NAME: test
+      OB_TENANT_PASSWORD: adbc
+      OB_DATABASE: adbc
+    ulimits:
+      nofile: { soft: 20000, hard: 20000 }
+      stack: -1
+    mem_limit: 6g
+    ports: ["127.0.0.1:12881:2881"]
