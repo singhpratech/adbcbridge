@@ -127,6 +127,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | QuestDB 10 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (quirks handled: ingest DDL in standard SQL type names, boolean params as `true`/`false` text, no usable parameter arrays; `GetObjects` falls back to `SQLDescribeCol` because psqlodbc's `SQLColumns` fails here) |
 | IBM Db2 12.1 | Db2 CLI driver (clidriver `libdb2.so`) | PASS (driver quirk handled: 32-bit `SQLLEN` — see `adbc.odbc.sqllen_32bit`) |
 | Firebird 5 | Firebird ODBC 3.5.0-rc1 | PASS (driver quirks handled: `SQL_C_WCHAR` sized in 4-byte `wchar_t`, no usable parameter arrays) |
+| OpenLink Virtuoso 7.2 | Virtuoso ODBC (`virtodbc.so`, ANSI build) | PASS (driver quirks handled: no `SQL_C_WCHAR` — UTF-8 on the narrow path instead, 64-bit ints sent as numeric text, no usable parameter arrays for dates; the Unicode build `virtodbcu.so` crashes unixODBC's ANSI translation on the first failed statement) |
 | Microsoft Access `.mdb`/`.accdb` | MDB Tools 1.0 (`odbc-mdbtools`) | PASS, read side only — the driver executes no DDL/DML and has no `SQLBindParameter` (32-bit `SQLLEN`, as Db2) |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.

@@ -973,6 +973,123 @@ implement `SQL_DRIVER_NAME`, that function now falls back to `SQL_DBMS_NAME`
 keyed on it. For the same reason the read-only option `adbc.odbc.driver_name` returns an
 error on this driver rather than a name.
 
+## OpenLink Virtuoso 7.2
+
+Virtuoso is ODBC-native: port 1111 carries its own binary wire protocol and `virtodbc.so`
+speaks it directly, so there is no separate client library and no `Database=` keyword —
+`HOST` is `host:port` and the `dba` user lands in `DB.DBA`.
+
+Server:
+
+```sh
+docker run -d --name adbcbridge-virtuoso --memory=2g \
+  -e DBA_PASSWORD=adbc -p 127.0.0.1:11111:1111 openlink/virtuoso-opensource-7
+```
+
+(or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d virtuoso`;
+it is in the `extra` profile, so a plain `up -d` leaves it alone). It is ready in about
+ten seconds — `Server online at 1111` in `docker logs`.
+
+Driver — `libvirtodbc0` from the Ubuntu archive, unpacked without root:
+
+```sh
+mkdir -p /tmp/dbs/virtuoso && cd /tmp/dbs/virtuoso
+curl -sLO http://archive.ubuntu.com/ubuntu/pool/universe/v/virtuoso-opensource/libvirtodbc0_7.2.12+dfsg-1build1_amd64.deb
+dpkg-deb -x libvirtodbc0_7.2.12+dfsg-1build1_amd64.deb ex
+# -> ex/usr/lib/x86_64-linux-gnu/odbc/virtodbc.so    (ANSI, the one to use)
+#    ex/usr/lib/x86_64-linux-gnu/odbc/virtodbcu.so   (Unicode -- see below, do not use)
+#    ...and the _r (reentrant) variants of both.
+```
+
+Pick the revision built against your distribution's OpenSSL: `-1build1` is the noble
+(24.04) build and needs `libssl.so.3`; the current `-4ubuntu2` links `libssl.so.4`
+(OpenSSL 3.5) and will not load on an OpenSSL 3.0 host. The pool index at that URL lists
+what is available.
+
+Run the entry:
+
+```sh
+export VIRTUOSO_ODBC_DRIVER=/tmp/dbs/virtuoso/ex/usr/lib/x86_64-linux-gnu/odbc/virtodbc.so
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py virtuoso
+# virtuoso  PASS  (OpenLink Virtuoso (via ODBC) 07.20.3243)
+```
+
+Entry notes: Virtuoso keeps unquoted identifiers in the case they were written (no
+`ident` mapping), and `SQLColumns` matches a table name case-insensitively. Its type
+names are its own — `NVARCHAR` is the wide string type (a plain `VARCHAR` is a byte
+string), `DATETIME` is the microsecond timestamp, and `TIMESTAMP` is an unrelated "row
+timestamp" the driver describes as a binary column. There is no `BOOLEAN`: Virtuoso uses
+`SMALLINT` for one, so the entry expects `int16` for `bo`. No tolerance flags are needed:
+the emoji, `DECIMAL(10,3)`, `VARBINARY`, NULL parameters, affected-row counts and the
+5000-row batched read all round-trip.
+
+`BIGINT` reads back as `decimal128(19, 0)` — Virtuoso describes it as `SQL_DECIMAL` with
+precision 19 — which is what the bulk-ingest table's `a` column comes back as.
+
+### Driver quirk 1: no `SQL_C_WCHAR`
+
+`virtodbc.so` is a pure ANSI driver (it exports no `…W` entry points at all). It accepts
+an `SQL_C_WCHAR` parameter and then reads the buffer as if it were narrow, so
+`"héllo 🚀"` stores as its first byte pair, `"0\0"`, with no diagnostic. Its narrow path
+is exact for UTF-8: Virtuoso's own charsets (`DB.DBA.SYS_CHARSETS`) are all single-byte
+and an unqualified connection passes narrow bytes straight through, so UTF-8 text —
+astral-plane emoji included — round-trips byte for byte through both `NVARCHAR` and
+`VARCHAR`. adbcbridge detects the driver from `SQL_DRIVER_NAME` (`virtodbc.so`) and sets
+the existing `wchar_as_utf8` reader option, the same one Firebird's OdbcFb needs.
+
+Do **not** add `Charset=UTF-8` to the connection string. `UTF-8` is not one of Virtuoso's
+charsets, so the server falls back to its single-byte default and the same UTF-8 bytes
+then arrive as mojibake (`hÃ©llo ð…`); `Charset=UTF8` makes the driver abort the process
+with `GPF: Dkbox.c:638 Double free`.
+
+### Driver quirk 2: `SQL_C_SBIGINT` parameters store 0
+
+A 64-bit integer parameter is stored as `0`, silently — the driver's conversion table has
+no `SQL_C_SBIGINT`. The entry needs nothing for this: adbcbridge sets the existing
+`bigint_param_as_string` option (Oracle's Instant Client ODBC needs the same one), which
+sends the value as numeric text; the conversion is exact.
+
+### Driver quirk 3: `SQL_C_TYPE_DATE` parameter arrays repeat row 0
+
+`virtodbc.so` accepts `SQL_ATTR_PARAMSET_SIZE`, executes every set and reports the right
+affected-row count, but binds a `SQL_C_TYPE_DATE` parameter from the *first* set only:
+every row of the array is inserted with row 0's date. Other types (`SQL_C_CHAR`,
+`SQL_C_DOUBLE`, `SQL_C_SLONG`) walk the array correctly, so the damage is invisible
+unless a date column is part of the batch. adbcbridge sets `no_param_arrays`, executing
+one row at a time as it does for DuckDB, clickhouse-odbc, OdbcFb and MonetDBODBClib.
+
+### Why not the Unicode driver, `virtodbcu.so`
+
+`virtodbcu.so` does support wide strings, and needs `WideAsUTF16=Y` in the connection
+string to read `SQLWCHAR` as UTF-16 rather than as `wchar_t` — but it cannot be reached
+through unixODBC's ANSI entry points, which is what adbcbridge (and any ANSI ODBC
+application) calls. The first statement that *fails* aborts the process:
+
+```
+*** stack smashing detected ***: terminated
+```
+
+The crash is inside `libodbc.so.2`, in the ANSI→Unicode translation that follows a
+failed `SQLExecDirect` — not in adbcbridge. This 40-line standalone probe reproduces it
+with no ADBC in the picture (`cc -o vprobe vprobe.c -lodbc`):
+
+```c
+SQLDriverConnect(dbc, NULL, (SQLCHAR*)"Driver={…/virtodbcu.so};HOST=127.0.0.1:11111;"
+                 "UID=dba;PWD=adbc;WideAsUTF16=Y;", SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
+SQLExecDirect(stmt, (SQLCHAR*)"DROP TABLE no_such_table_probe", SQL_NTS);  /* SIGABRT */
+```
+
+The same probe against `virtodbc.so` returns `SQL_ERROR` and the diagnostic
+(`42S02 … SR268: No table in drop table.`) as it should, and pyodbc — which calls the
+`…W` entry points directly, so unixODBC does not translate — drives `virtodbcu.so`
+without trouble. So the fault is in that driver's Unicode diagnostic path meeting
+unixODBC's translation layer, there is no connection handle or `reader_opts` flag that
+could avoid it, and the ANSI driver has no such problem and loses nothing: use it.
+
+Note that both builds report `SQL_DRIVER_NAME` as `virtodbc.so`, so the quirks above are
+keyed on a name that matches either.
+
 ## H2 (PostgreSQL mode) — does not work with psqlodbc
 
 H2 has no ODBC driver of its own. Its server mode can speak the PostgreSQL v3 wire

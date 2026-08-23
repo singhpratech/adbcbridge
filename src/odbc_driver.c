@@ -524,6 +524,23 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // parameter-status array -- five bound rows insert one, silently.
     conn->reader_opts.no_param_arrays = true;
   }
+  if (strstr((const char*)name, "virtodbc")) {
+    // OpenLink Virtuoso ships both an ANSI driver (virtodbc.so) and a Unicode one
+    // (virtodbcu.so); both answer SQL_DRIVER_NAME "virtodbc.so", so this keys on either.
+    // The ANSI driver has no SQL_C_WCHAR support worth the name: a bound SQL_C_WCHAR
+    // parameter is read as if it were narrow, so "héllo 🚀" stores as its first byte pair
+    // ("0\0"). Its narrow path is UTF-8 already -- Virtuoso's own charsets are all
+    // single-byte, and an unqualified connection passes narrow bytes through -- so stay
+    // on it.
+    conn->reader_opts.wchar_as_utf8 = true;
+    // SQL_C_SBIGINT parameters are read as 0 without a diagnostic (the driver's
+    // conversion table has no 64-bit integer); numeric text converts exactly.
+    conn->reader_opts.bigint_param_as_string = true;
+    // virtodbc accepts SQL_ATTR_PARAMSET_SIZE and reports the right number of affected
+    // rows, but binds SQL_C_TYPE_DATE from the first parameter set only: every row of a
+    // bound array gets row 0's date, silently.  One execute per row instead.
+    conn->reader_opts.no_param_arrays = true;
+  }
   if (strstr((const char*)name, "monetdb")) {
     // MonetDBODBClib accepts SQL_ATTR_PARAMSET_SIZE, executes only the first parameter
     // set, reports one affected row and writes neither SQL_ATTR_PARAMS_PROCESSED_PTR nor

@@ -33,6 +33,7 @@ from the second table to the first.
 | QuestDB 10 | psqlodbc (PG wire) | PASS | own type system behind the PG wire: standard-SQL ingest DDL, `true`/`false` boolean params, no usable parameter arrays; `SQLColumns` fails, `GetObjects` describes a zero-row SELECT instead |
 | MonetDB 11.55 | MonetDBODBClib | PASS | no usable parameter arrays; `SQLEndTran` unreliable under pyodbc |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
+| OpenLink Virtuoso 7.2 | Virtuoso ODBC (`virtodbc.so`) | PASS | ODBC-native server; no `SQL_C_WCHAR` (UTF-8 narrow path), no `SQL_C_SBIGINT`, date parameter arrays repeat row 0; no `BOOLEAN` type; ingest 11.9k rows/s, fetch 1.04M rows/s |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 
 ## Driver available, free server available — queued for verification
@@ -56,7 +57,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | MongoDB (BI Connector) | MySQL Connector/ODBC | `mongo` + `mongosqld` | queued |
 | Azure SQL Edge | msodbcsql | `mcr.microsoft.com/azure-sql-edge` | queued |
 | IBM Informix | Db2 clidriver (DRDA) | `icr.io/informix/informix-developer-database` | queued |
-| OpenLink Virtuoso | virtodbc | `openlink/virtuoso-opensource-7` | queued |
 | Apache Ignite | ignite-odbc | `apacheignite/ignite` | queued |
 | Vertica CE | Vertica ODBC | `vertica/vertica-ce` | queued |
 | OpenSearch | opensearch-sql-odbc | `opensearchproject/opensearch` | queued |

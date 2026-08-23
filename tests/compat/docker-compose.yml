@@ -77,3 +77,13 @@ services:
     environment: { CRATE_HEAP_SIZE: 512m }
     mem_limit: 2g
     ports: ["127.0.0.1:15440:5432"]
+  # OpenLink Virtuoso: an ODBC-native server -- 1111 is its own binary wire protocol,
+  # which virtodbc.so speaks directly (8890 is its HTTP/SPARQL endpoint, unused here).
+  # In the "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d virtuoso
+  virtuoso:
+    profiles: ["extra"]
+    image: openlink/virtuoso-opensource-7
+    environment: { DBA_PASSWORD: adbc }
+    mem_limit: 2g
+    ports: ["127.0.0.1:11111:1111"]
