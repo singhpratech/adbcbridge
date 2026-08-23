@@ -3122,3 +3122,196 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down influxdb3
 # or, if started standalone:
 docker rm -f adbcbridge-influxdb3
 ```
+
+## Apache Ignite 2.17
+
+Apache Ignite is a distributed in-memory key-value grid with a SQL engine on top of it.
+Every SQL table *is* a cache — the `PRIMARY KEY` of a `CREATE TABLE` is the cache key —
+and that one fact shapes the whole entry. Ignite is also the only server in this matrix
+whose ODBC driver has to be built first: Apache ships `libignite-odbc.so` for Windows
+only (two `.msi` installers), and the Linux binary release carries the C++ *sources* it
+would be built from.
+
+### Start the server
+
+```sh
+docker run -d --name adbcbridge-ignite --memory=2g \
+  -e JVM_OPTS="-Xms512m -Xmx1200m" \
+  -p 127.0.0.1:11800:10800 apacheignite/ignite:latest
+```
+
+(or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d ignite`; it
+is in the `extra` profile, so a plain `up -d` leaves it alone). It is ready in about
+fifteen seconds — `Topology snapshot [ver=1, ..., state=ACTIVE]` in `docker logs`. 10800
+is Ignite's thin-client port, which is also the ODBC one; there is nothing else to
+configure, the node comes up with a `PUBLIC` schema and authentication off.
+
+`JVM_OPTS` is not decoration: Ignite sizes its heap from the *host's* RAM, not from the
+container's limit, so on a large box the default heap is far past `--memory` and the JVM
+is killed by the OOM killer partway through the first big statement. Do not pass
+`IGNITE_QUIET=false` either — the node then logs every page-lock acquisition, which is
+megabytes per second under load.
+
+### Build the ODBC driver without root
+
+The image carries the driver's sources under
+`/opt/ignite/apache-ignite/platforms/cpp` (`odbc/`, plus the `common`, `binary` and
+`network` modules it links against). Copy them out of the container and build them
+against the system unixODBC and OpenSSL headers — no Ignite, no JVM and no JNI is
+involved, the ODBC driver is a plain thin client that speaks Ignite's binary protocol:
+
+```sh
+mkdir -p /tmp/dbs/ignite
+docker cp adbcbridge-ignite:/opt/ignite/apache-ignite/platforms/cpp /tmp/dbs/ignite/cpp
+cmake -S /tmp/dbs/ignite/cpp -B /tmp/dbs/ignite/build -DCMAKE_BUILD_TYPE=Release \
+      -DWITH_ODBC=ON -DWITH_CORE=OFF -DCMAKE_INSTALL_PREFIX=/tmp/dbs/ignite/inst
+cmake --build /tmp/dbs/ignite/build -j4      # ~2 minutes
+cmake --install /tmp/dbs/ignite/build
+# -> /tmp/dbs/ignite/inst/lib/libignite-odbc.so
+```
+
+`WITH_CORE=OFF` is what keeps the build root-free and short: the Ignite C++ *core* module
+embeds a JVM and needs `JAVA_HOME` and the Ignite jars, while the ODBC driver needs
+neither. Requires `unixodbc-dev` and `libssl-dev`, which the matrix needs anyway. The
+installed library has an `RPATH` pointing at its own `lib` directory, so it finds
+`libignite-common/binary/network.so` on its own — no `LD_LIBRARY_PATH` entry.
+
+### Run the entry
+
+```sh
+export IGNITE_ODBC_DRIVER=/tmp/dbs/ignite/inst/lib/libignite-odbc.so
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so ADBC_ODBC_DELEGATE=never \
+  ADBC_MATRIX_SUFFIX=_ignite python tests/compat/test_matrix.py ignite
+# ignite    PASS  (Apache Ignite (via ODBC) 02.04.0000)
+```
+
+The connection string is `ADDRESS=host:port` (`SERVER=`/`PORT=` also work) plus
+`SCHEMA=PUBLIC`. `02.04.0000` is the *protocol* version the driver reports as
+`SQL_DBMS_VER`, not the server's — Ignite's ODBC driver has no other version to give.
+
+### Driver quirk 1: no wide SQL type
+
+`SQLBindParameter` refuses `SQL_WVARCHAR` outright, before it looks at any value:
+
+```
+HYC00  Data type is not supported. [typeId=-9]
+```
+
+`type_traits.cpp`'s `IsSqlTypeSupported()` lists `SQL_CHAR`/`SQL_VARCHAR`/
+`SQL_LONGVARCHAR` and refuses `SQL_WCHAR`/`SQL_WVARCHAR`/`SQL_WLONGVARCHAR`. The C type
+`SQL_C_WCHAR` *is* accepted, but the driver's wide buffers are `wchar_t`-sized
+(`PutStrToStrBuffer<wchar_t>`, 4 bytes on Linux) where unixODBC passes UTF-16 — the same
+mistake Firebird's OdbcFb makes. Its narrow path is UTF-8 (Ignite stores strings as
+UTF-8 and the driver copies the bytes through), so the driver sets the existing
+`wchar_as_utf8` quirk on `SQL_DRIVER_NAME` "Apache Ignite" and `héllo 🚀` round-trips.
+
+### Driver quirk 2: parameter arrays read the NULL indicator from row 0
+
+Ignite's driver implements column-wise parameter arrays and reports both
+`SQL_ATTR_PARAMS_PROCESSED_PTR` and the parameter-status array, and a two-column,
+three-row array inserts three correct rows. Add a NULL anywhere below the first row and
+the *connection* dies:
+
+```
+SQLExecute -> HY000, then the next statement:
+08001  Failed to establish connection with any provided hosts.
+```
+
+with the server logging `java.lang.OutOfMemoryError: Java heap space` and halting the JVM.
+`odbc/src/app/parameter.cpp` is why:
+
+```cpp
+void Parameter::Write(BinaryWriterImpl& writer, int offset, SqlUlen idx) const
+{
+    if (buffer.GetInputSize() == SQL_NULL_DATA) { writer.WriteNull(); return; }
+
+    ApplicationDataBuffer buf(buffer);   // the copy...
+    buf.SetByteOffset(offset);
+    buf.SetElementOffset(idx);           // ...is where the row offset is applied
+```
+
+`GetInputSize()` reads `*GetResLen()`, and `GetResLen()` applies the buffer's *own*
+element offset — which is still 0. So the NULL test always inspects the indicator of row
+0 and every row of the chunk inherits row 0's NULL-ness. A NULL in a later row is
+therefore sent as whatever the value buffer holds at that row, and for a character or
+binary column that means a length the server cannot parse: it reads a bogus array size
+and tries to allocate it. Hence `no_param_arrays` for this driver, the same flag DuckDB,
+clickhouse-odbc, OdbcFb and MonetDBODBClib carry. One execute per row is correct because
+there the element offset is 0 for real.
+
+Standalone repro of the working two-column case, and of the row-0 indicator bug, without
+adbcbridge: bind `SQL_ATTR_PARAMSET_SIZE=3` on `INSERT INTO t (a, b) VALUES (?, ?)` with
+`ind[] = {SQL_NTS, SQL_NULL_DATA, SQL_NTS}` — all three rows arrive non-NULL, and with
+`ind[0] = SQL_NULL_DATA` all three arrive NULL.
+
+### Why the entry sets `ingest_create=False`
+
+Ignite refuses any table that does not declare a key:
+
+```
+CREATE TABLE nopk (a BIGINT, b VARCHAR)
+-> 42000  No PRIMARY KEY defined for CREATE TABLE
+```
+
+`adbc_ingest`'s generated `CREATE TABLE` has no notion of a key, and no column of an
+ingest payload can generally be one — the matrix's own is `a = [1, 2, NULL]`, and Ignite
+allows neither a NULL key nor the duplicate keys the `append` step would then insert
+(`23000 Failed to INSERT some keys because they are already in cache`). Nor can the key
+be a column the server fills in itself, the way GreptimeDB's `ddl_extra_column` is: a
+`DEFAULT` must be a constant (`Non-constant DEFAULT expressions are not supported` for
+`RANDOM_UUID()`), and an `INSERT` that omits the key column fails with `Failed to prepare
+update plan` whatever its default. So `mode="create"` cannot work here, and this is a
+property of Ignite rather than of its driver — no quirk can fix it.
+
+The entry therefore sets `ingest_create=False`, which makes the workload read the big
+table `setup` built (exactly as a `read_only` entry does) instead of creating one, and
+covers bulk ingest in its `extra` steps in the only shape Ignite has for it: an
+`adbc_ingest(mode="append")` into a table that declares its own `PRIMARY KEY`. Everything
+else runs unchanged — the typed-parameter `INSERT` of all eight columns including the
+all-NULL row, the reads, the parameterised `SELECT`, the 100,000-row batched read,
+`GetObjects`, `GetTableSchema` and the error path.
+
+### Entry notes
+
+| Setting | Why |
+|---|---|
+| `ident=str.upper` | Ignite folds an unquoted identifier to upper case. |
+| `quote=""` | its driver answers `SQL_IDENTIFIER_QUOTE_CHAR` with an empty string, so `adbc_ingest` quotes nothing and the names it emits are folded; this file's own SQL has to leave them unquoted too, or a quoted `"a"` would be a different column from the `A` ingest just created. |
+| `ddl ... i INT PRIMARY KEY` | see above — there is no table without one. `b BINARY` is Ignite's byte-string type; `VARCHAR` takes an optional length that it ignores. |
+| `setup=[... SYSTEM_RANGE ...]` | `adbc_big` is filled server-side by `INSERT INTO adbc_big (a, b) SELECT X, 'r' \|\| X FROM SYSTEM_RANGE(0, 99999)` — `SYSTEM_RANGE` is the H2 table function Ignite's SQL engine inherits. 100,000 rows in about three seconds, which is what `setup` costs on every connection opened. |
+
+Nothing else needed a tolerance: `DECIMAL(10,3)` is described with its declared precision
+and scale, `TIMESTAMP` keeps all six fractional digits through a bound parameter,
+`BOOLEAN` is a real `SQL_BIT` with a NULL state, and `GetObjects` reports the eight
+columns in order.
+
+One thing to know about the driver's own metadata, which costs the entry nothing but
+explains the shape of a read: it describes every `VARCHAR` and `BINARY` column as
+2,147,483,647 units wide (Ignite's SQL types carry no length), and it can recover neither
+kind of truncated value — `SQL_GETDATA_EXTENSIONS` is `SQL_GD_ANY_COLUMN | SQL_GD_ANY_ORDER
+| SQL_GD_BLOCK` with **no** `SQL_GD_BOUND`, and `FetchScroll()` refuses every orientation
+but `SQL_FETCH_NEXT` ("Only SQL_FETCH_NEXT FetchOrientation type is supported"). Both
+reports are honest — there is no `SQLSetPos` behind them — so such a column stays unbound
+and the result set is read a row at a time with `SQLGetData` rather than through a block
+cursor. It is fast regardless (930k rows/s below): the driver has already paged the whole
+answer into client memory, so a per-row `SQLGetData` is a local copy.
+
+### Benchmark
+
+```sh
+ADBC_MATRIX_SUFFIX=_ignite python bench/matrix_bench.py \
+  --rows 10000 --fetch-rows 100000 --pyodbc-timeout 300 ignite
+```
+
+Like the `read_only` entries, this measures the fetch only — 930k rows/s over `adbc_big`'s
+100,000 rows. There is no create-ingest to measure; an `adbc_ingest(mode="append")` of
+10,000 rows into a pre-created `PRIMARY KEY` table runs at about 95k rows/s (median of
+five), on the driver's multi-row `INSERT` path, since parameter arrays are off here.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down ignite
+# or, if started standalone:
+docker rm -f adbcbridge-ignite
+```

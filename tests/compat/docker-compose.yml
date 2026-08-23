@@ -326,3 +326,19 @@ services:
     command: ["influxdb3", "serve", "--node-id=n1", "--object-store=memory", "--without-auth"]
     mem_limit: 2g
     ports: ["127.0.0.1:18181:8181"]
+  # Apache Ignite 2.x: a distributed in-memory key-value grid with a SQL engine on top.
+  # 10800 is its thin-client port, which is also the ODBC one.  In the "extra" profile,
+  # so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d ignite
+  # The image ships no prebuilt ODBC driver, only the C++ sources it is built from
+  # (/opt/ignite/apache-ignite/platforms/cpp); see tests/compat/README.md for the
+  # root-free build.  JVM_OPTS pins the heap: Ignite sizes it from the *host's* RAM
+  # rather than the container's limit, so on a large box the default would be well past
+  # mem_limit.  Nothing else needs configuring -- the node comes up ACTIVE with a PUBLIC
+  # schema and no authentication.
+  ignite:
+    profiles: ["extra"]
+    image: apacheignite/ignite:latest
+    environment: { JVM_OPTS: "-Xms512m -Xmx1200m" }
+    mem_limit: 2g
+    ports: ["127.0.0.1:11800:10800"]
