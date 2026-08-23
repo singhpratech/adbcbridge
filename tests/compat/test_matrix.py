@@ -10,6 +10,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER,
     ACCESS_ODBC_DRIVER
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER, TIDB_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -69,6 +70,18 @@ DBS = {
         # MySQL BOOLEAN is TINYINT(1), reported as SQL_TINYINT -> int8; double-quoted
         # identifiers (used by ingest) need ANSI_QUOTES. See tests/compat/README.md for
         # the LD_PRELOAD needed by MySQL Connector/ODBC under pyarrow.
+        bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "tidb": dict(
+        # TiDB speaks the MySQL wire protocol (it advertises itself as MySQL 8.0.11), so
+        # MySQL Connector/ODBC drives it and the `mysql` entry's DDL and tolerances apply
+        # unchanged: BOOLEAN is TINYINT(1) -> int8, and the double-quoted identifiers that
+        # ingest emits need ANSI_QUOTES.  The stock image ships no `adbc` database and only
+        # the passwordless `root` account, so the entry uses the built-in `test` database.
+        # {plugin_dir}: TiDB creates root with mysql_native_password, whose *client-side*
+        # plugin Connector/ODBC 9 loads at run time -- see conn_uri() below.
+        env="TIDB_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=14000;Database=test;User=root;{plugin_dir}",
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
     "db2": dict(
         env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",
@@ -202,6 +215,23 @@ ROW1 = (1, 1.5, "héllo 🚀", b"\x01\x02", datetime.date(2024, 2, 29),
 ROW2 = (2, None, None, None, None, None, None, None)
 
 
+def conn_uri(name, cfg, drv):
+    """The entry's connection string, overridable with <NAME>_CONN.
+
+    `{drv}` expands to the driver library. `{plugin_dir}` expands to a `PLUGIN_DIR=`
+    setting for the drivers that need one: MySQL Connector/ODBC loads client-side
+    authentication plugins from the directory it was *built* with
+    (/usr/local/mysql/lib/plugin for the generic tarball), so a tarball unpacked elsewhere
+    cannot load them, and a server still using mysql_native_password (TiDB) refuses the
+    connection. The tarball keeps those plugins next to the driver, so point PLUGIN_DIR
+    there when that directory exists; a packaged install has no such directory and keeps
+    its own -- correct -- compiled-in default.
+    """
+    pdir = os.path.join(os.path.dirname(drv), "plugin")
+    plugin_dir = "PLUGIN_DIR=%s;" % pdir if os.path.isdir(pdir) else ""
+    return os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv, plugin_dir=plugin_dir)
+
+
 def run(name, cfg):
     drv = os.environ.get(cfg["env"])
     if not drv:
@@ -211,7 +241,7 @@ def run(name, cfg):
         os.environ.setdefault(k, v)
     if cfg.get("fixture"):  # file-based, read-only database: work on a private copy
         shutil.copy(HERE / "fixtures" / cfg["fixture"], os.path.join(TMP, cfg["fixture"]))
-    uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv)
+    uri = conn_uri(name, cfg, drv)
     # This matrix exists to exercise the ODBC path, so native delegation (which
     # would take over for e.g. SQLite/PostgreSQL) is switched off here.
     conn = dbapi.connect(

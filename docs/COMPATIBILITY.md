@@ -32,6 +32,7 @@ from the second table to the first.
 | CrateDB 6.4 | psqlodbc (PG wire) | PASS | eventually consistent (`REFRESH TABLE`); no binary or `DATE` column type; ingest 626 rows/s, fetch 767k rows/s |
 | QuestDB 10 | psqlodbc (PG wire) | PASS | own type system behind the PG wire: standard-SQL ingest DDL, `true`/`false` boolean params, no usable parameter arrays; `SQLColumns` fails, `GetObjects` describes a zero-row SELECT instead |
 | MonetDB 11.55 | MonetDBODBClib | PASS | no usable parameter arrays; `SQLEndTran` unreliable under pyodbc |
+| TiDB 7.5 | MySQL Connector/ODBC (MySQL wire) | PASS | tarball driver needs `PLUGIN_DIR` for `mysql_native_password` |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 
@@ -47,7 +48,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | openGauss | psqlodbc | `enmotech/opengauss` | queued |
 | libSQL server | psqlodbc (PG wire) | `ghcr.io/tursodatabase/libsql-server` | queued |
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |
-| TiDB | MySQL Connector/ODBC | `pingcap/tidb` | queued |
 | Dolt | MySQL Connector/ODBC | `dolthub/dolt-sql-server` | queued |
 | Percona Server | MySQL Connector/ODBC | `percona` | queued |
 | Databend | MySQL Connector/ODBC | `datafuselabs/databend` | queued |

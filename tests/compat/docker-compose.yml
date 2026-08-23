@@ -77,3 +77,13 @@ services:
     environment: { CRATE_HEAP_SIZE: 512m }
     mem_limit: 2g
     ports: ["127.0.0.1:15440:5432"]
+  # TiDB (MySQL wire protocol; MySQL Connector/ODBC drives it).  In the "extra"
+  # profile, so the default `up -d` leaves it alone:
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d tidb
+  # The image is a single tidb-server on its embedded unistore engine -- no PD and
+  # no TiKV -- with root passwordless and no database but the built-in `test`.
+  tidb:
+    image: pingcap/tidb:latest
+    profiles: ["extra"]
+    mem_limit: 2g
+    ports: ["127.0.0.1:14000:4000"]

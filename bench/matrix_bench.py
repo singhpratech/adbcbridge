@@ -265,7 +265,7 @@ def bench(name, cfg):
         import shutil
         shutil.copy(pathlib.Path(m.__file__).parent / "fixtures" / cfg["fixture"],
                     os.path.join(m.TMP, cfg["fixture"]))
-    uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv)
+    uri = m.conn_uri(name, cfg, drv)
     ident = cfg.get("ident", lambda x: x)
     conn = connect(uri, cfg, **{"adbc.odbc.delegate": "never"})
     info = conn.adbc_get_info()
@@ -322,7 +322,7 @@ if args._child:
     cfg = m.DBS[name]
     for kv in cfg.get("unicode_env", "").split():
         k, v = kv.split("=", 1); os.environ.setdefault(k, v)
-    uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=os.environ[cfg["env"]])
+    uri = m.conn_uri(name, cfg, os.environ[cfg["env"]])
     ident = cfg.get("ident", lambda x: x)
     if fn_name == "ingest":
         res = attempt(time_pyodbc_ingest, uri, cfg, ident, make_table(args.rows, cfg))

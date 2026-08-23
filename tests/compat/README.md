@@ -1061,3 +1061,93 @@ So this is a genuine H2-plus-psqlodbc incompatibility, not an adbcbridge gap. It
 testable if H2 teaches `PgServerThread.getSQL()` to swallow unknown `SET`/`SHOW` GUCs, or
 if psqlodbc learns to tolerate a failure of that batch. Tested with H2 2.4.240 and
 2.3.232 (identical `getSQL`) against psqlodbc 16.00.0000.
+
+## TiDB 7.5
+
+TiDB is MySQL-wire-protocol compatible, so it needs no ODBC driver of its own — the same
+MySQL Connector/ODBC build used for the `mysql` entry drives it (see [MySQL 8](#mysql-8)
+above for the root-free tarball, and for the `LD_PRELOAD` that `import pyarrow` makes
+necessary).
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d tidb
+# or standalone:
+docker run -d --name adbcbridge-tidb --memory=2g \
+  -p 127.0.0.1:14000:4000 pingcap/tidb:latest
+```
+
+The image runs a single `tidb-server` with its embedded **unistore** engine, so there is
+no PD or TiKV to start and the whole cluster is one ~400 MB container (~530 MiB resident).
+It is ready in a couple of seconds, when the log says `server is running MySQL protocol`:
+
+```sh
+docker logs adbcbridge-tidb 2>&1 | grep -m1 'running MySQL protocol'
+```
+
+SQL is on `127.0.0.1:14000`, user `root` with **no password**. The image creates no
+`adbc` database and no non-root account, so the entry uses the built-in `test` database.
+
+### Run the entry
+
+```sh
+export TIDB_ODBC_DRIVER=$MYSQL_ODBC_DRIVER   # the Connector/ODBC tarball's libmyodbc9w.so
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py tidb
+# tidb      PASS  (MySQL (via ODBC) 8.0.11-TiDB-v7.5.1)
+```
+
+### Connector/ODBC needs `PLUGIN_DIR` here, but not for MySQL 8
+
+TiDB creates `root` with **`mysql_native_password`**, while MySQL 8.4 defaults to
+`caching_sha2_password`. `caching_sha2_password` is built into libmysqlclient;
+`mysql_native_password` is a *loadable client-side plugin*, which Connector/ODBC 9 looks
+for in the directory it was compiled with — `/usr/local/mysql/lib/plugin`, the generic
+tarball's install prefix. Unpacked anywhere else, the connection fails before it starts:
+
+```
+[08004] [MySQL][ODBC 9.4(w) Driver]Authentication plugin 'mysql_native_password' cannot
+be loaded: /usr/local/mysql/lib/plugin/mysql_native_password.so: cannot open shared
+object file: No such file or directory (2059)
+```
+
+The tarball does ship the plugin, next to the driver in `lib/plugin/`. So the entry's
+connection string ends in `{plugin_dir}`, which `conn_uri()` in `test_matrix.py` expands
+to `PLUGIN_DIR=<dir of the driver>/plugin;` when that directory exists and to nothing when
+it does not — a packaged (rpm/deb) install has no `plugin/` beside the driver and its
+compiled-in default is already right. This is a packaging artefact of running the driver
+from an unpacked tarball, not a driver bug and not something adbcbridge can detect: it
+happens inside `SQLDriverConnect`.
+
+### Notes
+
+The entry needs **no tolerance flags and no driver quirk**. It is the `mysql` entry's DDL
+and settings unchanged: `BOOLEAN` is `TINYINT(1)`, which the driver reports as
+`SQL_TINYINT` (`bool_type="int8"`), and `adbc_ingest`'s double-quoted identifiers need
+`ANSI_QUOTES` in `sql_mode` (the entry's `setup`). `VARBINARY(10)`, `DATETIME(6)`,
+`DECIMAL(10,3)` and `DATE` behave as in MySQL, so the emoji round-trip, the microsecond
+timestamp, NULL parameters, affected-row counts and the 5000-row batched ingest and read
+all pass on the generic path.
+
+TiDB is indistinguishable from MySQL by the identifiers a quirk could key on —
+`SQL_DRIVER_NAME` is `libmyodbc9w.so` and `SQL_DBMS_NAME` is `MySQL`, exactly as for
+MySQL 8 — and `SQL_DBMS_VER` is `8.0.11-TiDB-v7.5.1`: the MySQL version TiDB claims
+compatibility with, followed by its own. Any future TiDB-specific quirk would have to key
+on that `-TiDB-` marker (or on `SELECT tidb_version()`), never on the driver or DBMS name,
+which real MySQL shares. This is the same situation as CockroachDB behind `psqlodbc`.
+
+Two TiDB behaviours are worth knowing even though neither affects the workload: its
+default `sql_mode` already contains `STRICT_TRANS_TABLES` and friends but not
+`ANSI_QUOTES` (hence the same `setup` line as MySQL), and its DDL is *online* —
+asynchronous schema change rather than a table lock — which the matrix exercises on every
+run by dropping and immediately recreating the same table names, with no wait needed.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down tidb
+# or, if started standalone:
+docker rm -f adbcbridge-tidb
+```
