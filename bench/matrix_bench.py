@@ -66,9 +66,26 @@ def drop(cur, ident):
             pass
 
 
+def table_ref(conn, ident):
+    """The spelling of TABLE that resolves: ingest quotes the name, so it is case-exact
+    (lower-case on Oracle/Db2, which upper-case an unquoted name); MySQL quotes with
+    backticks. Try the candidates and keep the first that SELECTs."""
+    last = None
+    for t in ('"%s"' % TABLE, ident(TABLE), "`%s`" % TABLE, TABLE):
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM " + t)
+            cur.fetchone()
+            cur.close()
+            return t
+        except Exception as e:  # noqa: BLE001
+            last = e
+    raise last
+
+
 def count(conn, ident):
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM " + ident(TABLE))
+        cur.execute("SELECT COUNT(*) FROM " + table_ref(conn, ident))
         return int(cur.fetchone()[0])
 
 
@@ -78,7 +95,8 @@ def time_ingest(uri, cfg, ident, tbl, array_binding, autocommit=True):
         with conn.cursor() as cur:
             drop(cur, ident)
             if not autocommit:
-                conn.commit()
+                # A failed DROP aborts the transaction on MonetDB/Postgres; start clean.
+                conn.rollback()
             if array_binding is not None:
                 cur.adbc_statement.set_options(**{"adbc.odbc.array_binding": array_binding})
             t0 = time.perf_counter()
@@ -109,7 +127,7 @@ def time_pyodbc_ingest(uri, cfg, ident, tbl):
             c.adbc_ingest(TABLE, tbl.slice(0, 0), mode="create")
         conn.close()
         rows = list(zip(*[tbl.column(c).to_pylist() for c in COLS]))
-        sql = "INSERT INTO %s VALUES (?, ?, ?, ?)" % ident(TABLE)
+        sql = "INSERT INTO %s VALUES (?, ?, ?, ?)" % table_ref(pc, ident)
         try:
             cur.fast_executemany = True
         except Exception:
@@ -129,7 +147,7 @@ def time_pyodbc_ingest(uri, cfg, ident, tbl):
         pc.close()
 
 
-def time_fetch(uri, cfg, ident, n, **db_kwargs):
+def time_fetch(uri, cfg, ident, n, table=None, **db_kwargs):
     conn = connect(uri, cfg, **db_kwargs)
     try:
         delegated = ""
@@ -137,7 +155,7 @@ def time_fetch(uri, cfg, ident, n, **db_kwargs):
             delegated = conn.adbc_connection.get_option("adbc.odbc.delegated_to")
         except Exception:
             pass
-        sql = "SELECT id, val, txt, dt FROM " + ident(TABLE)
+        sql = "SELECT * FROM " + (table or table_ref(conn, ident))
 
         def run():
             with conn.cursor() as cur:
@@ -159,7 +177,7 @@ def time_pyodbc_fetch(uri, cfg, ident, n):
     try:
         for sql in cfg.get("setup", []):
             pc.execute(sql)
-        sql = "SELECT id, val, txt, dt FROM " + ident(TABLE)
+        sql = "SELECT * FROM " + table_ref(pc, ident)
 
         def run():
             rows = pc.execute(sql).fetchall()
@@ -203,26 +221,39 @@ def bench(name, cfg):
         return None
     for kv in cfg.get("unicode_env", "").split():
         k, v = kv.split("=", 1); os.environ.setdefault(k, v)
+    if cfg.get("fixture"):  # file-based database: work on a private copy
+        import shutil
+        shutil.copy(pathlib.Path(m.__file__).parent / "fixtures" / cfg["fixture"],
+                    os.path.join(m.TMP, cfg["fixture"]))
     uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv)
     ident = cfg.get("ident", lambda x: x)
     conn = connect(uri, cfg, **{"adbc.odbc.delegate": "never"})
     info = conn.adbc_get_info()
-    conn.close()
     r = dict(vendor="%s %s" % (info["vendor_name"], info["vendor_version"]), rows=args.rows,
              fetch_rows=args.fetch_rows)
     if cfg.get("read_only"):
+        # No DDL/DML through this driver: read the fixture's largest table instead.
         r["read_only"] = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM adbc_big")
+            r["fetch_rows"] = int(cur.fetchone()[0])
+        conn.close()
+        r["fetch"] = attempt(time_fetch, uri, cfg, ident, r["fetch_rows"], table="adbc_big",
+                             **{"adbc.odbc.delegate": "never"})
         return r
+    conn.close()
     tbl = make_table(args.rows)
-    r["ingest"] = attempt(time_ingest, uri, cfg, ident, tbl, None, autocommit=False)
-    r["ingest_array"] = attempt(time_ingest, uri, cfg, ident, tbl, "true", autocommit=False)
+    # Autocommit on: the driver batches the whole stream into one transaction itself.
+    # (Firebird also cannot INSERT into a table created in the same open transaction.)
+    r["ingest"] = attempt(time_ingest, uri, cfg, ident, tbl, "false")
+    r["ingest_array"] = attempt(time_ingest, uri, cfg, ident, tbl, "true")
     if not args.no_pyodbc:
         r["ingest_pyodbc"] = in_child("ingest", name, uri)
     big = make_table(args.fetch_rows)
     # Load the fetch table with whichever ingest path works; fall back to the slow one.
-    loaded = attempt(time_ingest, uri, cfg, ident, big, "true", autocommit=False)
+    loaded = attempt(time_ingest, uri, cfg, ident, big, "true")
     if "error" in loaded:
-        loaded = attempt(time_ingest, uri, cfg, ident, big, None, autocommit=False)
+        loaded = attempt(time_ingest, uri, cfg, ident, big, "false")
     if "error" in loaded:
         r["fetch"] = loaded
         return r
@@ -286,8 +317,9 @@ lines = [
     "# Per-database benchmarks",
     "",
     "Generated by `bench/matrix_bench.py` on %s. Table `(id int32, val double, txt varchar(20), dt date)`. "
-    "**Ingest** = `adbc_ingest(mode=\"create\")` of %s rows in one transaction (dbapi default), DDL + data + commit, row count verified; "
-    "*array* = `adbc.odbc.array_binding=true`; pyodbc = `executemany` (`fast_executemany` where the driver allows). "
+    "**Ingest** = `adbc_ingest(mode=\"create\")` of %s rows on an autocommit connection (the driver batches the stream "
+    "into one transaction itself), DDL + data + commit, row count verified; row-at-a-time (`adbc.odbc.array_binding=false`) "
+    "vs *array* = parameter arrays (the default); pyodbc = `executemany` (`fast_executemany` where the driver allows). "
     "**Fetch** = full read of %s rows, median of %d after a warmup; `fetch_arrow_table()` vs pyodbc "
     "`fetchall()` -> `pyarrow.Table`; *native* = the same read with [native delegation](../README.md#native-delegation) "
     "handing the connection to the database's own ADBC driver. All rates are rows/s; higher is better. "
@@ -305,7 +337,8 @@ for name, r in results.items():
         continue
     label = "%s (%s)" % (name, r["vendor"])
     if r.get("read_only"):
-        lines.append("| %s | read-only driver | — | — | — | — | — | — |" % label)
+        lines.append("| %s | read-only driver | — | — | %s (%s rows) | — | — | — |" % (
+            label, fmt_rate(rate(r["fetch_rows"], r.get("fetch"))), "{:,}".format(r["fetch_rows"])))
         continue
     f, fp = rate(r["fetch_rows"], r.get("fetch")), rate(r["fetch_rows"], r.get("fetch_pyodbc"))
     lines.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (

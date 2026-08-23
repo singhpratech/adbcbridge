@@ -502,6 +502,12 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // parameter-status array -- five bound rows insert one, silently.
     conn->reader_opts.no_param_arrays = true;
   }
+  if (strstr((const char*)name, "monetdb")) {
+    // MonetDBODBClib accepts SQL_ATTR_PARAMSET_SIZE, executes only the first parameter
+    // set, reports one affected row and writes neither SQL_ATTR_PARAMS_PROCESSED_PTR nor
+    // the parameter-status array -- seven bound rows insert one, silently.
+    conn->reader_opts.no_param_arrays = true;
+  }
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;
