@@ -68,7 +68,7 @@ static void CivilFromDays(int64_t z, int* y, unsigned* m, unsigned* d) {
 
 // UTF-8 -> UTF-16 into `o`, which must hold at least Utf16Units(s, n) + 1 units.
 // NUL-terminates and returns the number of units written.
-static int64_t Utf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
+int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
   int64_t k = 0;
   for (int64_t i = 0; i < n;) {
     unsigned char c = (unsigned char)s[i];
@@ -92,7 +92,7 @@ static int64_t Utf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
   return k;
 }
 
-// How many UTF-16 units Utf8ToUtf16Into would write for this UTF-8 string.
+// How many UTF-16 units OdbcUtf8ToUtf16Into would write for this UTF-8 string.
 static int64_t Utf16Units(const char* s, int64_t n) {
   int64_t k = 0;
   for (int64_t i = 0; i < n;) {
@@ -114,7 +114,7 @@ static int64_t Utf16Units(const char* s, int64_t n) {
 static ArrowErrorCode Utf8ToUtf16(struct ArrowBuffer* buf, const char* s, int64_t n, int64_t* units) {
   buf->size_bytes = 0;
   NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buf, (n + 1) * (int64_t)sizeof(SQLWCHAR)));
-  int64_t k = Utf8ToUtf16Into((SQLWCHAR*)buf->data, s, n);
+  int64_t k = OdbcUtf8ToUtf16Into((SQLWCHAR*)buf->data, s, n);
   buf->size_bytes = k * (int64_t)sizeof(SQLWCHAR);
   *units = k;
   return NANOARROW_OK;
@@ -901,7 +901,7 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
       case NANOARROW_TYPE_STRING_VIEW: {
         struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(values, row);
         if (p->c_type == SQL_C_WCHAR) {
-          int64_t units = Utf8ToUtf16Into((SQLWCHAR*)slot, s.data, s.size_bytes);
+          int64_t units = OdbcUtf8ToUtf16Into((SQLWCHAR*)slot, s.data, s.size_bytes);
           if (ind) {
             OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)(units * (int64_t)sizeof(SQLWCHAR)), q);
           }

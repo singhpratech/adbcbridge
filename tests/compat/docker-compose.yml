@@ -356,3 +356,25 @@ services:
     environment: { JVM_OPTS: "-Xms512m -Xmx1200m" }
     mem_limit: 2g
     ports: ["127.0.0.1:11800:10800"]
+  # OpenSearch with its bundled SQL plugin, reached over the REST API on 9200 -- the
+  # OpenSearch SQL ODBC driver speaks to `/_plugins/_sql` there.  In the "extra" profile,
+  # so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d opensearch
+  # DISABLE_SECURITY_PLUGIN=true turns off TLS and authentication, which is what lets the
+  # ODBC connection in with auth=NONE and useSSL=0; discovery.type=single-node skips the
+  # cluster bootstrap.  OPENSEARCH_JAVA_OPTS pins a 512 MB heap -- the default is a
+  # quarter of the host's RAM, far more than this needs.  The matrix entry is read-only
+  # (the SQL plugin has no INSERT and the driver no SQLBindParameter), so its indices
+  # have to be written over the REST API once the container is up, with
+  #   python3 tests/compat/fixtures/load_opensearch.py
+  # See tests/compat/README.md -- the driver is published for Windows and macOS only and
+  # has to be built for Linux.
+  opensearch:
+    profiles: ["extra"]
+    image: opensearchproject/opensearch:latest
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    mem_limit: 3g
+    ports: ["127.0.0.1:19200:9200"]

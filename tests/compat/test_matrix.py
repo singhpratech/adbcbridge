@@ -27,6 +27,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFLUXDB3_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, STARROCKS_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, IGNITE_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, OPENSEARCH_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -877,6 +878,60 @@ DBS = {
             ("SELECT count(*) FROM adbc_ig{sfx}", (4,)),
             ("SELECT b, c FROM adbc_ig{sfx} WHERE a = 3", ("r", None)),
         ]),
+    "opensearch": dict(
+        # OpenSearch reached through its SQL plugin (the `/_plugins/_sql` REST endpoint)
+        # with the OpenSearch SQL ODBC driver, which the project publishes for Windows
+        # and macOS only -- see tests/compat/README.md for the Linux build and the two
+        # source fixes it needs.  The connection options are the driver's own names:
+        # `host`/`port` rather than Server/Database, and auth=NONE for a cluster started
+        # with DISABLE_SECURITY_PLUGIN=true.
+        env="OPENSEARCH_ODBC_DRIVER",
+        conn="Driver={drv};host=127.0.0.1;port=19200;auth=NONE;useSSL=0;",
+        # read_only, for two independent reasons: the SQL plugin is a query interface
+        # (SELECT, SHOW and DESCRIBE are the whole grammar -- there is no CREATE TABLE
+        # and no INSERT, documents are written over the REST API), and the driver
+        # answers SQLBindParameter with "OpenSearch does not support parameters".  Both
+        # indices are loaded out of band; see fixtures/load_opensearch.py.
+        read_only=True,
+        params=False,  # no SQLBindParameter: the parameterised SELECT runs as a literal
+        # A "..." is not an identifier here: OpenSearch SQL quotes with the backtick and
+        # reads "adbc_big" as an index literally called `"adbc_big"` ("no such index").
+        # This is the same fact as the `greptimedb` entry's `quote`.
+        quote="`",
+        # ddl is documentation here (nothing executes it): this is the SQL shape of the
+        # index mapping load_opensearch.py creates.  `n` and `b` are keyword fields --
+        # OpenSearch has neither DECIMAL nor a binary type -- and `d`/`ts` are one field
+        # type, `date`, which the SQL plugin types DATE for a date-only format and
+        # TIMESTAMP for one carrying a time.
+        ddl="CREATE TABLE adbc_t (i BIGINT, f DOUBLE, s VARCHAR, b VARCHAR, d DATE,"
+            " ts TIMESTAMP, n VARCHAR, bo BOOLEAN)",
+        # The driver's type table maps the SQL plugin's `date` but not its `timestamp`
+        # (a type name the plugin grew after the driver was last released), so `ts` is
+        # described as a VARCHAR and arrives as "2024-02-29 13:45:10.123".
+        ts_text=True,
+        # No binary type: the two bytes are stored as text, as for `cratedb`.
+        binary_text="\\x0102",
+        # No DECIMAL either; `n` is a keyword field read back as its exact digits.
+        decimal_type="string",
+        # SQLColumns reports an index's fields in mapping order, which is neither the
+        # workload's nor alphabetical, so the catalog columns are compared as a set.
+        column_order=False,
+        # adbc_big is 100,000 documents, which is also what bench/matrix_bench.py times
+        # a fetch of on a read_only entry.  plugins.query.size_limit has to allow it --
+        # the loader raises it, see README.md.
+        big_rows=100000,
+        extra=[
+            # The reason to run OpenSearch: a full-text query, expressed in SQL over an
+            # analysed `text` field.  MATCH scores documents by term rather than
+            # comparing whole values, so 'search' hits two of adbc_search's three
+            # documents and 'distributed' exactly one.
+            ("SELECT COUNT(*) FROM adbc_search WHERE MATCH(body, 'search')", (2,)),
+            ("SELECT id FROM adbc_search WHERE MATCH_QUERY(body, 'distributed')", (1,)),
+            # ... and an aggregation pushed down to the search engine over the 100,000
+            # documents the read side already scans.
+            ("SELECT COUNT(*), MIN(a), MAX(a) FROM adbc_big", (100000, 0, 99999)),
+            ("SELECT e, COUNT(*) FROM adbc_big GROUP BY e ORDER BY e", (False, 50000)),
+        ]),
     "access": dict(
         env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
         # No server: MDB Tools opens an .mdb file. It is read-only (it executes no DDL and
@@ -1025,6 +1080,13 @@ def run(name, cfg):
         assert r1["s"] == "héllo 🚀" or (not cfg.get("astral", True) and r1["s"].startswith("héllo")), r1["s"]
         assert r1["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), r1["d"]
         ts = r1["ts"]
+        # ts_text: the ODBC driver has no mapping for the server's timestamp type and
+        # describes such a column as a character one, so the timestamp arrives as its
+        # text (OpenSearch: the SQL plugin types a date-and-time field TIMESTAMP, a name
+        # the driver's type table does not know, and everything unknown is VARCHAR).  The
+        # value is still the right one, so parse it and check it the same way.
+        if cfg.get("ts_text") and isinstance(ts, str):
+            ts = datetime.datetime.fromisoformat(ts)
         assert ts.replace(microsecond=0) == datetime.datetime(2024, 2, 29, 13, 45, 10), ts
         # ts_us: servers whose TIMESTAMP is coarser than a microsecond (Firebird: 1/10000 s)
         assert ts.microsecond in cfg.get("ts_us", (123456, 123000)), ts
