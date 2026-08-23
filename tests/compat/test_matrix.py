@@ -7,7 +7,8 @@ Each database is enabled by an environment variable holding the path to its ODBC
     SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, POSTGRES_ODBC_DRIVER, MARIADB_ODBC_DRIVER,
     MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER,
     DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
-    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER,
+    ACCESS_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -116,6 +117,28 @@ DBS = {
             ('SELECT "b", "c" FROM "adbc_ht{sfx}" WHERE "a" = 3', ("r", None)),
             ('SELECT count(DISTINCT time_bucket(INTERVAL \'7 days\', "d")) FROM "adbc_ht{sfx}"', (3,)),
         ]),
+    "cratedb": dict(
+        # CrateDB speaks the PostgreSQL wire protocol (it announces itself as PostgreSQL
+        # 14), so psqlodbc drives it, but its type system is its own: there is no binary
+        # column type at all (blobs live in separate blob tables, outside SQL) and no
+        # DATE storage type -- "Type `date` does not support storage" -- so `b` is TEXT
+        # and `d` is TIMESTAMP here.  NUMERIC needs an explicit precision and scale.
+        env="CRATEDB_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15440;Database=doc;Uid=crate;",
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b TEXT,"
+            " d TIMESTAMP, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        # Writes become visible to a scan only when the table's shards refresh (once a
+        # second by default), so every write here is followed by an explicit refresh.
+        refresh='REFRESH TABLE "{}"',
+        # The generated ingest DDL takes its type names from psqlodbc's SQLGetTypeInfo,
+        # which is PostgreSQL's: "date" (CrateDB has no such storage type) and "bool"
+        # (CrateDB spells it BOOLEAN and has no alias).  Send those two columns as types
+        # CrateDB does have, so create/append/replace ingest is still exercised in full.
+        ingest_types={pa.date32(): pa.timestamp("us"), pa.bool_(): pa.int8()},
+        # `b` is text, so the bytes arrive as psqlodbc's bytea hex escape; TIMESTAMP is
+        # millisecond-precision; and CrateDB does not report the precision/scale of a
+        # NUMERIC column over the wire, so psqlodbc falls back to its own default (28, 6)
+        # instead of the declared (10, 3).
+        binary_text="\\x0102", decimal_type="decimal128(28, 6)", ts_us=(123000,)),
     "firebird": dict(
         env="FIREBIRD_ODBC_DRIVER",
         conn="Driver={drv};DBNAME=inet://127.0.0.1:13050//var/lib/firebird/data/adbc.fdb;UID=adbc;PWD=adbc;CHARSET=UTF8;",
@@ -197,6 +220,7 @@ def run(name, cfg):
             cur.executemany("INSERT INTO %s VALUES (?, ?, ?, ?, ?, ?, ?, ?)" % t_name, rows)
             if not cfg.get("null_params", True):
                 cur.execute("INSERT INTO %s VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)" % t_name)
+            refresh(cur, cfg, t_name)
         # MDB Tools' SQL parser has no ORDER BY, so read_only sorts client-side instead.
         cur.execute("SELECT * FROM %s" % t_name if ro else "SELECT * FROM %s ORDER BY i" % t_name)
         t = cur.fetch_arrow_table()
@@ -204,7 +228,10 @@ def run(name, cfg):
         got.sort(key=lambda r: r["i"])
         r1, r2 = got
         assert r1["i"] == 1 and r1["f"] == 1.5, r1
-        assert r1["b"] in (b"\x01\x02", "\x01\x02"), r1["b"]
+        # binary_text: the server has no binary column type at all (CrateDB), so the
+        # bytes land in a text column exactly as the ODBC driver encoded them -- for
+        # psqlodbc that is PostgreSQL's bytea hex escape, "\x0102".
+        assert r1["b"] in (b"\x01\x02", "\x01\x02", cfg.get("binary_text")), r1["b"]
         assert r1["s"] == "héllo 🚀" or (not cfg.get("astral", True) and r1["s"].startswith("héllo")), r1["s"]
         assert r1["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), r1["d"]
         ts = r1["ts"]
@@ -247,6 +274,7 @@ def run(name, cfg):
             else:
                 sql = "ingest into " + step[0].format(sfx=SUFFIX)
                 got = (cur.adbc_ingest(step[0].format(sfx=SUFFIX), step[1], mode="append"),)
+                refresh(cur, cfg, step[0].format(sfx=SUFFIX))
             assert expected is None or got == expected, (sql, got)
         # error path
         try:
@@ -271,6 +299,30 @@ def run(name, cfg):
     return "PASS  (%s %s)" % (info["vendor_name"], info["vendor_version"])
 
 
+def refresh(cur, cfg, table):
+    """Make a write visible to the next scan on an eventually consistent store.
+
+    `refresh` is the statement that does it, "{}" taking the table name (CrateDB
+    refreshes a table's shards once a second, so a scan issued right after an INSERT
+    still sees the table as it was before it).  Unset everywhere else: a no-op.
+    """
+    if cfg.get("refresh"):
+        cur.execute(cfg["refresh"].format(table))
+
+
+def ingest_payload(cfg, cols):
+    """Build an ingest payload, applying the entry's `ingest_types` substitutions.
+
+    `ingest_types` maps an Arrow type to the one to send instead, for a server that
+    has no column type the ingest's generated DDL could name for it (CrateDB has no
+    DATE column type, and no `bool` spelling of BOOLEAN).  Substituting a type the
+    server does have keeps the rest of the ingest -- create, append, replace -- under
+    test instead of stopping at the CREATE.
+    """
+    cast = cfg.get("ingest_types", {})
+    return pa.table({k: v.cast(cast[v.type]) if v.type in cast else v for k, v in cols.items()})
+
+
 def check_big(cur, cfg, sql):
     """Read a table of big_rows (a, b) rows, crossing the reader's batch boundary."""
     n = cfg.get("big_rows", 5000)
@@ -283,7 +335,7 @@ def check_big(cur, cfg, sql):
 
 def check_ingest(cur, cfg, ing_name):
     """Bulk ingest, read back, then ingest big_rows rows and read those back."""
-    tbl = pa.table({
+    tbl = ingest_payload(cfg, {
         "a": pa.array([1, 2, None], pa.int64()),
         "b": pa.array(["x", None, "zz"]),
         "c": pa.array([1.5, None, 2.5]),
@@ -293,14 +345,22 @@ def check_ingest(cur, cfg, ing_name):
     n1 = cur.adbc_ingest(ing_name, tbl, mode="create")
     n2 = cur.adbc_ingest(ing_name, tbl, mode="append")
     assert (n1, n2) == (3, 3) or not cfg.get("rowcount", True), (n1, n2)
+    refresh(cur, cfg, ing_name)
     cur.execute('SELECT "a", "b", "c", "d" FROM "%s" WHERE "a" = 2' % ing_name)
     got = cur.fetch_arrow_table().to_pylist()
-    assert len(got) == 2 and got[0]["b"] is None and got[0]["c"] is None and got[0]["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), got
+    # The ingest DDL asks the driver for a date (or, where the server has no date type,
+    # a timestamp) column; a server whose timestamp carries a zone -- psqlodbc's
+    # SQL_TYPE_TIMESTAMP is "timestamptz" -- hands back an aware datetime in UTC.
+    d = got[0]["d"]
+    if isinstance(d, datetime.datetime) and d.tzinfo is not None:
+        d = d.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    assert len(got) == 2 and got[0]["b"] is None and got[0]["c"] is None and d in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), got
     # bigger result to cross batch boundaries
     N = cfg.get("big_rows", 5000)
-    cur.adbc_ingest(ing_name, pa.table({"a": pa.array(range(N), pa.int64()), "b": pa.array(["r%d" % i for i in range(N)]),
-                                        "c": pa.array([float(i) for i in range(N)]), "d": pa.array([i for i in range(N)], pa.date32()),
-                                        "e": pa.array([i % 2 == 0 for i in range(N)])}), mode="replace")
+    cur.adbc_ingest(ing_name, ingest_payload(cfg, {"a": pa.array(range(N), pa.int64()), "b": pa.array(["r%d" % i for i in range(N)]),
+                                                   "c": pa.array([float(i) for i in range(N)]), "d": pa.array([i for i in range(N)], pa.date32()),
+                                                   "e": pa.array([i % 2 == 0 for i in range(N)])}), mode="replace")
+    refresh(cur, cfg, ing_name)
     check_big(cur, cfg, 'SELECT "a", "b" FROM "%s" ORDER BY "a"' % ing_name)
 
 

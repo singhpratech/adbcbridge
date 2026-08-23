@@ -46,7 +46,14 @@ void OdbcHandleRefRelease(struct OdbcHandleRef* ref) {
 // 32-bit-SQLLEN driver quirk wrappers (see OdbcReaderOptions::sqllen_32bit)
 
 SQLLEN OdbcRowCount(SQLHSTMT hstmt, bool sqllen_32bit) {
-  SQLLEN count = 0;  // zeroed so the driver's low 32 bits are the whole value
+  // Pre-filled with all-ones, which reads as -1 at either SQLLEN width: a driver
+  // that returns success without writing the out-parameter then says "unknown"
+  // rather than "no rows".  psqlodbc does exactly that for a statement executed
+  // inside an explicit transaction against a server that sends no row count with
+  // its command tag (CrateDB), and a silent 0 there is indistinguishable from a
+  // statement that really affected nothing.
+  SQLLEN count;
+  memset(&count, 0xff, sizeof(count));
   if (!SQL_SUCCEEDED(SQLRowCount(hstmt, &count))) return -1;
   return OdbcReadLen(&count, sqllen_32bit);
 }

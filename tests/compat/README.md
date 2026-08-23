@@ -567,6 +567,118 @@ docker compose -f tests/compat/docker-compose.yml down timescaledb
 docker stop adbcbridge-timescale && docker rm adbcbridge-timescale
 ```
 
+## CrateDB 6
+
+CrateDB is a distributed SQL database on top of Lucene. It speaks the PostgreSQL wire
+protocol (announcing itself as PostgreSQL 14), so the same `psqlodbc` build used for the
+`postgres` entry drives it — there is no CrateDB ODBC driver.
+
+### Get the ODBC driver without root
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export CRATEDB_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d cratedb
+# or standalone:
+docker run -d --name adbcbridge-cratedb --memory=2g -p 127.0.0.1:15440:5432 \
+  -e CRATE_HEAP_SIZE=512m crate crate -Cdiscovery.type=single-node
+```
+
+`-Cdiscovery.type=single-node` skips the cluster bootstrap, and `CRATE_HEAP_SIZE` caps
+the JVM heap (unset, it takes a quarter of host RAM). The compose service sits in the
+`extra` profile so a plain `up -d` does not start it. It takes a few seconds and is
+ready when this prints a version:
+
+```sh
+docker exec adbcbridge-cratedb crash -c "SELECT version['number'] FROM sys.nodes"
+```
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py cratedb
+# cratedb   PASS  (PostgreSQL (via ODBC) 14.0.0)
+```
+
+### Notes
+
+CrateDB is the first entry that is PostgreSQL on the wire but not in its type system,
+and the first that is eventually consistent. What that costs the entry:
+
+* **`refresh`.** A row is queryable only after the table's shards refresh, which happens
+  once a second (`refresh_interval`), so a `SELECT` issued immediately after an `INSERT`
+  or an `adbc_ingest` legitimately returns nothing. The entry sets
+  `refresh='REFRESH TABLE "{}"'` and `test_matrix.py` runs it after each write. This is
+  a property of the database, not of the driver: `REFRESH TABLE` is CrateDB's own
+  read-your-writes statement.
+* **No binary type.** CrateDB has no `BYTEA`/`BLOB` column type at all — blobs live in
+  separate blob tables addressed over HTTP, outside SQL. `b` is therefore `TEXT`, and
+  the bytes of a `SQL_C_BINARY` parameter arrive as whatever the ODBC driver encoded
+  them to, for psqlodbc PostgreSQL's bytea hex escape (`binary_text="\x0102"`).
+* **No `DATE` column type.** `CREATE TABLE t (d DATE)` fails with ``Type `date` does not
+  support storage``; only `TIMESTAMP` can hold a date, so `d` is `TIMESTAMP` in the DDL.
+* **`ingest_types`.** The DDL `adbc_ingest(mode="create")` generates takes its type
+  names from the driver's `SQLGetTypeInfo`, which for psqlodbc is PostgreSQL's: `date`
+  (above) and `bool` (CrateDB spells it `BOOLEAN` and accepts no alias). The entry maps
+  `date32 -> timestamp[us]` and `bool -> int8` so the ingest is still exercised in full.
+  A CrateDB user hitting this in their own code has the same two substitutions to make;
+  nothing in the ODBC metadata identifies the server as CrateDB rather than PostgreSQL,
+  so the driver cannot make them for you.
+* **`decimal_type`.** CrateDB does not report a `NUMERIC` column's precision and scale
+  over the wire, so psqlodbc falls back to its own default and the declared
+  `NUMERIC(10,3)` arrives as `decimal128(28, 6)`. The value itself is exact.
+* **`ts_us`.** CrateDB timestamps are millisecond-precision: `13:45:10.123456` reads
+  back as `13:45:10.123`.
+
+Benchmark (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`): ingest 626 rows/s
+row-at-a-time, 511 rows/s with parameter arrays (pyodbc `executemany`: 162 rows/s), fetch
+767k rows/s (pyodbc 552k). Ingest is slow in absolute terms because every `INSERT` is a
+distributed write into Lucene; parameter arrays do not help, since psqlodbc sends each
+set as its own bind/execute over the wire either way.
+
+### Driver fix: a row count the driver never wrote
+
+The first run reported `0` rows ingested for an ingest that had in fact inserted every
+row. Root cause, from a standalone ODBC probe (no adbcbridge involved): with a parameter
+array of three sets, psqlodbc against CrateDB behaves differently depending on whether a
+transaction is open —
+
+```
+direct, autocommit           ret=0 processed=3 first RowCount=1 total=3
+prepared, autocommit         ret=0 processed=3 first RowCount=1 total=3
+direct, in transaction       ret=0 processed=3 first RowCount=-99 total=0
+prepared, in transaction     ret=0 processed=3 first RowCount=-99 total=0
+```
+
+`-99` is the value the probe pre-filled: inside a transaction `SQLRowCount` returns
+`SQL_SUCCESS` **without writing the out-parameter at all**. adbcbridge batches a
+multi-row execute into one transaction, and its `OdbcRowCount()` zeroed the variable
+first (for the 32-bit-`SQLLEN` quirk), so "not written" read as "0 rows affected".
+
+The fix is in `OdbcRowCount()` (`src/odbc_reader.c`) and is generic, not keyed on any
+driver: pre-fill the variable with all-ones, which reads as `-1` at either `SQLLEN`
+width, so a driver that answers without writing says *unknown* rather than *none*. `-1`
+is what ODBC and ADBC already use for an unavailable row count, and every driver in the
+matrix that does write the out-parameter is unaffected (checked with the same probe:
+sqliteodbc writes `0` after DDL, `1` after a single-row `INSERT`).
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down cratedb
+# or, if started standalone:
+docker rm -f adbcbridge-cratedb
+```
+
 ## Microsoft Access (MDB Tools)
 
 No server: MDB Tools reads an Access `.mdb`/`.accdb` file directly. Getting the driver

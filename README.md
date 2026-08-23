@@ -123,6 +123,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | YugabyteDB 2026.1 (YSQL) | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; YSQL is PostgreSQL 15, and its internal row id is a system column so `GetObjects` is unaffected) |
 | MonetDB 11.55 (Dec2025-SP3) | MonetDBODBClib 11.55 | PASS (driver quirk handled: no usable parameter arrays — executes only the first set) |
 | TimescaleDB 2.29 (PostgreSQL 16) | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; also ingests into and reads back a `create_hypertable()` hypertable) |
+| CrateDB 6.4 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (driver quirk handled: psqlodbc reports no row count inside a transaction; server side: eventually consistent, so reads follow `REFRESH TABLE`, and it has no binary and no `DATE` column type) |
 | IBM Db2 12.1 | Db2 CLI driver (clidriver `libdb2.so`) | PASS (driver quirk handled: 32-bit `SQLLEN` — see `adbc.odbc.sqllen_32bit`) |
 | Firebird 5 | Firebird ODBC 3.5.0-rc1 | PASS (driver quirks handled: `SQL_C_WCHAR` sized in 4-byte `wchar_t`, no usable parameter arrays) |
 | Microsoft Access `.mdb`/`.accdb` | MDB Tools 1.0 (`odbc-mdbtools`) | PASS, read side only — the driver executes no DDL/DML and has no `SQLBindParameter` (32-bit `SQLLEN`, as Db2) |

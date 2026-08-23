@@ -42,8 +42,10 @@ TABLE = "adbc_bench" + os.environ.get("ADBC_MATRIX_SUFFIX", "")
 COLS = ["id", "val", "txt", "dt"]
 
 
-def make_table(n):
-    return pa.table({
+def make_table(n, cfg):
+    # ingest_payload applies the entry's `ingest_types`, for a server with no column
+    # type the generated DDL could name for one of these (CrateDB has no DATE).
+    return m.ingest_payload(cfg, {
         "id": pa.array(range(n), pa.int32()),
         "val": pa.array([i * 0.5 for i in range(n)], pa.float64()),
         "txt": pa.array(["row-%012d" % i for i in range(n)]),
@@ -115,6 +117,9 @@ def time_ingest(uri, cfg, ident, tbl, array_binding, autocommit=True):
             if not autocommit:
                 conn.commit()
             dt = time.perf_counter() - t0
+            # Outside the timing: making the rows visible to a scan is a read-side step
+            # on an eventually consistent store, not part of writing them.
+            m.refresh(cur, cfg, TABLE)
         got = count(conn, ident)
         if got != tbl.num_rows:
             return dict(error="wrong row count %d != %d" % (got, tbl.num_rows))
@@ -155,6 +160,7 @@ def time_pyodbc_ingest(uri, cfg, ident, tbl):
         if not pc.autocommit:
             pc.commit()
         dt = time.perf_counter() - t0
+        m.refresh(cur, cfg, TABLE)
         conn = connect(uri, cfg, **{"adbc.odbc.delegate": "never"})
         try:
             got = count(conn, ident)
@@ -276,7 +282,7 @@ def bench(name, cfg):
                              **{"adbc.odbc.delegate": "never"})
         return r
     conn.close()
-    tbl = make_table(args.rows)
+    tbl = make_table(args.rows, cfg)
     # Autocommit on: the driver batches the whole stream into one transaction itself.
     # (Firebird also cannot INSERT into a table created in the same open transaction.)
     # *array* is the driver default: parameter arrays unless the driver is known to
@@ -286,7 +292,7 @@ def bench(name, cfg):
     r["ingest_array"] = attempt(time_ingest, uri, cfg, ident, tbl, None)
     if not args.no_pyodbc:
         r["ingest_pyodbc"] = in_child("ingest", name, uri)
-    big = make_table(args.fetch_rows)
+    big = make_table(args.fetch_rows, cfg)
     # Load the fetch table with whichever ingest path works; fall back to the slow one.
     loaded = attempt(time_ingest, uri, cfg, ident, big, None)
     if "error" in loaded:
@@ -319,7 +325,7 @@ if args._child:
     uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=os.environ[cfg["env"]])
     ident = cfg.get("ident", lambda x: x)
     if fn_name == "ingest":
-        res = attempt(time_pyodbc_ingest, uri, cfg, ident, make_table(args.rows))
+        res = attempt(time_pyodbc_ingest, uri, cfg, ident, make_table(args.rows, cfg))
     else:
         res = attempt(time_pyodbc_fetch, uri, cfg, ident, args.fetch_rows)
     print(json.dumps(res))

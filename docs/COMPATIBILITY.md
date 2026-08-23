@@ -29,6 +29,7 @@ from the second table to the first.
 | CockroachDB 26 | psqlodbc (PG wire) | PASS | |
 | YugabyteDB 2026.1 | psqlodbc (PG wire) | PASS | |
 | TimescaleDB 2.29 | psqlodbc (PG wire) | PASS | |
+| CrateDB 6.4 | psqlodbc (PG wire) | PASS | eventually consistent (`REFRESH TABLE`); no binary or `DATE` column type; ingest 626 rows/s, fetch 767k rows/s |
 | MonetDB 11.55 | MonetDBODBClib | PASS | no usable parameter arrays; `SQLEndTran` unreliable under pyodbc |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
@@ -40,7 +41,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Database | Wire / driver | Server | Status |
 |---|---|---|---|
 | H2 (PG mode) | psqlodbc | `java -jar h2.jar -pg` | queued |
-| CrateDB | psqlodbc | `crate` | queued |
 | QuestDB | psqlodbc | `questdb/questdb` | queued |
 | Citus | psqlodbc | `citusdata/citus` | queued |
 | RisingWave | psqlodbc | `risingwavelabs/risingwave` | queued |

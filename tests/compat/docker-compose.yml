@@ -56,3 +56,14 @@ services:
       --master_flags=memory_limit_hard_bytes=402653184,use_memory_defaults_optimized_for_ysql=false
     # 5433 is YSQL, the PostgreSQL wire-protocol port psqlodbc connects to.
     ports: ["127.0.0.1:15433:5433"]
+  # CrateDB (distributed SQL over Lucene) speaks the PostgreSQL wire protocol on 5432.
+  # In the "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d cratedb
+  # discovery.type=single-node skips the bootstrap wait; CRATE_HEAP_SIZE caps the JVM.
+  cratedb:
+    profiles: ["extra"]
+    image: crate
+    command: crate -Cdiscovery.type=single-node
+    environment: { CRATE_HEAP_SIZE: 512m }
+    mem_limit: 2g
+    ports: ["127.0.0.1:15440:5432"]
