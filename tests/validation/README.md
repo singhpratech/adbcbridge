@@ -63,7 +63,7 @@ The exact command used to produce [RESULTS.md](RESULTS.md):
 
 ```shell
 cd <repo>/tests/validation && \
-  SQLITE_ODBC_DRIVER=/tmp/scratch/deb/ex/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so \
+  SQLITE_ODBC_DRIVER=/path/to/deb/ex/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so \
   ADBCBRIDGE_VALIDATION_DB=/tmp/adbcbridge-validation.sqlite \
   ../../.venv-validation/bin/python -m pytest -q -rA --junitxml=/tmp/junit.xml
 ```
