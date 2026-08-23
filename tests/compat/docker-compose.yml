@@ -143,3 +143,14 @@ services:
     environment: { ACCEPT_EULA: "1", MSSQL_SA_PASSWORD: "Adbc!Bridge2026" }
     mem_limit: 2g
     ports: ["127.0.0.1:14332:1433"]
+  # Materialize: a streaming warehouse with incrementally maintained materialized views,
+  # reachable over the PostgreSQL wire protocol (psqlodbc drives it).  In the "extra"
+  # profile, so a plain `up -d` leaves it alone:
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d materialize
+  # The single-node image needs no configuration: it comes up with one `materialize`
+  # superuser, no authentication and a `materialize` database.
+  materialize:
+    image: materialize/materialized:latest
+    profiles: ["extra"]
+    mem_limit: 2g
+    ports: ["127.0.0.1:16875:6875"]

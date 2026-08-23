@@ -40,6 +40,7 @@ from the second table to the first.
 | Databend | MySQL Connector/ODBC (MySQL wire) | PASS | no prepared statements (`NO_SSPS=1`); `_binary` literals; MySQL type names in ingest DDL |
 | Azure SQL Edge 16.0 | msodbcsql 18 | PASS | SQL Server 2022 engine; no quirks |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
+| Materialize 26.38 | psqlodbc (PG wire) | PASS | streaming warehouse; PostgreSQL SQL layer, so no driver quirks -- but no `SAVEPOINT`, so psqlodbc needs `Protocol=7.4-0` for an ingest big enough to split into a second batch; `NUMERIC` is 39 digits, past decimal128, so it reads back as an exact string; also ingests into and reads back an incrementally maintained `MATERIALIZED VIEW`; ingest 6.5k rows/s (array binding), fetch 248k rows/s |
 
 ## Driver available, free server available — queued for verification
 
@@ -48,7 +49,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Database | Wire / driver | Server | Status |
 |---|---|---|---|
 | RisingWave | psqlodbc | `risingwavelabs/risingwave` | queued |
-| Materialize | psqlodbc | `materialize/materialized` | queued |
 | openGauss | psqlodbc | `enmotech/opengauss` | queued |
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |
 | MatrixOne | MySQL Connector/ODBC | `matrixorigin/matrixone` | queued |

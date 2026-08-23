@@ -13,7 +13,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DOLT_ODBC_DRIVER
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DATABEND_ODBC_DRIVER
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER, CITUS_ODBC_DRIVER,
-    QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER
+    QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MATERIALIZE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -240,6 +240,58 @@ DBS = {
             ('SELECT "b", "c" FROM "adbc_dist{sfx}" WHERE "a" = 3', ("r", None)),
             # An aggregate is planned across the shards and merged on the coordinator.
             ('SELECT count(*), sum("a") FROM "adbc_dist{sfx}"', (4, 10)),
+        ]),
+    "materialize": dict(
+        # Materialize is a streaming warehouse whose views are incrementally maintained.
+        # It speaks the PostgreSQL wire protocol and announces itself as PostgreSQL 9.5,
+        # so psqlodbc drives it and the `postgres` entry's DDL applies unchanged --
+        # INTEGER, DOUBLE PRECISION, VARCHAR, BYTEA, DATE, TIMESTAMP and BOOLEAN are all
+        # PostgreSQL's, and so are the type names psqlodbc's SQLGetTypeInfo puts in the
+        # generated ingest DDL.  It needs no password (the single-node image ships one
+        # `materialize` superuser and no authentication).
+        # Protocol=7.4-0 is psqlodbc's setting, not Materialize's: it turns off the
+        # per-statement SAVEPOINT the driver wraps a repeated execute in once it is
+        # inside a transaction.  Materialize has no SAVEPOINT statement, so a bulk
+        # ingest big enough for psqlodbc to split into a second batch fails the whole
+        # batch with `Expected a keyword at the beginning of a statement, found
+        # identifier "savepoint"` (42601).  Where psqlodbc splits depends on the size of
+        # the statement text it inlines the values into, so this entry's own 5000 narrow
+        # rows still go as one batch and pass without the setting; bench/matrix_bench.py's
+        # wider rows split at about 4000 and do not.
+        env="MATERIALIZE_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=16875;Database=materialize;Uid=materialize;"
+             "Protocol=7.4-0;",
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA,"
+            " d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        # Materialize has one arbitrary-precision `numeric` type: NUMERIC(10,3) keeps the
+        # requested scale but not the precision, and the column is described at the type's
+        # own maximum of 39 digits.  That is past what an Arrow decimal128 can hold (38),
+        # so the reader falls back to its exact string form -- no precision is lost.
+        decimal_type="string",
+        # The standard workload alone would be a duplicate of `postgres`, so the `extra`
+        # steps exercise the reason to run Materialize: a MATERIALIZED VIEW is not a
+        # snapshot to be refreshed but a dataflow kept up to date as its inputs change.
+        # These ingest through ADBC into the view's input and read the aggregate straight
+        # back, which passes only if the write really did flow through to the view.
+        extra=[
+            ('DROP MATERIALIZED VIEW IF EXISTS "adbc_mv{sfx}"', None),
+            ('DROP TABLE IF EXISTS "adbc_src{sfx}"', None),
+            # Column names/types match EXTRA_ROWS: the ingest below appends into it.
+            ('CREATE TABLE "adbc_src{sfx}" ("a" BIGINT, "b" VARCHAR(20),'
+             ' "c" DOUBLE PRECISION, "d" DATE, "e" BOOLEAN)', None),
+            # sum() over a BIGINT is `numeric` in Materialize as in PostgreSQL, and a
+            # 39-digit numeric reads back as a string (see decimal_type above); the cast
+            # keeps this assertion about the view rather than about decimal mapping.
+            ('CREATE MATERIALIZED VIEW "adbc_mv{sfx}" AS SELECT "e", count(*) AS "n",'
+             ' sum("a")::BIGINT AS "s" FROM "adbc_src{sfx}" GROUP BY "e"', None),
+            (("adbc_src{sfx}", EXTRA_ROWS), (4,)),   # bulk ingest into the view's input
+            # Materialize really owns the view -- it is a dataflow, listed as such.
+            ("SELECT count(*) FROM mz_materialized_views WHERE name = 'adbc_mv{sfx}'", (1,)),
+            # The four ingested rows reached the maintained view: three groups
+            # (e = true/false/NULL), with a = 1 and 4 in the `true` one.
+            ('SELECT count(*) FROM "adbc_mv{sfx}"', (3,)),
+            ('SELECT "n", "s" FROM "adbc_mv{sfx}" WHERE "e"', (2, 5)),
+            ('SELECT "n", "s" FROM "adbc_mv{sfx}" WHERE "e" IS NULL', (1, 2)),
         ]),
     "cratedb": dict(
         # CrateDB speaks the PostgreSQL wire protocol (it announces itself as PostgreSQL

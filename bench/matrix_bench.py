@@ -329,10 +329,6 @@ if args._child:
     for kv in cfg.get("unicode_env", "").split():
         k, v = kv.split("=", 1); os.environ.setdefault(k, v)
     uri = m.conn_uri(name, cfg, os.environ[cfg["env"]])
-    drv = os.environ[cfg["env"]]
-    uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(
-        drv=drv, drvdir=os.path.dirname(drv))
-    uri = m.conn_uri(name, cfg)
     ident = cfg.get("ident", lambda x: x)
     if fn_name == "ingest":
         res = attempt(time_pyodbc_ingest, uri, cfg, ident, make_table(args.rows, cfg))
