@@ -253,3 +253,115 @@ def test_types():
 
 if __name__ == "__main__":
     test_types()
+
+
+def test_metadata():
+    """GetInfo / GetObjects / ingest-conflict contract (validation findings D1-D7)."""
+    import pyarrow as pa
+
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "meta.db")
+    with connect(db) as conn:
+        # --- D1: the driver name is adbcbridge's own, stable identity -----
+        info = conn.adbc_get_info()
+        assert info["driver_name"] == "ADBC ODBC Driver", info["driver_name"]
+        # The backing ODBC driver is reported as vendor context and through an
+        # adbcbridge-specific connection option, never inside driver_name.
+        assert info["vendor_name"] == "SQLite (via ODBC)", info["vendor_name"]
+        odbc_driver = conn.adbc_connection.get_option("adbc.odbc.driver_name")
+        assert "sqlite" in odbc_driver.lower(), odbc_driver
+
+        # --- D2: the Arrow version is a bare version string ---------------
+        av = info["driver_arrow_version"]
+        assert av.startswith("v") and av[1:].replace(".", "").isdigit(), av
+
+        with conn.cursor() as cur:
+            cur.execute("CREATE TABLE pk1 (a INTEGER NOT NULL PRIMARY KEY)")
+            cur.execute("CREATE TABLE fk1 (b INTEGER, FOREIGN KEY (b) REFERENCES pk1 (a))")
+
+        # --- D3: depth=catalogs is never empty ----------------------------
+        cats = conn.adbc_get_objects(depth="catalogs").read_all().to_pylist()
+        names = [c["catalog_name"] for c in cats]
+        assert len(names) >= 1, names
+        assert len(set(names)) == len(names), names
+        # SQLite has exactly one, unnamed, catalog; it must still be listed.
+        assert None in names, names
+        schemas = [
+            (c["catalog_name"], s["db_schema_name"])
+            for c in conn.adbc_get_objects(depth="db_schemas").read_all().to_pylist()
+            for s in c["catalog_db_schemas"] or []
+        ]
+        assert (None, None) in schemas, schemas
+
+        # --- D4: catalog / db_schema filters are honoured ------------------
+        def objs(**kw):
+            return conn.adbc_get_objects(**kw).read_all().to_pylist()
+
+        def tables_of(rows):
+            return [
+                t["table_name"]
+                for c in rows
+                for s in c["catalog_db_schemas"] or []
+                for t in s["db_schema_tables"] or []
+            ]
+
+        assert objs(depth="catalogs", catalog_filter="nosuchcatalog") == []
+        assert tables_of(objs(depth="tables", catalog_filter="nosuchcatalog")) == []
+        assert tables_of(objs(depth="tables", db_schema_filter="nosuchschema")) == []
+        # A NULL filter means "no filtering"; an empty filter names the unnamed catalog.
+        assert "pk1" in tables_of(objs(depth="tables"))
+        assert "pk1" in tables_of(objs(depth="tables", catalog_filter=""))
+        # LIKE wildcards are applied, not compared literally.
+        assert tables_of(objs(depth="tables", catalog_filter="no%catalog")) == []
+
+        # --- D5/D6: constraint usage is NULL where it does not apply -------
+        all_objs = objs(depth="all")
+        by_name = {
+            t["table_name"]: t
+            for c in all_objs
+            for s in c["catalog_db_schemas"] or []
+            for t in s["db_schema_tables"] or []
+        }
+        pk = [c for c in by_name["pk1"]["table_constraints"]
+              if c["constraint_type"] == "PRIMARY KEY"]
+        assert len(pk) == 1, pk
+        # Not an empty list: a primary key references nothing at all.
+        assert pk[0]["constraint_column_usage"] is None, pk[0]
+
+        fk = [c for c in by_name["fk1"]["table_constraints"]
+              if c["constraint_type"] == "FOREIGN KEY"]
+        assert len(fk) == 1, fk
+        usage = fk[0]["constraint_column_usage"]
+        assert len(usage) == 1, usage
+        # SQLiteODBC reports the absent catalog/schema as "", which must become NULL.
+        assert usage[0]["fk_catalog"] is None, usage
+        assert usage[0]["fk_db_schema"] is None, usage
+        assert usage[0]["fk_table"] == "pk1", usage
+        assert usage[0]["fk_column_name"] == "a", usage
+
+        # --- D7: ingest conflicts report ALREADY_EXISTS --------------------
+        data = pa.table({"a": pa.array([1, 2], pa.int64()), "b": pa.array(["x", "y"])})
+        with conn.cursor() as cur:
+            assert cur.adbc_ingest("ing", data, mode="create") == 2
+            for mode, payload in (
+                ("create", data),
+                # create_append cannot append a column the existing table lacks:
+                # the table exists as something other than what was asked for.
+                ("create_append",
+                 data.append_column("extra", pa.array([0, 0], pa.int64()))),
+            ):
+                try:
+                    cur.adbc_ingest("ing", payload, mode=mode)
+                    raise AssertionError("expected ALREADY_EXISTS for mode=%s" % mode)
+                except adbc_driver_manager.Error as e:
+                    assert e.status_code == adbc_driver_manager.AdbcStatusCode.ALREADY_EXISTS, (
+                        mode, e.status_code, str(e))
+            # A matching create_append still appends.
+            assert cur.adbc_ingest("ing", data, mode="create_append") == 2
+            cur.execute("SELECT COUNT(*) FROM ing")
+            assert cur.fetchone()[0] == 4
+    print("METADATA OK")
+
+
+if __name__ == "__main__":
+    test_metadata()

@@ -61,6 +61,10 @@
 /// Bind Arrow batches as ODBC parameter arrays (one execute per batch) when the
 /// driver supports it.  "true"/"false"; default true.
 #define ADBC_ODBC_OPTION_ARRAY_BINDING "adbc.odbc.array_binding"
+/// Read-only: SQL_DRIVER_NAME of the underlying ODBC driver.  ADBC_INFO_DRIVER_NAME
+/// must be a stable identity for adbcbridge itself, so the backing driver's file
+/// name is exposed here (and, as context, in ADBC_INFO_VENDOR_NAME) instead.
+#define ADBC_ODBC_OPTION_DRIVER_NAME "adbc.odbc.driver_name"
 
 #define ADBC_ODBC_DEFAULT_BATCH_SIZE 1024
 #define ADBC_ODBC_DEFAULT_MAX_BIND_BYTES 32768

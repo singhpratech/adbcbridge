@@ -41,8 +41,23 @@ static bool GetIntCol(SQLHSTMT hstmt, SQLUSMALLINT col, int64_t* out) {
   return true;
 }
 
+// Like GetStrCol, but for catalog/schema names: drivers for backends without
+// catalogs or schemas report the absent name as either NULL or an empty string,
+// and ADBC wants NULL for both.
+static char* GetNameCol(SQLHSTMT hstmt, SQLUSMALLINT col) {
+  char* s = GetStrCol(hstmt, col);
+  if (s && !*s) { free(s); return NULL; }
+  return s;
+}
+
 static ArrowErrorCode AppendStrOrNull(struct ArrowArray* a, const char* s) {
   if (!s) return ArrowArrayAppendNull(a, 1);
+  return ArrowArrayAppendString(a, ArrowCharView(s));
+}
+
+// For catalog/schema fields: an empty string means "no catalog/schema", i.e. NULL.
+static ArrowErrorCode AppendNameOrNull(struct ArrowArray* a, const char* s) {
+  if (!s || !*s) return ArrowArrayAppendNull(a, 1);
   return ArrowArrayAppendString(a, ArrowCharView(s));
 }
 
@@ -55,6 +70,59 @@ static int StrCmpNull(const char* a, const char* b) {
 
 static SQLCHAR* Pat(const char* s) { return (SQLCHAR*)s; }
 static SQLSMALLINT PatLen(const char* s) { return s ? SQL_NTS : 0; }
+
+// ---------------------------------------------------------------------------
+// SQL LIKE pattern matching, applied client-side to catalog/schema names.
+//
+// ODBC drivers are permitted to ignore the catalog/schema patterns passed to
+// SQLTables (SQLiteODBC ignores both), so the rows that come back are not
+// necessarily filtered.  Matching is ASCII case-insensitive: LIKE case folding
+// is backend-specific, and being permissive here only risks keeping a row the
+// driver already chose to return, never dropping one it filtered on purpose.
+
+static char AsciiLower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c; }
+
+static bool LikeMatch(const char* pat, const char* s) {
+  const char* star_pat = NULL;
+  const char* star_s = NULL;
+  while (*s) {
+    if (*pat == '%') {
+      star_pat = ++pat;
+      star_s = s;
+      continue;
+    }
+    if (*pat == '_') {
+      pat++;
+      s++;
+      continue;
+    }
+    // Backslash escapes the next character, so "\%" matches a literal '%'.
+    const char* lit = (*pat == '\\' && pat[1]) ? pat + 1 : pat;
+    if (*lit && AsciiLower(*lit) == AsciiLower(*s)) {
+      pat = lit + 1;
+      s++;
+      continue;
+    }
+    if (star_pat) {
+      pat = star_pat;
+      s = ++star_s;
+      continue;
+    }
+    return false;
+  }
+  while (*pat == '%') pat++;
+  return *pat == '\0';
+}
+
+// ADBC filter semantics: a NULL filter means "no filtering"; an empty-string
+// filter means "the unnamed catalog/schema".  A LIKE pattern never matches a
+// name that does not exist, so a NULL name is kept only by a NULL filter.
+static bool NameMatches(const char* pattern, const char* name) {
+  if (!pattern) return true;
+  if (!*pattern) return !name || !*name;
+  if (!name) return false;
+  return LikeMatch(pattern, name);
+}
 
 struct TableRow {
   char* catalog;
@@ -158,7 +226,10 @@ static AdbcStatusCode AppendConstraints(struct OdbcConnection* conn, struct Arro
       CHECK_NA(INTERNAL, AppendStrOrNull(c->children[0], pk_name), error);
       CHECK_NA(INTERNAL, ArrowArrayAppendString(c->children[1], ArrowCharView("PRIMARY KEY")), error);
       CHECK_NA(INTERNAL, ArrowArrayFinishElement(names), error);
-      CHECK_NA(INTERNAL, ArrowArrayFinishElement(usage), error);  // empty usage
+      // constraint_column_usage is nullable precisely so that non-foreign-key
+      // constraints can say "not applicable"; an empty list would instead mean
+      // "a foreign key that references nothing".
+      CHECK_NA(INTERNAL, ArrowArrayAppendNull(usage, 1), error);
       CHECK_NA(INTERNAL, ArrowArrayFinishElement(c), error);
     }
     free(pk_name);
@@ -195,8 +266,10 @@ static AdbcStatusCode AppendConstraints(struct OdbcConnection* conn, struct Arro
       free(fkcol);
       struct ArrowArray* u = usage->children[0];
       char* s;
-      s = GetStrCol(hstmt, 1); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[0], s), error); free(s);
-      s = GetStrCol(hstmt, 2); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[1], s), error); free(s);
+      // PKTABLE_CAT / PKTABLE_SCHEM come back as "" from drivers whose backend has
+      // no catalogs or schemas; ADBC wants NULL there, as for TABLE_CAT/TABLE_SCHEM.
+      s = GetStrCol(hstmt, 1); CHECK_NA(INTERNAL, AppendNameOrNull(u->children[0], s), error); free(s);
+      s = GetStrCol(hstmt, 2); CHECK_NA(INTERNAL, AppendNameOrNull(u->children[1], s), error); free(s);
       s = GetStrCol(hstmt, 3); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[2], s ? s : ""), error); free(s);
       s = GetStrCol(hstmt, 4); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[3], s ? s : ""), error); free(s);
       CHECK_NA(INTERNAL, ArrowArrayFinishElement(u), error);
@@ -223,22 +296,146 @@ static void FreeRows(struct TableRow* rows, size_t n) {
   free(rows);
 }
 
+struct RowList {
+  struct TableRow* rows;
+  size_t n;
+  size_t cap;
+};
+
+// Takes ownership of all four strings, even on failure.
+static bool RowListPush(struct RowList* l, char* catalog, char* schema, char* table, char* type) {
+  if (l->n == l->cap) {
+    size_t cap = l->cap ? l->cap * 2 : 64;
+    struct TableRow* p = realloc(l->rows, cap * sizeof(*p));
+    if (!p) {
+      free(catalog); free(schema); free(table); free(type);
+      return false;
+    }
+    l->rows = p;
+    l->cap = cap;
+  }
+  l->rows[l->n].catalog = catalog;
+  l->rows[l->n].schema = schema;
+  l->rows[l->n].table = table;
+  l->rows[l->n].type = type;
+  l->n++;
+  return true;
+}
+
+// One SQLTables() call, appending its rows to `out`.  `tolerate_failure` is for
+// the SQL_ALL_CATALOGS / SQL_ALL_SCHEMAS probes: drivers whose backend has
+// neither may reject them outright, which is not an error for us.
+static AdbcStatusCode FetchTables(struct OdbcConnection* conn, SQLCHAR* cat, SQLSMALLINT cat_len,
+                                  SQLCHAR* sch, SQLSMALLINT sch_len, SQLCHAR* tbl,
+                                  SQLSMALLINT tbl_len, SQLCHAR* type, SQLSMALLINT type_len,
+                                  bool tolerate_failure, struct RowList* out,
+                                  struct AdbcError* error) {
+  SQLHSTMT hstmt = NULL;
+  ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
+             "SQLAllocHandle", error);
+  SQLRETURN ret = SQLTables(hstmt, cat, cat_len, sch, sch_len, tbl, tbl_len, type, type_len);
+  if (!SQL_SUCCEEDED(ret)) {
+    AdbcStatusCode s = ADBC_STATUS_OK;
+    if (!tolerate_failure) s = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLTables", error);
+    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+    return s;
+  }
+  AdbcStatusCode status = ADBC_STATUS_OK;
+  while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
+    if (!RowListPush(out, GetNameCol(hstmt, 1), GetNameCol(hstmt, 2), GetStrCol(hstmt, 3),
+                     GetStrCol(hstmt, 4))) {
+      InternalAdbcSetError(error, "out of memory");
+      status = ADBC_STATUS_INTERNAL;
+      break;
+    }
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+  return status;
+}
+
+// SQL_ATTR_CURRENT_CATALOG, or NULL when the backend has no catalogs (drivers
+// report that as either a failure or an empty string).
+static char* CurrentCatalog(struct OdbcConnection* conn) {
+  SQLCHAR buf[1024] = {0};
+  SQLINTEGER len = 0;
+  if (!SQL_SUCCEEDED(
+          SQLGetConnectAttr(conn->hdbc, SQL_ATTR_CURRENT_CATALOG, buf, sizeof(buf), &len)))
+    return NULL;
+  if (buf[0] == '\0') return NULL;
+  return strdup((const char*)buf);
+}
+
+// Drop the fields below the requested depth so the rows dedupe cleanly.
+static void TruncateRows(struct RowList* l, int depth) {
+  for (size_t i = 0; i < l->n; i++) {
+    if (depth == ADBC_OBJECT_DEPTH_CATALOGS) {
+      free(l->rows[i].schema);
+      l->rows[i].schema = NULL;
+    }
+    free(l->rows[i].table);
+    free(l->rows[i].type);
+    l->rows[i].table = NULL;
+    l->rows[i].type = NULL;
+  }
+}
+
+static void SortAndDedupe(struct RowList* l) {
+  if (l->n > 1) qsort(l->rows, l->n, sizeof(*l->rows), TableRowCmp);
+  size_t w = 0;
+  for (size_t i = 0; i < l->n; i++) {
+    if (w > 0 && TableRowCmp(&l->rows[w - 1], &l->rows[i]) == 0) {
+      free(l->rows[i].catalog); free(l->rows[i].schema);
+      free(l->rows[i].table); free(l->rows[i].type);
+      continue;
+    }
+    l->rows[w++] = l->rows[i];
+  }
+  l->n = w;
+}
+
 static AdbcStatusCode CollectTables(struct OdbcConnection* conn, int depth, const char* catalog,
                                     const char* db_schema, const char* table_name,
                                     const char** table_type, struct TableRow** out_rows,
                                     size_t* out_n, struct AdbcError* error) {
-  SQLHSTMT hstmt = NULL;
-  ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
-             "SQLAllocHandle", error);
-  SQLRETURN ret;
-  char* types = NULL;
+  struct RowList l = {0};
+  AdbcStatusCode status;
   if (depth == ADBC_OBJECT_DEPTH_CATALOGS) {
-    ret = SQLTables(hstmt, (SQLCHAR*)SQL_ALL_CATALOGS, SQL_NTS, (SQLCHAR*)"", 0, (SQLCHAR*)"", 0,
-                    (SQLCHAR*)"", 0);
+    status = FetchTables(conn, (SQLCHAR*)SQL_ALL_CATALOGS, SQL_NTS, (SQLCHAR*)"", 0, (SQLCHAR*)"", 0,
+                         (SQLCHAR*)"", 0, /*tolerate_failure=*/true, &l, error);
+    if (status == ADBC_STATUS_OK && l.n == 0) {
+      // The driver reports no catalog list (SQLiteODBC returns an empty result
+      // set); derive the catalogs from the full SQLTables listing instead.
+      status = FetchTables(conn, Pat(catalog), PatLen(catalog), NULL, 0, NULL, 0, NULL, 0,
+                           /*tolerate_failure=*/false, &l, error);
+    }
+    TruncateRows(&l, depth);
+    // Every connection is in some catalog, even an unnamed one, so the list must
+    // never be empty: seed it with SQL_ATTR_CURRENT_CATALOG (NULL if unnamed).
+    if (status == ADBC_STATUS_OK && !RowListPush(&l, CurrentCatalog(conn), NULL, NULL, NULL)) {
+      InternalAdbcSetError(error, "out of memory");
+      status = ADBC_STATUS_INTERNAL;
+    }
   } else if (depth == ADBC_OBJECT_DEPTH_DB_SCHEMAS) {
-    ret = SQLTables(hstmt, (SQLCHAR*)"", 0, (SQLCHAR*)SQL_ALL_SCHEMAS, SQL_NTS, (SQLCHAR*)"", 0,
-                    (SQLCHAR*)"", 0);
+    // SQL_ALL_SCHEMAS reports schemas with a NULL TABLE_CAT, so it cannot answer a
+    // catalog-filtered request; use the full listing when a catalog filter is set.
+    if (!catalog) {
+      status = FetchTables(conn, (SQLCHAR*)"", 0, (SQLCHAR*)SQL_ALL_SCHEMAS, SQL_NTS, (SQLCHAR*)"",
+                           0, (SQLCHAR*)"", 0, /*tolerate_failure=*/true, &l, error);
+    } else {
+      status = ADBC_STATUS_OK;
+    }
+    if (status == ADBC_STATUS_OK && l.n == 0) {
+      status = FetchTables(conn, Pat(catalog), PatLen(catalog), Pat(db_schema), PatLen(db_schema),
+                           NULL, 0, NULL, 0, /*tolerate_failure=*/false, &l, error);
+    }
+    TruncateRows(&l, depth);
+    if (status == ADBC_STATUS_OK && l.n == 0 &&
+        !RowListPush(&l, CurrentCatalog(conn), NULL, NULL, NULL)) {
+      InternalAdbcSetError(error, "out of memory");
+      status = ADBC_STATUS_INTERNAL;
+    }
   } else {
+    char* types = NULL;
     if (table_type && table_type[0]) {
       struct InternalAdbcStringBuilder sb;
       InternalAdbcStringBuilderInit(&sb, 64);
@@ -247,32 +444,36 @@ static AdbcStatusCode CollectTables(struct OdbcConnection* conn, int depth, cons
       }
       types = sb.buffer;  // take ownership
     }
-    ret = SQLTables(hstmt, Pat(catalog), PatLen(catalog), Pat(db_schema), PatLen(db_schema),
-                    Pat(table_name), PatLen(table_name), Pat(types), PatLen(types));
+    status = FetchTables(conn, Pat(catalog), PatLen(catalog), Pat(db_schema), PatLen(db_schema),
+                         Pat(table_name), PatLen(table_name), Pat(types), PatLen(types),
+                         /*tolerate_failure=*/false, &l, error);
+    free(types);
   }
-  free(types);
-  if (!SQL_SUCCEEDED(ret)) {
-    AdbcStatusCode s = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLTables", error);
-    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
-    return s;
+  if (status != ADBC_STATUS_OK) {
+    FreeRows(l.rows, l.n);
+    return status;
   }
-  struct TableRow* rows = NULL;
-  size_t n = 0, cap = 0;
-  while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-    if (n == cap) {
-      cap = cap ? cap * 2 : 64;
-      rows = realloc(rows, cap * sizeof(*rows));
+
+  // ODBC drivers may ignore the catalog/schema patterns they were handed, so
+  // enforce them here as well.  The schema filter does not apply at CATALOGS
+  // depth, where no schema is being reported at all.
+  size_t w = 0;
+  for (size_t i = 0; i < l.n; i++) {
+    bool keep = NameMatches(catalog, l.rows[i].catalog) &&
+                (depth == ADBC_OBJECT_DEPTH_CATALOGS ||
+                 NameMatches(db_schema, l.rows[i].schema));
+    if (!keep) {
+      free(l.rows[i].catalog); free(l.rows[i].schema);
+      free(l.rows[i].table); free(l.rows[i].type);
+      continue;
     }
-    rows[n].catalog = GetStrCol(hstmt, 1);
-    rows[n].schema = GetStrCol(hstmt, 2);
-    rows[n].table = GetStrCol(hstmt, 3);
-    rows[n].type = GetStrCol(hstmt, 4);
-    n++;
+    l.rows[w++] = l.rows[i];
   }
-  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
-  if (n > 1) qsort(rows, n, sizeof(*rows), TableRowCmp);
-  *out_rows = rows;
-  *out_n = n;
+  l.n = w;
+
+  SortAndDedupe(&l);
+  *out_rows = l.rows;
+  *out_n = l.n;
   return ADBC_STATUS_OK;
 }
 
@@ -288,8 +489,6 @@ AdbcStatusCode OdbcConnectionGetObjects(struct AdbcConnection* connection, int d
   size_t n = 0;
   RAISE_ADBC(CollectTables(conn, depth, catalog, db_schema, table_name, table_type, &rows, &n, error));
 
-  // In catalog/schema-only listings the driver may filter nothing; apply patterns loosely
-  // (exact-or-null match) so the result is still sensible.
   struct ArrowSchema schema;
   struct ArrowArray array;
   AdbcStatusCode status = InternalAdbcInitConnectionObjectsSchema(&schema, error);

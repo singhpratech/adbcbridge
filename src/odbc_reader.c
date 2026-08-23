@@ -66,6 +66,23 @@ static AdbcStatusCode SqlStateToStatus(const char* s) {
   return ADBC_STATUS_UNKNOWN;
 }
 
+// Case-insensitive substring search over a possibly non-NUL-terminated buffer.
+static bool HaystackContains(const char* hay, size_t hay_len, const char* needle) {
+  size_t nlen = strlen(needle);
+  if (nlen == 0 || hay_len < nlen) return false;
+  for (size_t i = 0; i + nlen <= hay_len; i++) {
+    size_t j = 0;
+    while (j < nlen) {
+      char a = hay[i + j], b = needle[j];
+      if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+      if (a != b) break;
+      j++;
+    }
+    if (j == nlen) return true;
+  }
+  return false;
+}
+
 AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const char* context,
                             struct AdbcError* error) {
   SQLCHAR sqlstate[6] = {0};
@@ -79,8 +96,12 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
 
   SQLSMALLINT rec = 1;
   bool first = true;
+  bool says_already_exists = false;
   while (SQL_SUCCEEDED(SQLGetDiagRec(handle_type, handle, rec, sqlstate, &native, msg,
                                      sizeof(msg), &msg_len))) {
+    if (HaystackContains((const char*)msg, (size_t)(msg_len > 0 ? msg_len : 0), "already exists")) {
+      says_already_exists = true;
+    }
     if (first) {
       status = SqlStateToStatus((const char*)sqlstate);
       if (error) {
@@ -96,6 +117,11 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
     }
     rec++;
   }
+  // Not every backend reports "object already exists" with SQLSTATE 42S01:
+  // SQLiteODBC uses HY000 with "table X already exists", and other drivers pass
+  // a vendor message through unmapped.  Fall back to the message text when the
+  // SQLSTATE carried no usable meaning.
+  if (status == ADBC_STATUS_UNKNOWN && says_already_exists) status = ADBC_STATUS_ALREADY_EXISTS;
   if (error) InternalAdbcSetError(error, "%s", sb.buffer ? sb.buffer : "[ODBC] unknown error");
   InternalAdbcStringBuilderReset(&sb);
   return status;

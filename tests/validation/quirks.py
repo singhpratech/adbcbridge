@@ -126,6 +126,11 @@ class OdbcSqliteQuirks(model.DriverQuirks):
         get_objects_constraints_foreign=True,
         get_objects_constraints_primary=True,
         get_objects_constraints_unique=False,
+        # SQLiteODBC rebuilds the primary key from PRAGMA table_info, so it
+        # reports the key columns in table-column order with KEY_SEQ renumbered
+        # to match: `PRIMARY KEY (b, a)` comes back as a=1, b=2. The declared
+        # order is not recoverable through any ODBC catalog call.
+        quirk_get_objects_constraints_primary_normalized=True,
         # No ODBC:type / xdbc field metadata is emitted by odbc_reader.c.
         metadata_type_name=False,
         # SQLBindParameter-backed binding (src/odbc_bind.c).

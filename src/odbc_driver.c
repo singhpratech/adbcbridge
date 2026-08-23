@@ -340,8 +340,13 @@ static AdbcStatusCode OdbcConnectionGetInfo(struct AdbcConnection* connection,
   for (size_t i = 0; i < info_codes_length; i++) {
     switch (info_codes[i]) {
       case ADBC_INFO_VENDOR_NAME:
+        // The vendor is the DBMS behind the ODBC driver; the "(via ODBC)" suffix is
+        // where the fact that adbcbridge is a bridge is reported, so that
+        // ADBC_INFO_DRIVER_NAME can stay a stable identity for adbcbridge itself.
         if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DBMS_NAME, buf, sizeof(buf), &len))) {
-          RAISE_ADBC(InternalAdbcConnectionGetInfoAppendString(&array, info_codes[i], (const char*)buf, error));
+          char vendor[1100];
+          snprintf(vendor, sizeof(vendor), "%s (via ODBC)", (const char*)buf);
+          RAISE_ADBC(InternalAdbcConnectionGetInfoAppendString(&array, info_codes[i], vendor, error));
         }
         break;
       case ADBC_INFO_VENDOR_VERSION:
@@ -352,22 +357,18 @@ static AdbcStatusCode OdbcConnectionGetInfo(struct AdbcConnection* connection,
       case ADBC_INFO_VENDOR_SQL:
         RAISE_ADBC(InternalAdbcConnectionGetInfoAppendInt(&array, info_codes[i], 1, error));
         break;
-      case ADBC_INFO_DRIVER_NAME: {
-        // Include the underlying ODBC driver name for diagnostics.
-        char name[1200];
-        if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DRIVER_NAME, buf, sizeof(buf), &len))) {
-          snprintf(name, sizeof(name), ADBC_ODBC_DRIVER_NAME " (%s)", (const char*)buf);
-        } else {
-          snprintf(name, sizeof(name), ADBC_ODBC_DRIVER_NAME);
-        }
-        RAISE_ADBC(InternalAdbcConnectionGetInfoAppendString(&array, info_codes[i], name, error));
+      case ADBC_INFO_DRIVER_NAME:
+        // A stable identity for adbcbridge: it must not vary with the backing ODBC
+        // driver, or no quirks file can declare it.  The underlying SQL_DRIVER_NAME
+        // is available through the ADBC_ODBC_OPTION_DRIVER_NAME connection option.
+        RAISE_ADBC(InternalAdbcConnectionGetInfoAppendString(&array, info_codes[i], ADBC_ODBC_DRIVER_NAME, error));
         break;
-      }
       case ADBC_INFO_DRIVER_VERSION:
         RAISE_ADBC(InternalAdbcConnectionGetInfoAppendString(&array, info_codes[i], ADBC_ODBC_DRIVER_VERSION, error));
         break;
       case ADBC_INFO_DRIVER_ARROW_VERSION:
-        RAISE_ADBC(InternalAdbcConnectionGetInfoAppendString(&array, info_codes[i], "nanoarrow " NANOARROW_VERSION, error));
+        // A bare version string ("vX.Y.Z"), not a "<library> <version>" phrase.
+        RAISE_ADBC(InternalAdbcConnectionGetInfoAppendString(&array, info_codes[i], "v" NANOARROW_VERSION, error));
         break;
       case ADBC_INFO_DRIVER_ADBC_VERSION:
         RAISE_ADBC(InternalAdbcConnectionGetInfoAppendInt(&array, info_codes[i], ADBC_VERSION_1_1_0, error));
@@ -482,6 +483,11 @@ static AdbcStatusCode OdbcConnectionGetOption(struct AdbcConnection* connection,
   } else if (strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0 && conn->connected) {
     ODBC_CHECK(SQLGetConnectAttr(conn->hdbc, SQL_ATTR_CURRENT_CATALOG, buf, sizeof(buf), &outlen),
                SQL_HANDLE_DBC, conn->hdbc, "SQLGetConnectAttr(SQL_ATTR_CURRENT_CATALOG)", error);
+    v = (const char*)buf;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_DRIVER_NAME) == 0 && conn->connected) {
+    SQLSMALLINT slen = 0;
+    ODBC_CHECK(SQLGetInfo(conn->hdbc, SQL_DRIVER_NAME, buf, sizeof(buf), &slen), SQL_HANDLE_DBC,
+               conn->hdbc, "SQLGetInfo(SQL_DRIVER_NAME)", error);
     v = (const char*)buf;
   } else {
     InternalAdbcSetError(error, "Unknown connection option %s", key);
