@@ -7,7 +7,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, POSTGRES_ODBC_DRIVER, MARIADB_ODBC_DRIVER,
     MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER,
     DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
-    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DOLT_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -67,6 +67,18 @@ DBS = {
         # MySQL BOOLEAN is TINYINT(1), reported as SQL_TINYINT -> int8; double-quoted
         # identifiers (used by ingest) need ANSI_QUOTES. See tests/compat/README.md for
         # the LD_PRELOAD needed by MySQL Connector/ODBC under pyarrow.
+        bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "dolt": dict(
+        # Dolt is a version-controlled SQL database ("git for data") that speaks the MySQL
+        # wire protocol, so MySQL Connector/ODBC drives it and the MySQL entry's types and
+        # quirks apply unchanged: BOOLEAN is TINYINT(1) -> int8, and adbc_ingest's
+        # double-quoted identifiers need ANSI_QUOTES.
+        env="DOLT_ODBC_DRIVER",
+        # Dolt only implements mysql_native_password, whose client-side plugin Connector/ODBC
+        # 9.x no longer links in; it ships as a separate .so next to the driver library, and
+        # PLUGIN_DIR is how libmysqlclient is pointed at it.
+        conn="Driver={drv};Server=127.0.0.1;Port=13310;Database=adbc;User=root;PLUGIN_DIR={drvdir}/plugin;",
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
     "db2": dict(
         env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",
@@ -165,7 +177,10 @@ def run(name, cfg):
         os.environ.setdefault(k, v)
     if cfg.get("fixture"):  # file-based, read-only database: work on a private copy
         shutil.copy(HERE / "fixtures" / cfg["fixture"], os.path.join(TMP, cfg["fixture"]))
-    uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv)
+    # {drv} is the driver library; {drvdir} is the directory holding it, for the rare
+    # connection option that must point at a file shipped beside the driver.
+    uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(
+        drv=drv, drvdir=os.path.dirname(drv))
     # This matrix exists to exercise the ODBC path, so native delegation (which
     # would take over for e.g. SQLite/PostgreSQL) is switched off here.
     conn = dbapi.connect(
