@@ -17,6 +17,7 @@
 // Parameter binding (Arrow -> SQLBindParameter) and bulk ingest.
 
 #include <errno.h>
+#include <pthread.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2444,6 +2445,504 @@ static AdbcStatusCode ExecSimple(struct OdbcConnection* conn, const char* sql, b
   return s;
 }
 
+// ---------------------------------------------------------------------------
+// Parallel bulk ingest (ADBC_ODBC_OPTION_INGEST_CONNECTIONS)
+//
+// The read side already beats the native PostgreSQL driver by doing what that driver
+// does not: splitting one query over N connections.  Ingest is the mirror image.  One
+// pump thread (the caller's) drains the bound stream and pushes batches into a queue; N
+// worker threads, each with its own connection, statement handle, multi-row INSERT state
+// and transaction, pop from that queue and run the ordinary single-connection ingest
+// path over what they get.  Workers therefore share no ODBC state at all, and the whole
+// well-trodden ExecuteRows path is reused verbatim -- each worker simply sees an
+// ArrowArrayStream that happens to be fed by the queue rather than by the caller.
+//
+// The cost is atomicity, which is why this is opt-in and defaults to 1.  N connections
+// are N transactions.  A worker that fails trips the queue, so every worker still
+// running fails its own get_next and rolls its share back -- but a worker that had
+// already reached the end of the queue has already committed, and those rows stay.  The
+// caller gets an error and a table holding an unspecified subset of the stream.
+
+// A batch handed out in pieces: the slices share the original array's buffers, and the
+// last slice released frees the original.
+struct BatchOwner {
+  struct ArrowArray base;
+  pthread_mutex_t mu;
+  int refs;
+};
+
+static void BatchOwnerRef(struct BatchOwner* o) {
+  pthread_mutex_lock(&o->mu);
+  o->refs++;
+  pthread_mutex_unlock(&o->mu);
+}
+
+static void BatchOwnerUnref(struct BatchOwner* o) {
+  pthread_mutex_lock(&o->mu);
+  bool last = (--o->refs == 0);
+  pthread_mutex_unlock(&o->mu);
+  if (!last) return;
+  if (o->base.release) o->base.release(&o->base);
+  pthread_mutex_destroy(&o->mu);
+  free(o);
+}
+
+// A slice's columns are re-pointed views on the owner's buffers, owning no buffer of
+// their own.  Releasing the slice frees those little structs and unrefs the owner; the
+// buffers go when the last slice does.
+static void SliceChildRelease(struct ArrowArray* a) { a->release = NULL; }
+
+static void SliceRelease(struct ArrowArray* a) {
+  struct BatchOwner* o = (struct BatchOwner*)a->private_data;
+  if (a->children) {
+    for (int64_t i = 0; i < a->n_children; i++) free(a->children[i]);
+    free(a->children);
+    a->children = NULL;
+  }
+  a->n_children = 0;
+  a->release = NULL;
+  a->private_data = NULL;
+  if (o) BatchOwnerUnref(o);
+}
+
+// Can this batch be cut up by narrowing offsets alone?  A flat batch -- every column a
+// leaf, no dictionary -- can: a slice is the same buffers at a different offset and
+// length, which is exactly what ArrowArrayViewSetArray then reads.  Anything nested
+// keeps its rows in child arrays that a top-level offset does not describe, so it goes
+// to one worker whole.  Bulk ingest only ever has flat columns in practice: the CREATE
+// TABLE it generates has to name a SQL type for every column.
+static bool BatchIsFlat(const struct ArrowArray* a) {
+  if (a->dictionary) return false;
+  // A slice leaves the struct level at offset 0 and moves the columns instead, so a
+  // validity buffer on the struct itself would end up read from the wrong row.  A record
+  // batch does not have one; anything that does goes to a single worker whole.
+  if (a->n_buffers > 0 && a->buffers && a->buffers[0]) return false;
+  for (int64_t i = 0; i < a->n_children; i++) {
+    const struct ArrowArray* c = a->children[i];
+    if (!c || c->n_children != 0 || c->dictionary) return false;
+  }
+  return true;
+}
+
+// One slice of `o`, [off, off+len).  Takes over the caller's reference on success.
+//
+// The ingest path reads a column by indexing that column's view straight by row number
+// (SlotFromArrow, via ArrowArrayView), so it is the *columns* that have to be moved to
+// the start of the slice, not the record batch struct wrapped round them: the slice
+// keeps offset 0 and every column is re-pointed to `off` rows further in.  Doing it the
+// other way -- moving the struct's own offset, which is what the C data interface says
+// indexes into the children -- reads the right number of rows from the wrong place.
+// Only the little per-column structs are copied; the buffers stay shared.
+static struct ArrowArray* SliceMake(struct BatchOwner* o, int64_t off, int64_t len) {
+  const struct ArrowArray* src = &o->base;
+  struct ArrowArray* s = (struct ArrowArray*)calloc(1, sizeof(*s));
+  if (!s) return NULL;
+  *s = *src;
+  s->offset = 0;
+  s->length = len;
+  s->n_children = 0;
+  s->children = NULL;
+  s->private_data = o;
+  s->release = SliceRelease;
+  if (src->n_children > 0) {
+    s->children = (struct ArrowArray**)calloc((size_t)src->n_children, sizeof(*s->children));
+    if (!s->children) {
+      free(s);
+      return NULL;
+    }
+    for (int64_t i = 0; i < src->n_children; i++) {
+      struct ArrowArray* c = (struct ArrowArray*)calloc(1, sizeof(*c));
+      if (!c) {
+        for (int64_t j = 0; j < i; j++) free(s->children[j]);
+        free(s->children);
+        free(s);
+        return NULL;
+      }
+      *c = *src->children[i];
+      // The batch's own offset belongs to the columns as much as the slice's does.
+      c->offset = src->children[i]->offset + src->offset + off;
+      c->length = len;
+      c->private_data = NULL;
+      c->release = SliceChildRelease;
+      s->children[i] = c;
+    }
+    s->n_children = src->n_children;
+  }
+  return s;
+}
+
+// The queue between the pump and the workers.  Bounded, so a fast producer cannot pull
+// the whole stream into memory ahead of the servers that have to swallow it.
+struct IngestQueue {
+  pthread_mutex_t mu;
+  pthread_cond_t not_empty;
+  pthread_cond_t not_full;
+  struct ArrowArray** slots;
+  int64_t cap;
+  int64_t head;
+  int64_t count;
+  bool done;    // the pump has reached the end of the stream
+  bool failed;  // a worker failed; everyone still running should give up
+};
+
+static bool QueueInit(struct IngestQueue* q, int64_t cap) {
+  memset(q, 0, sizeof(*q));
+  q->slots = (struct ArrowArray**)calloc((size_t)cap, sizeof(*q->slots));
+  if (!q->slots) return false;
+  q->cap = cap;
+  pthread_mutex_init(&q->mu, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+  return true;
+}
+
+static void QueueDestroy(struct IngestQueue* q) {
+  // Anything still queued after a failure is ours to drop.
+  for (int64_t i = 0; i < q->count; i++) {
+    struct ArrowArray* a = q->slots[(q->head + i) % q->cap];
+    if (a) {
+      if (a->release) a->release(a);
+      free(a);
+    }
+  }
+  free(q->slots);
+  pthread_mutex_destroy(&q->mu);
+  pthread_cond_destroy(&q->not_empty);
+  pthread_cond_destroy(&q->not_full);
+}
+
+// Hand one batch to whichever worker gets to it first.  False means the queue has
+// failed and the caller should stop pumping; the batch is still the caller's to drop.
+static bool QueuePush(struct IngestQueue* q, struct ArrowArray* a) {
+  pthread_mutex_lock(&q->mu);
+  while (q->count == q->cap && !q->failed) pthread_cond_wait(&q->not_full, &q->mu);
+  if (q->failed) {
+    pthread_mutex_unlock(&q->mu);
+    return false;
+  }
+  q->slots[(q->head + q->count) % q->cap] = a;
+  q->count++;
+  pthread_cond_signal(&q->not_empty);
+  pthread_mutex_unlock(&q->mu);
+  return true;
+}
+
+#define INGEST_POP_OK 0
+#define INGEST_POP_END 1
+#define INGEST_POP_FAILED 2
+
+static int QueuePop(struct IngestQueue* q, struct ArrowArray** out) {
+  pthread_mutex_lock(&q->mu);
+  while (q->count == 0 && !q->done && !q->failed) pthread_cond_wait(&q->not_empty, &q->mu);
+  if (q->failed) {
+    pthread_mutex_unlock(&q->mu);
+    return INGEST_POP_FAILED;
+  }
+  if (q->count == 0) {
+    pthread_mutex_unlock(&q->mu);
+    return INGEST_POP_END;
+  }
+  *out = q->slots[q->head];
+  q->slots[q->head] = NULL;
+  q->head = (q->head + 1) % q->cap;
+  q->count--;
+  pthread_cond_signal(&q->not_full);
+  pthread_mutex_unlock(&q->mu);
+  return INGEST_POP_OK;
+}
+
+static void QueueFinish(struct IngestQueue* q) {
+  pthread_mutex_lock(&q->mu);
+  q->done = true;
+  pthread_cond_broadcast(&q->not_empty);
+  pthread_cond_broadcast(&q->not_full);
+  pthread_mutex_unlock(&q->mu);
+}
+
+static void QueueFail(struct IngestQueue* q) {
+  pthread_mutex_lock(&q->mu);
+  q->failed = true;
+  pthread_cond_broadcast(&q->not_empty);
+  pthread_cond_broadcast(&q->not_full);
+  pthread_mutex_unlock(&q->mu);
+}
+
+// The stream one worker sees: the shared queue, dressed as an ArrowArrayStream so that
+// the entire ordinary ingest path can consume it without knowing any of this exists.
+struct WorkerStream {
+  struct IngestQueue* q;
+  struct ArrowSchema schema;
+};
+
+static int WorkerStreamGetSchema(struct ArrowArrayStream* s, struct ArrowSchema* out) {
+  struct WorkerStream* ws = (struct WorkerStream*)s->private_data;
+  return ArrowSchemaDeepCopy(&ws->schema, out) == NANOARROW_OK ? 0 : ENOMEM;
+}
+
+static int WorkerStreamGetNext(struct ArrowArrayStream* s, struct ArrowArray* out) {
+  struct WorkerStream* ws = (struct WorkerStream*)s->private_data;
+  struct ArrowArray* a = NULL;
+  switch (QueuePop(ws->q, &a)) {
+    case INGEST_POP_OK:
+      *out = *a;
+      free(a);
+      return 0;
+    case INGEST_POP_END:
+      out->release = NULL;
+      return 0;
+    default:
+      return EIO;
+  }
+}
+
+static const char* WorkerStreamGetLastError(struct ArrowArrayStream* s) {
+  (void)s;
+  return "another parallel-ingest worker failed; this worker's share was rolled back";
+}
+
+static void WorkerStreamRelease(struct ArrowArrayStream* s) {
+  struct WorkerStream* ws = (struct WorkerStream*)s->private_data;
+  if (ws) {
+    if (ws->schema.release) ws->schema.release(&ws->schema);
+    free(ws);
+  }
+  s->private_data = NULL;
+  s->release = NULL;
+}
+
+struct IngestWorker {
+  pthread_t tid;
+  bool started;
+  struct IngestQueue* q;
+  struct OdbcDatabase* db;
+  struct OdbcConnection conn;
+  struct OdbcStatement stmt;
+  AdbcStatusCode status;
+  struct AdbcError error;
+  int64_t rows;
+};
+
+static void* IngestWorkerMain(void* arg) {
+  struct IngestWorker* w = (struct IngestWorker*)arg;
+  w->status = OdbcOpenHdbc(w->db, &w->conn.hdbc, &w->error);
+  if (w->status == ADBC_STATUS_OK) {
+    w->conn.connected = true;
+    // Not OdbcDetectQuirks: this is the same driver against the same server as the
+    // caller's connection, so its answers are the caller's answers, and re-asking would
+    // cost a round of SQLGetInfo/SQLGetTypeInfo per worker.
+    w->status = OdbcStatementExecuteBound(&w->stmt, NULL, &w->rows, &w->error);
+  }
+  if (w->status != ADBC_STATUS_OK) QueueFail(w->q);
+  return NULL;
+}
+
+// Queue one whole batch.  Always consumes it.
+static bool PumpWhole(struct IngestQueue* q, struct ArrowArray* batch) {
+  struct ArrowArray* a = (struct ArrowArray*)malloc(sizeof(*a));
+  if (!a) {
+    batch->release(batch);
+    return false;
+  }
+  *a = *batch;
+  memset(batch, 0, sizeof(*batch));
+  if (!QueuePush(q, a)) {
+    a->release(a);
+    free(a);
+    return false;
+  }
+  return true;
+}
+
+// Queue one batch, cut into slices when it is big enough that leaving it whole would
+// pin the rest of the ingest to a single worker.  Always consumes it.
+static bool PumpBatch(struct IngestQueue* q, struct ArrowArray* batch) {
+  if (batch->length <= ADBC_ODBC_INGEST_SLICE_ROWS || !BatchIsFlat(batch)) {
+    return PumpWhole(q, batch);
+  }
+  struct BatchOwner* o = (struct BatchOwner*)calloc(1, sizeof(*o));
+  if (!o) return PumpWhole(q, batch);
+  o->base = *batch;
+  memset(batch, 0, sizeof(*batch));
+  pthread_mutex_init(&o->mu, NULL);
+  o->refs = 1;  // held by the pump while it slices
+  bool ok = true;
+  for (int64_t off = 0; off < o->base.length;) {
+    int64_t len = o->base.length - off;
+    if (len > ADBC_ODBC_INGEST_SLICE_ROWS) len = ADBC_ODBC_INGEST_SLICE_ROWS;
+    BatchOwnerRef(o);
+    struct ArrowArray* s = SliceMake(o, off, len);
+    if (!s) {
+      BatchOwnerUnref(o);
+      ok = false;
+      break;
+    }
+    if (!QueuePush(q, s)) {
+      s->release(s);
+      free(s);
+      ok = false;
+      break;
+    }
+    off += len;
+  }
+  BatchOwnerUnref(o);
+  return ok;
+}
+
+// Spread the bound stream over `nconn` connections.  See
+// ADBC_ODBC_OPTION_INGEST_CONNECTIONS for the atomicity this gives up.
+static AdbcStatusCode IngestParallel(struct OdbcStatement* stmt, int64_t nconn,
+                                     int64_t* rows_affected, struct AdbcError* error) {
+  struct OdbcConnection* conn = stmt->conn;
+  struct ArrowArrayStream* stream = &stmt->bind_stream;
+  struct ArrowSchema schema;
+  schema.release = NULL;
+  if (stream->get_schema(stream, &schema) != 0) {
+    InternalAdbcSetError(error, "Bound stream get_schema failed: %s",
+                         stream->get_last_error(stream));
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+
+  struct IngestQueue q;
+  // Two batches of slack per worker: enough that no worker waits on the pump, few
+  // enough that the queue is not a second copy of the data.
+  if (!QueueInit(&q, nconn * 2 + 2)) {
+    schema.release(&schema);
+    InternalAdbcSetError(error, "Out of memory");
+    return ADBC_STATUS_INTERNAL;
+  }
+  struct IngestWorker* workers = (struct IngestWorker*)calloc((size_t)nconn, sizeof(*workers));
+  if (!workers) {
+    QueueDestroy(&q);
+    schema.release(&schema);
+    InternalAdbcSetError(error, "Out of memory");
+    return ADBC_STATUS_INTERNAL;
+  }
+
+  AdbcStatusCode status = ADBC_STATUS_OK;
+  int64_t nstarted = 0;
+  for (int64_t i = 0; i < nconn; i++) {
+    struct IngestWorker* w = &workers[i];
+    w->q = &q;
+    w->db = conn->db;
+    w->status = ADBC_STATUS_OK;
+    w->conn.db = conn->db;
+    w->conn.reader_opts = conn->reader_opts;
+    w->conn.autocommit = true;  // a connection of its own, so its transaction is its own
+    // Whatever the caller's connection already learned about the multi-row INSERT form
+    // is true of this one too; a worker still probes for its own K.
+    w->conn.multirow_probed = conn->multirow_probed;
+    w->conn.multirow_unsupported = conn->multirow_unsupported;
+    w->conn.multirow_insert_all = conn->multirow_insert_all;
+    w->conn.multirow_max_params = conn->multirow_max_params;
+
+    w->stmt.conn = &w->conn;
+    w->stmt.reader_opts = stmt->reader_opts;
+    w->stmt.rows_per_insert = stmt->rows_per_insert;
+    w->stmt.array_binding = stmt->array_binding;
+    w->stmt.query = stmt->query ? strdup(stmt->query) : NULL;
+    w->stmt.ingest_into = stmt->ingest_into ? strdup(stmt->ingest_into) : NULL;
+
+    struct WorkerStream* ws = (struct WorkerStream*)calloc(1, sizeof(*ws));
+    if (!ws || !w->stmt.query) {
+      free(ws);
+      status = ADBC_STATUS_INTERNAL;
+      InternalAdbcSetError(error, "Out of memory");
+      break;
+    }
+    ws->q = &q;
+    if (ArrowSchemaDeepCopy(&schema, &ws->schema) != NANOARROW_OK) {
+      free(ws);
+      status = ADBC_STATUS_INTERNAL;
+      InternalAdbcSetError(error, "Out of memory");
+      break;
+    }
+    w->stmt.bind_stream.private_data = ws;
+    w->stmt.bind_stream.get_schema = WorkerStreamGetSchema;
+    w->stmt.bind_stream.get_next = WorkerStreamGetNext;
+    w->stmt.bind_stream.get_last_error = WorkerStreamGetLastError;
+    w->stmt.bind_stream.release = WorkerStreamRelease;
+    w->stmt.has_bind = true;
+
+    if (pthread_create(&w->tid, NULL, IngestWorkerMain, w) != 0) {
+      InternalAdbcSetError(error, "Could not start parallel ingest worker %lld", (long long)i);
+      status = ADBC_STATUS_INTERNAL;
+      break;
+    }
+    w->started = true;
+    nstarted++;
+  }
+
+  if (nstarted == 0) {
+    // Nothing is going to consume the queue; do not deadlock waiting for it to.
+    QueueFail(&q);
+  }
+
+  // The pump.  The bound stream is single-consumer, so this thread is the only one that
+  // ever touches it.
+  if (status == ADBC_STATUS_OK) {
+    for (;;) {
+      struct ArrowArray batch;
+      batch.release = NULL;
+      if (stream->get_next(stream, &batch) != 0) {
+        InternalAdbcSetError(error, "Bound stream get_next failed: %s",
+                             stream->get_last_error(stream));
+        status = ADBC_STATUS_INVALID_ARGUMENT;
+        QueueFail(&q);
+        break;
+      }
+      if (!batch.release) break;
+      if (batch.length == 0) {
+        batch.release(&batch);
+        continue;
+      }
+      if (!PumpBatch(&q, &batch)) {
+        if (batch.release) batch.release(&batch);
+        break;  // a worker failed; its error is the one that matters
+      }
+    }
+  }
+  QueueFinish(&q);
+
+  for (int64_t i = 0; i < nconn; i++) {
+    if (workers[i].started) pthread_join(workers[i].tid, NULL);
+  }
+
+  int64_t total = 0;
+  for (int64_t i = 0; i < nconn; i++) {
+    struct IngestWorker* w = &workers[i];
+    if (w->rows > 0) total += w->rows;
+    if (w->status != ADBC_STATUS_OK && status == ADBC_STATUS_OK) {
+      status = w->status;
+      InternalAdbcSetError(error, "Parallel ingest worker %lld of %lld failed: %s", (long long)i,
+                           (long long)nconn,
+                           w->error.message ? w->error.message : "(no diagnostic)");
+    }
+    if (w->error.release) w->error.release(&w->error);
+    if (w->stmt.ref) OdbcHandleRefRelease(w->stmt.ref);
+    if (w->stmt.bind_stream.release) w->stmt.bind_stream.release(&w->stmt.bind_stream);
+    free(w->stmt.query);
+    free(w->stmt.ingest_into);
+    if (w->conn.hdbc) {
+      SQLDisconnect(w->conn.hdbc);
+      SQLFreeHandle(SQL_HANDLE_DBC, w->conn.hdbc);
+    }
+  }
+  free(workers);
+  QueueDestroy(&q);
+  schema.release(&schema);
+
+  // The caller's stream is consumed either way; drop it exactly as ExecuteRows would.
+  if (stream->release) {
+    stream->release(stream);
+    memset(stream, 0, sizeof(*stream));
+  }
+  stmt->has_bind = false;
+
+  if (status != ADBC_STATUS_OK) return status;
+  if (rows_affected) *rows_affected = total;
+  return ADBC_STATUS_OK;
+}
+
 AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_affected,
                                    struct AdbcError* error) {
   if (!stmt->has_bind) {
@@ -2580,7 +3079,14 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
   stmt->query = strdup(sb.buffer);
   InternalAdbcStringBuilderReset(&sb);
   stmt->prepared = false;
-  AdbcStatusCode ingest_status = OdbcStatementExecuteBound(stmt, NULL, rows_affected, error);
+  // Fan out only when the caller asked for it AND the table the DDL above just made is
+  // actually visible to another connection.  Inside the caller's own transaction it is
+  // not -- the CREATE TABLE is uncommitted -- so fall back to the one-connection path,
+  // which is correct, atomic, and merely slower.
+  const bool fan_out = stmt->ingest_connections > 1 && conn->autocommit && conn->db;
+  AdbcStatusCode ingest_status =
+      fan_out ? IngestParallel(stmt, stmt->ingest_connections, rows_affected, error)
+              : OdbcStatementExecuteBound(stmt, NULL, rows_affected, error);
   // The multi-row rewrite is scoped to this one ingest: a later ExecuteQuery on the same
   // statement must never see it.
   free(stmt->ingest_into);

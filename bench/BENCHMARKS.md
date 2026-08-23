@@ -1042,6 +1042,127 @@ This is why prefetch is off by default and why partitioning is the mechanism tha
 the result. SQL Server was not measured: the only SQL Server container on this host
 belongs to another workload and starting a second one was out of scope.
 
+## The 1.2x threshold against the native drivers
+
+The bar: **mean of three runs, at least 1.2x faster than the native ADBC driver, on both
+fetch and ingest.** `bench/native_threshold.py` measures exactly that and prints
+`PASS`/`FAIL` against it. It runs a fresh process per timed run and interleaves the sides
+(A,B,A,B,A,B, never all-A-then-all-B), so a drift in machine load lands on both. Every
+clock covers the whole job end to end — opening connections, executing, and building the
+Arrow table for fetch; opening connections, consuming the Arrow table, executing and
+committing for ingest. Correctness is checked alongside speed: each ingest is compared
+against the source table by row count and a per-column checksum computed **in SQL on the
+server** (so it does not depend on the driver under test), and each fetch against a
+reference read. A checksum mismatch is a `FAIL` whatever the clock says.
+
+```
+ADBC_ODBC_DRIVER=build/libadbc_driver_odbc.so POSTGRES_ODBC_DRIVER=/path/psqlodbcw.so \
+  python bench/native_threshold.py --database postgres --rows 1000000 --runs 3 \
+      --partitions 8 --ingest-connections 16
+```
+
+### Machine
+
+20-core i9-13900HK, PostgreSQL 16.15 in Docker (`shared_buffers=2GB`, `work_mem=256MB`),
+psqlodbc, `adbc_driver_postgresql` and `adbc_driver_sqlite` from the same venv. Four
+columns: `bigint, double precision, text, date`. **The host was not quiet**: two other
+builds were running throughout and the one-minute load average sat between 5 and 11 on 20
+cores. That inflates the spread on both sides but not the ratio between them, and every
+figure below is the mean of three interleaved runs with the min and max shown.
+
+### PostgreSQL
+
+| rows | axis | ours (mean) | native (mean) | spread ours | spread native | ratio | verdict |
+|---:|---|---:|---:|---|---|---:|---|
+| 1 M | fetch, 8 partitions | 0.186 s | 0.339 s | 0.168–0.200 | 0.334–0.346 | **1.83x faster** | **PASS** |
+| 1 M | ingest, 1 connection | 2.199 s | 0.347 s | 2.131–2.233 | 0.333–0.363 | 0.16x (6.3x slower) | **FAIL** |
+| 1 M | ingest, 16 connections | 0.505 s | 0.364 s | 0.470–0.553 | 0.351–0.386 | 0.72x (1.39x slower) | **FAIL** |
+| 10 M | fetch, 12 partitions | 1.378 s | 2.162 s | 1.354–1.411 | 2.121–2.190 | **1.57x faster** | **PASS** |
+| 10 M | ingest, 1 connection | 24.446 s | 2.892 s | 22.693–25.997 | 2.683–3.105 | 0.12x (8.5x slower) | **FAIL** |
+| 10 M | ingest, 16 connections | 4.328 s | 2.986 s | 3.948–4.572 | 2.913–3.106 | 0.69x (1.45x slower) | **FAIL** |
+
+Fetch clears the bar at both sizes. Ingest does not, at any connection count.
+
+### SQLite
+
+| rows | axis | ours (mean) | native (mean) | ratio | verdict |
+|---:|---|---:|---:|---:|---|
+| 200 k | fetch | 0.148 s | 0.167 s | 1.13x faster | **FAIL** (marginal) |
+| 200 k | ingest, 1 connection | 0.224 s | 0.087 s | 0.39x | **FAIL** |
+| 1 M | fetch | 0.715 s | 0.380 s | 0.53x | **FAIL** |
+| 1 M | ingest, 1 connection | 1.114 s | 0.344 s | 0.31x | **FAIL** |
+
+SQLite fails both axes. Fetch is close to parity at 200 k rows — where the native driver's
+fixed costs still matter — and falls behind as the row count grows and per-row conversion
+starts to dominate; there is no `ctid` to split on, so partitioning does not apply and the
+read stays on one connection. Parallel ingest makes SQLite *slower* (0.273 s against
+0.224 s at 200 k on four connections): one file, one writer, and the workers simply
+contend for the write lock.
+
+### Why PostgreSQL ingest cannot reach 1.2x this way
+
+The native driver ingests with `COPY … (FORMAT binary)` through libpq. That is not a
+faster version of what we do, it is a cheaper mechanism. Measured on the 1 M-row load,
+client CPU by `getrusage` and server CPU from the container's `cpu.stat`:
+
+| | wall | client CPU | server CPU | total CPU |
+|---|---:|---:|---:|---:|
+| native, `COPY` binary | 0.359 s | 0.185 s | 0.248 s | **0.43 s** |
+| ours, multi-row `INSERT`, 1 connection | 2.330 s | 0.996 s | 1.019 s | **2.02 s** |
+
+We burn **4.7x the CPU per row** — about 2.0 µs against 0.43 µs. Half of it is ours
+(a `SQLBindParameter` per cell, plus the Arrow-to-text conversion) and half is the
+server's (parsing SQL text where `COPY` parses a binary stream). Note also that at one
+connection the wall clock is well above the sum of the two CPU figures: client and server
+ping-pong synchronously rather than overlapping.
+
+Parallelism converts that CPU into wall time until the machine runs out of cores, and
+that is exactly what it does — 2.20 s to 0.505 s, a 4.6x speed-up — but it cannot make
+the work smaller, and it does not scale cleanly either: total CPU *grows* with the worker
+count (2.0 CPU-s at N=1, 3.0 at N=8, 4.6 at N=16), so the curve flattens at 12–16 workers.
+Splitting the workers across separate target tables instead of one made no difference
+(0.437 s against 0.525 s at N=16, inside the noise), so this is not PostgreSQL's relation
+extension lock — it is contention and scheduling cost against a box that is already busy.
+
+**What clearing 1.2x would actually take.** At 1 M rows the target is 0.364/1.2 = **0.303 s**
+against the 0.505 s we reach at N=16 — a further **1.67x**. Parallelism alone will not
+find it: the plateau is at 0.47 s and more workers make it worse. The per-row CPU has to
+come down, and the only lever big enough is to stop sending row values as SQL text. Two
+candidates, neither implemented here:
+
+1. **`INSERT INTO t SELECT * FROM unnest(?::bigint[], ?::float8[], ?::text[], ?::date[])`** —
+   four parameters per batch instead of K×4, so the per-cell `SQLBindParameter` disappears
+   and the server parses four array literals rather than a K-row `VALUES` clause. This is
+   the largest saving available over ODBC and would likely close most of the 1.67x, but it
+   is PostgreSQL-specific SQL and would need a per-dialect path.
+2. **Reaching `COPY` itself**, which ODBC gives no way to do: `SQLExecDirect("COPY t FROM
+   STDIN")` has nowhere to put the stream. Only a driver-specific escape (psqlodbc does not
+   expose one) or bypassing ODBC for libpq — which is what the native driver already is —
+   would get there.
+
+Raising the parameter ceiling is worth a little on its own but nothing like enough: at
+K=1000 instead of the default 500 (`ADBC_ODBC_MULTIROW_MAX_PARAMS`, 2000, divided by four
+columns) the single-connection load goes from 2.23 s to 1.98 s, about 12%. Going the other
+way confirms the multi-row form is the right one: `adbc.odbc.rows_per_insert=1`, which
+falls back to parameter arrays and row-at-a-time, takes 9.73 s.
+
+So: **fetch passes, ingest fails.** The parallel-ingest option is kept because a 4.6x
+speed-up on the write path is worth having on its own terms, not because it reaches the
+bar.
+
+### Parallel ingest: scaling
+
+1 M rows, PostgreSQL, `adbc.odbc.ingest_connections`, checksum-verified at every N:
+
+| connections | 1 | 4 | 8 | 12 | 16 | 20 |
+|---|---:|---:|---:|---:|---:|---:|
+| wall (s) | 2.33 | 0.98 | 0.90 | 0.53 | 0.58 | — |
+| 10 M rows, wall (s) | 24.45 | — | 5.01 | 4.51 | **4.26** | 4.52 |
+
+A stream of a single 1 M-row batch fans out just as well as one of many batches (0.487 s
+at N=12), because the driver slices batches longer than
+`ADBC_ODBC_INGEST_SLICE_ROWS` before queueing them.
+
 ## Files
 
 - `bench/fetch_bench.py` — the benchmark harness (all three paths, batch-size
@@ -1054,6 +1175,9 @@ belongs to another workload and starting a second one was out of scope.
 - `bench/prefetch_bench.py` — `adbc.odbc.prefetch` at several depths against any ODBC
   driver, checksummed against the depth-0 read.
 - `bench/ingest_bench.py`, `bench/matrix_bench.py` — the write path.
+- `bench/native_threshold.py` — the 1.2x threshold harness: adbcbridge against the
+  native ADBC driver on both fetch and ingest, fresh process per run, interleaved,
+  mean of three, checksum-verified, `PASS`/`FAIL`.
 - `bench/verify_array_binding.py` — differential check that array binding and the
   row-at-a-time fallback produce identical data and identical rows-affected.
 - `tests/test_partitions.py`, `tests/c/test_partition.c` — partition equivalence (every
@@ -1061,6 +1185,10 @@ belongs to another workload and starting a second one was out of scope.
   of order and concurrently), the single-partition fallback, and the SQL scanner.
 - `tests/test_prefetch.py` — prefetch equivalence, an error mid-stream, and aborting a
   stream while the fetch thread is running.
+- `tests/test_parallel_ingest.py` — parallel ingest: equality with the
+  single-connection path, one huge batch sliced across workers, an empty stream, fewer
+  batches than connections, a failure injected mid-stream, and `NOT NULL`/`PRIMARY KEY`
+  violations by one worker.
 - `tests/c/test_multirow.c`, `test_multirow_ingest` in `tests/test_sqlite.py` — the
   multi-row `INSERT` text and its behaviour (NULLs in every row-group position, a batch
   that is not a multiple of K, a single-row batch, a failure that must leave no rows,

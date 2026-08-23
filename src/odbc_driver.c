@@ -1035,6 +1035,45 @@ static void OdbcTuneConnectionString(const struct OdbcDatabase* db,
   free(own_dsn);
 }
 
+// Allocate an SQLHDBC from the database's environment and drive SQLDriverConnect with
+// the connection string every connection to this database gets.  Factored out of
+// OdbcConnectionInit so that parallel bulk ingest can raise its own worker connections
+// (src/odbc_bind.c) without duplicating the string assembly or the wide-connect retry --
+// and so a worker connection is, byte for byte, the same connection the caller has.
+AdbcStatusCode OdbcOpenHdbc(struct OdbcDatabase* db, SQLHDBC* out, struct AdbcError* error) {
+  *out = NULL;
+  SQLHDBC hdbc = NULL;
+  ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_DBC, db->henv, &hdbc), SQL_HANDLE_ENV, db->henv,
+             "SQLAllocHandle(SQL_HANDLE_DBC)", error);
+
+  // Assemble the connection string.
+  struct InternalAdbcStringBuilder sb;
+  InternalAdbcStringBuilderInit(&sb, 256);
+  if (db->connection_string) {
+    InternalAdbcStringBuilderAppend(&sb, "%s", db->connection_string);
+    size_t len = strlen(db->connection_string);
+    if (len > 0 && db->connection_string[len - 1] != ';') InternalAdbcStringBuilderAppend(&sb, ";");
+  }
+  if (db->dsn) InternalAdbcStringBuilderAppend(&sb, "DSN=%s;", db->dsn);
+  if (db->username) InternalAdbcStringBuilderAppend(&sb, "UID=%s;", db->username);
+  if (db->password) InternalAdbcStringBuilderAppend(&sb, "PWD=%s;", db->password);
+  OdbcTuneConnectionString(db, &sb);
+
+  SQLRETURN ret =
+      SQLDriverConnect(hdbc, NULL, (SQLCHAR*)sb.buffer, SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
+  if (!SQL_SUCCEEDED(ret) && !OdbcHasDiag(hdbc)) {
+    ret = OdbcDriverConnectWide(hdbc, sb.buffer);
+  }
+  InternalAdbcStringBuilderReset(&sb);
+  if (!SQL_SUCCEEDED(ret)) {
+    AdbcStatusCode s = OdbcSetError(SQL_HANDLE_DBC, hdbc, "SQLDriverConnect", error);
+    SQLFreeHandle(SQL_HANDLE_DBC, hdbc);
+    return s;
+  }
+  *out = hdbc;
+  return ADBC_STATUS_OK;
+}
+
 static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
                                          struct AdbcDatabase* database,
                                          struct AdbcError* error) {
@@ -1073,34 +1112,7 @@ static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
   conn->db = db;
   conn->reader_opts = db->reader_opts;
 
-  ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_DBC, db->henv, &conn->hdbc), SQL_HANDLE_ENV, db->henv,
-             "SQLAllocHandle(SQL_HANDLE_DBC)", error);
-
-  // Assemble the connection string.
-  struct InternalAdbcStringBuilder sb;
-  InternalAdbcStringBuilderInit(&sb, 256);
-  if (db->connection_string) {
-    InternalAdbcStringBuilderAppend(&sb, "%s", db->connection_string);
-    size_t len = strlen(db->connection_string);
-    if (len > 0 && db->connection_string[len - 1] != ';') InternalAdbcStringBuilderAppend(&sb, ";");
-  }
-  if (db->dsn) InternalAdbcStringBuilderAppend(&sb, "DSN=%s;", db->dsn);
-  if (db->username) InternalAdbcStringBuilderAppend(&sb, "UID=%s;", db->username);
-  if (db->password) InternalAdbcStringBuilderAppend(&sb, "PWD=%s;", db->password);
-  OdbcTuneConnectionString(db, &sb);
-
-  SQLRETURN ret = SQLDriverConnect(conn->hdbc, NULL, (SQLCHAR*)sb.buffer, SQL_NTS, NULL, 0, NULL,
-                                   SQL_DRIVER_NOPROMPT);
-  if (!SQL_SUCCEEDED(ret) && !OdbcHasDiag(conn->hdbc)) {
-    ret = OdbcDriverConnectWide(conn->hdbc, sb.buffer);
-  }
-  InternalAdbcStringBuilderReset(&sb);
-  if (!SQL_SUCCEEDED(ret)) {
-    AdbcStatusCode s = OdbcSetError(SQL_HANDLE_DBC, conn->hdbc, "SQLDriverConnect", error);
-    SQLFreeHandle(SQL_HANDLE_DBC, conn->hdbc);
-    conn->hdbc = NULL;
-    return s;
-  }
+  RAISE_ADBC(OdbcOpenHdbc(db, &conn->hdbc, error));
   conn->connected = true;
   OdbcDetectQuirks(conn);
   if (!conn->autocommit) RAISE_ADBC(OdbcConnectionSetAutocommit(conn, false, error));
@@ -1597,6 +1609,7 @@ static AdbcStatusCode OdbcStatementNew(struct AdbcConnection* connection,
   // On by default; drivers whose parameter arrays cannot be trusted opt out through
   // OdbcDetectQuirks, and "adbc.odbc.array_binding" overrides either way.
   stmt->array_binding = !conn->reader_opts.no_param_arrays;
+  stmt->ingest_connections = 1;
   statement->private_data = stmt;
   return ADBC_STATUS_OK;
 }
@@ -1701,6 +1714,18 @@ static AdbcStatusCode OdbcStatementSetOption(struct AdbcStatement* statement, co
       return ADBC_STATUS_INVALID_ARGUMENT;
     }
     stmt->rows_per_insert = (int64_t)v;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_INGEST_CONNECTIONS) == 0) {
+    char* end = NULL;
+    long long v = strtoll(value, &end, 10);
+    if (end == value || (end && *end) || v < 1 || v > ADBC_ODBC_MAX_INGEST_CONNECTIONS) {
+      InternalAdbcSetError(error,
+                           "Invalid value \"%s\" for %s (expected 1 for the caller's own "
+                           "connection, or up to %d)",
+                           value, key, ADBC_ODBC_MAX_INGEST_CONNECTIONS);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    stmt->ingest_connections = (int64_t)v;
     return ADBC_STATUS_OK;
   } else if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) {
     if (strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) {  // "true"
@@ -1971,6 +1996,7 @@ static AdbcStatusCode OdbcStatementGetOptionInt(struct AdbcStatement* statement,
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) { *value = stmt->reader_opts.batch_size; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) { *value = stmt->array_binding ? 1 : 0; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_ROWS_PER_INSERT) == 0) { *value = stmt->rows_per_insert; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_INGEST_CONNECTIONS) == 0) { *value = stmt->ingest_connections; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_PARTITIONS) == 0) { *value = stmt->partitions; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_PREFETCH) == 0) { *value = stmt->reader_opts.prefetch; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = stmt->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }

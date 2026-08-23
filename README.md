@@ -120,6 +120,39 @@ arrays, and `adbc.odbc.rows_per_insert` overrides the choice. 10,000 rows, rows/
 | PostgreSQL 16 | 102,508 | **312,025** |
 | SQLite 3.45 (50,000 rows) | 634,417 | **866,080** |
 
+
+#### Parallel ingest: trading atomicity for speed
+
+`adbc.odbc.ingest_connections` spreads one ingest over several connections. One thread
+drains the bound stream and hands batches to `N` workers, each with its own connection,
+statement handle and transaction, each running the ordinary multi-row `INSERT` path into
+the same table. On PostgreSQL this takes 1,000,000 rows from 2.20 s to 0.505 s (4.6x) and
+10,000,000 rows from 24.4 s to 4.26 s; the curve flattens at 12–16 workers.
+
+**It is opt-in because it is not atomic, and it defaults to `1`.** `N` connections are `N`
+transactions. A worker that fails trips the queue, so every worker still running fails its
+own read of the stream and rolls its share back — but a worker that had already reached the
+end of the queue has already committed, and those rows stay in the table. What the caller
+gets is an error naming the worker and the server's complaint; what is left behind is some
+unspecified subset of the stream. Never a corrupt or invented row, and never one that
+violates a constraint — but not all-or-nothing either. Use `N > 1` only where a partially
+populated table on failure is acceptable, or where the caller drops and retries. `N = 1` is
+today's behaviour and today's atomicity, unchanged.
+
+Two further things to know. Fanning out needs the target table to be visible to the worker
+connections, so when the caller is inside its own transaction (autocommit off) the
+`CREATE TABLE` is uncommitted and invisible; the driver quietly keeps the ingest on one
+connection instead, which is correct and atomic and merely slower. And it is a
+server-side-parallelism play: on a single-writer database it backfires — SQLite's ingest
+goes from 0.224 s to 0.273 s on four connections, the workers contending for the one write
+lock.
+
+Even at its best this does not catch the native PostgreSQL driver, which ingests with
+`COPY … (FORMAT binary)`: that costs about 0.43 µs of CPU per row against our 2.0 µs, and
+parallelism converts CPU into wall time without making the work smaller. See
+[bench/BENCHMARKS.md](bench/BENCHMARKS.md) for the numbers and for what closing the gap
+would take.
+
 MariaDB keeps ODBC parameter arrays, which are faster there (103k vs 72k rows/s); Firebird
 gains nothing, because OdbcFb rejects multi-row `VALUES` at prepare time.
 
@@ -589,6 +622,7 @@ Options (set on the statement):
 | key | meaning |
 |---|---|
 | `adbc.odbc.rows_per_insert` | rows of parameters per `INSERT` for **bulk ingest** — `0` (default) picks a group size automatically, `1` turns the rewrite off, any other value asks for that many. Instead of executing `INSERT INTO t VALUES (?,?)` once per row, ingest prepares `INSERT INTO t VALUES (?,?),(?,?),…` with K row-groups and binds K rows' worth of ordinary parameters per execute, which divides the round trips by K. See [Multi-row INSERT batching](#multi-row-insert-batching). |
+| `adbc.odbc.ingest_connections` | connections a **bulk ingest** may spread itself over — `1` (default) keeps it on the caller's own connection in a single transaction. `N > 1` opens `N` further connections, hands each a share of the bound stream's batches and lets each run the multi-row `INSERT` path into the same table. **This trades atomicity for speed**: `N` connections are `N` transactions, so a failure can leave some batches committed. See [Parallel ingest](#parallel-ingest-trading-atomicity-for-speed). |
 | `adbc.odbc.array_binding` | `true` (default) — binds each Arrow batch as a column-wise ODBC parameter array, so `executemany` (and ingest on a driver where arrays are the faster of the two) issues one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE`, or that cannot account for every parameter set they were handed, fall back automatically; DuckDB and clickhouse-odbc, whose parameter arrays silently drop values, default to `false` and can be forced back on with this option. Reported rows-affected is identical in both modes. |
 
 Bulk ingest and `executemany` also batch their commits: when the connection is in

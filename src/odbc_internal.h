@@ -78,6 +78,25 @@
 /// See OdbcConnection::multirow_* for the probe that decides whether the server takes
 /// the multi-row form at all.
 #define ADBC_ODBC_OPTION_ROWS_PER_INSERT "adbc.odbc.rows_per_insert"
+/// Number of connections a bulk ingest ("adbc.ingest.*") may spread its work over.  1
+/// (the default) keeps the ingest on the caller's own connection, in one transaction,
+/// exactly as it has always behaved.  N > 1 opens N-1 further connections to the same
+/// database, hands each a share of the bound stream's batches, and lets each run the
+/// ordinary multi-row INSERT path into the same table.
+///
+/// This TRADES ATOMICITY FOR SPEED and is opt-in for that reason: N connections are N
+/// independent transactions, so the ingest as a whole is no longer atomic.  A worker
+/// that fails makes the whole call fail, and every worker still running rolls its own
+/// share back -- but a worker that had already finished has already committed, and
+/// those rows stay in the table.  The caller sees an error and a table holding some
+/// unspecified subset of the stream.  Only use N > 1 where a partially populated table
+/// on failure is acceptable (or where the caller drops and retries).
+///
+/// Fan-out needs the target table to be visible to the worker connections, so it is
+/// skipped -- silently falling back to one connection -- when the caller is inside its
+/// own transaction (autocommit off), because the CREATE TABLE would then be uncommitted
+/// and invisible to them.
+#define ADBC_ODBC_OPTION_INGEST_CONNECTIONS "adbc.odbc.ingest_connections"
 /// Number of partitions AdbcStatementExecutePartitions should try to split the query
 /// into.  0 (the default) lets the driver choose from the table's size -- one partition
 /// per 64 MiB of heap, capped at 8; 1 disables splitting and always returns the original
@@ -141,6 +160,16 @@
 #define ADBC_ODBC_MULTIROW_MAX_SQL_BYTES (1024 * 1024)
 // Ceiling on the per-row parameter scratch one multi-row execute may allocate.
 #define ADBC_ODBC_MULTIROW_MAX_SLOT_BYTES (16 * 1024 * 1024)
+
+// --- Parallel bulk ingest (ADBC_ODBC_OPTION_INGEST_CONNECTIONS) --------------
+// Ceiling on `adbc.odbc.ingest_connections`.  A worker is a connection's worth of work,
+// and servers cap concurrent connections far below this anyway.
+#define ADBC_ODBC_MAX_INGEST_CONNECTIONS 64
+// A stream that hands the driver one enormous batch would otherwise pin the whole ingest
+// to a single worker, so batches longer than this are sliced into pieces of this many
+// rows before they are queued.  16384 keeps every worker fed without making the queue
+// itself the cost: at the default group size it is a few tens of executes per slice.
+#define ADBC_ODBC_INGEST_SLICE_ROWS 16384
 
 /// A refcounted ODBC statement handle shared between an AdbcStatement and
 /// the ArrowArrayStream it produced.
@@ -488,6 +517,10 @@ struct OdbcStatement {
   bool array_binding;
   /// Rows of parameters per INSERT for bulk ingest; 0 = automatic, 1 = disabled.
   int64_t rows_per_insert;
+  /// Connections a bulk ingest may spread itself over; 1 (the default) = the caller's
+  /// own connection alone, and the only value that keeps the ingest atomic.  See
+  /// ADBC_ODBC_OPTION_INGEST_CONNECTIONS.
+  int64_t ingest_connections;
   /// Partitions ExecutePartitions should aim for; 0 = automatic, 1 = never split.
   int64_t partitions;
   // Bulk ingest
@@ -520,6 +553,12 @@ AdbcStatusCode OdbcStatementExecuteBound(struct OdbcStatement* stmt, struct Arro
 /// Bulk ingest bind_stream into stmt->ingest_table.
 AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_affected,
                                    struct AdbcError* error);
+
+/// Open one more ODBC connection to the database `db` already describes, with the same
+/// connection string every other connection to it uses.  The caller owns the handle and
+/// must SQLDisconnect + SQLFreeHandle it.  Used by parallel bulk ingest, which needs a
+/// connection per worker; OdbcConnectionInit is the other caller.
+AdbcStatusCode OdbcOpenHdbc(struct OdbcDatabase* db, SQLHDBC* out, struct AdbcError* error);
 
 AdbcStatusCode OdbcConnectionGetObjects(struct AdbcConnection* connection, int depth,
                                         const char* catalog, const char* db_schema,
