@@ -25,6 +25,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, GREPTIMEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, ARCADEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFLUXDB3_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, YDB_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -781,6 +782,42 @@ DBS = {
             ("SELECT COUNT(*), MIN(a), MAX(a) FROM adbc_big"
              " WHERE time >= '2024-02-29T13:45:10Z'", (100000, 0, 99999)),
         ]),
+    "ydb": dict(
+        # YDB (Yandex Database) is a distributed HTAP store whose native API is gRPC/YQL;
+        # this entry drives its *PostgreSQL-compatible* wire protocol, which the server
+        # serves on 5432 once it is started with the pg feature flags (see
+        # tests/compat/README.md), so the psqlodbc build used for the `postgres` entry
+        # drives it.  Only the wire protocol and a thin pg_catalog emulation are
+        # PostgreSQL's; the engine underneath is YDB's own.
+        env="YDB_ODBC_DRIVER",
+        # `local` is the database the single-node image creates (YDB path /local), and
+        # `adbcuser` is a role created after start-up -- the image ships no users at all
+        # and psqlodbc will not send an empty password.  Two of the settings are
+        # psqlodbc's, not YDB's:
+        #   BoolsAsChar=0, without which the driver reports every BOOLEAN as a VARCHAR(5)
+        # holding "1"/"0" instead of SQL_BIT (the same setting `questdb` and `arcadedb`
+        # need, for the same reason).
+        #   UseServerSidePrepare=0 is what makes any NULL reachable at all.  YDB's PG
+        # wire does not implement a NULL bind parameter: a Bind message that gives a
+        # parameter length of -1 is read as a zero-length *value*, so a NULL lands in a
+        # text column as '' and in any other column as "invalid input syntax for type
+        # ..." -- and a raw-protocol probe with no ODBC in the path fails exactly the
+        # same way, so this is the server, not the driver (see README.md).  With
+        # UseServerSidePrepare=0 psqlodbc stops using the extended query protocol and
+        # substitutes bound values into the SQL text itself, where a NULL is the literal
+        # NULL and YDB handles it correctly.
+        conn="Driver={drv};Server=127.0.0.1;Port=15444;Database=local;Uid=adbcuser;"
+             "Pwd=Ydb!Bridge2026;BoolsAsChar=0;UseServerSidePrepare=0;",
+        # The PRIMARY KEY is required, not decorative: YDB refuses any CREATE TABLE
+        # without one ("Primary key is required for ydb tables").  The generated ingest
+        # DDL has nowhere to put one either, which is what the driver's `ydb` quirk adds
+        # (adbc.odbc `ddl_extra_column`).
+        ddl="CREATE TABLE adbc_t (i INTEGER PRIMARY KEY, f DOUBLE PRECISION, s VARCHAR(50),"
+            " b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        # YDB does not report the declared precision of a NUMERIC over the wire, so
+        # psqlodbc falls back to its own maximum (28) with the column's scale -- as it
+        # does for QuestDB's DECIMAL and RisingWave's unqualified NUMERIC.
+        decimal_type="decimal128(28, 3)"),
     "access": dict(
         env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
         # No server: MDB Tools opens an .mdb file. It is read-only (it executes no DDL and
