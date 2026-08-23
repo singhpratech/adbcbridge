@@ -1604,3 +1604,75 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down tidb
 # or, if started standalone:
 docker rm -f adbcbridge-tidb
 ```
+
+## libSQL server (sqld) — no PostgreSQL wire protocol, so no ODBC route
+
+libSQL is Turso's fork of SQLite, and `sqld` (the `ghcr.io/tursodatabase/libsql-server`
+image) is its server. It was queued for the matrix on the assumption that it still
+exposed a PostgreSQL wire listener — `SQLD_PG_LISTEN_ADDR` / `--pg-listen-addr` — which
+`psqlodbc` could drive the way it drives the `cockroachdb`, `yugabyte`, `timescaledb`,
+`cratedb` and `questdb` entries. **That listener no longer exists**, so there is no
+`libsql` entry in `test_matrix.py` and no service in `docker-compose.yml`.
+
+sqld speaks only its own HTTP/JSON protocol (Hrana) and gRPC. There is no libSQL ODBC
+driver, and the SQLite ODBC driver used by the `sqlite` entry opens local files through
+`libsqlite3` — it has no client for a remote sqld.
+
+### Reproducing the check
+
+```sh
+docker run -d --name adbcbridge-libsql --memory=2g \
+  -e SQLD_PG_LISTEN_ADDR=0.0.0.0:5432 -e SQLD_HTTP_LISTEN_ADDR=0.0.0.0:8080 \
+  -p 127.0.0.1:15437:5432 -p 127.0.0.1:18086:8080 \
+  ghcr.io/tursodatabase/libsql-server:latest
+```
+
+The env var is accepted and silently ignored — the startup banner lists only the two
+listeners it does have, and `SQLD_PG_LISTEN_ADDR` appears nowhere in the config it
+prints:
+
+```
+config:
+	- mode: primary (0.0.0.0:5001)
+	- database path: iku.db
+	- listening for HTTP requests on: 0.0.0.0:8080
+INFO sqld: listening for incoming user HTTP connection on 0.0.0.0:8080
+INFO sqld: listening for incoming gRPC connection on 0.0.0.0:5001
+```
+
+Nothing inside the container listens on 5432 (only 5001 and 8080), so the published host
+port is a `docker-proxy` socket with no server behind it: a PostgreSQL v3 startup packet
+sent to `127.0.0.1:15437` gets `ECONNRESET` rather than an authentication request. There
+is no point running `psqlodbc` against it — `SQLDriverConnect` cannot get further than
+that reset.
+
+The server itself is healthy, which is what makes this a missing feature rather than a
+broken image. Its own protocol answers on 8080:
+
+```sh
+curl -s -X POST http://127.0.0.1:18086/v2/pipeline -H 'Content-Type: application/json' \
+  -d '{"requests":[{"type":"execute","stmt":{"sql":"SELECT sqlite_version()"}},{"type":"close"}]}'
+# {"results":[{"type":"ok","response":{"type":"execute","result":{"cols":[{"name":"sqlite_version()"...
+#   "rows":[[{"type":"text","value":"3.47.0"}]] ...
+```
+
+### It is not a matter of picking another tag
+
+`sqld --help` lists no `--pg-listen-addr` (or any other `pg`/`postgres` option), and the
+binary contains no such string at all, while a flag it does have is there for comparison:
+
+```sh
+docker run --rm --entrypoint sh ghcr.io/tursodatabase/libsql-server:latest -c '
+  grep -a -c "SQLD_HRANA_LISTEN_ADDR" /bin/sqld           # 1  (control)
+  grep -a -c -i -E "pg_listen|pg-listen|pgwire" /bin/sqld # 0'
+```
+
+Every tag published in that registry is the same in this respect: the oldest one there,
+`v0.22.0` (sqld 0.22.0, 2023-11-08), already has no PG wire either — the code was
+dropped upstream before the first tag the registry still carries. Tested with sqld
+0.24.33 (`latest`) and 0.22.0.
+
+This row moves back out of "Known not to work" if sqld ever restores a PostgreSQL wire
+listener, or if a libSQL ODBC driver appears; the entry would then look like the other
+PG-wire entries, with SQLite's type affinity driving the tolerance flags (the `sqlite`
+entry's `decimal_type="string"` is the likely starting point).
