@@ -11,3 +11,4 @@ private/
 *.egg-info/
 tests/java/target/
 bench/.matrix_bench.json
+build-*/

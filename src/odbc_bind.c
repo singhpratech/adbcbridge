@@ -66,11 +66,9 @@ static void CivilFromDays(int64_t z, int* y, unsigned* m, unsigned* d) {
   *y = (int)(yy + (*m <= 2));
 }
 
-// UTF-8 -> UTF-16 (SQLWCHAR units) into buf; returns number of units.
-static ArrowErrorCode Utf8ToUtf16(struct ArrowBuffer* buf, const char* s, int64_t n, int64_t* units) {
-  buf->size_bytes = 0;
-  NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buf, (n + 1) * (int64_t)sizeof(SQLWCHAR)));
-  SQLWCHAR* o = (SQLWCHAR*)buf->data;
+// UTF-8 -> UTF-16 into `o`, which must hold at least Utf16Units(s, n) + 1 units.
+// NUL-terminates and returns the number of units written.
+static int64_t Utf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
   int64_t k = 0;
   for (int64_t i = 0; i < n;) {
     unsigned char c = (unsigned char)s[i];
@@ -91,6 +89,32 @@ static ArrowErrorCode Utf8ToUtf16(struct ArrowBuffer* buf, const char* s, int64_
     }
   }
   o[k] = 0;
+  return k;
+}
+
+// How many UTF-16 units Utf8ToUtf16Into would write for this UTF-8 string.
+static int64_t Utf16Units(const char* s, int64_t n) {
+  int64_t k = 0;
+  for (int64_t i = 0; i < n;) {
+    unsigned char c = (unsigned char)s[i];
+    int len;
+    bool pair = false;
+    if (c < 0x80) { len = 1; }
+    else if ((c & 0xE0) == 0xC0 && i + 1 < n) { len = 2; }
+    else if ((c & 0xF0) == 0xE0 && i + 2 < n) { len = 3; }
+    else if ((c & 0xF8) == 0xF0 && i + 3 < n) { len = 4; pair = true; }
+    else { len = 1; }
+    i += len;
+    k += pair ? 2 : 1;
+  }
+  return k;
+}
+
+// UTF-8 -> UTF-16 (SQLWCHAR units) into buf; returns number of units.
+static ArrowErrorCode Utf8ToUtf16(struct ArrowBuffer* buf, const char* s, int64_t n, int64_t* units) {
+  buf->size_bytes = 0;
+  NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buf, (n + 1) * (int64_t)sizeof(SQLWCHAR)));
+  int64_t k = Utf8ToUtf16Into((SQLWCHAR*)buf->data, s, n);
   buf->size_bytes = k * (int64_t)sizeof(SQLWCHAR);
   *units = k;
   return NANOARROW_OK;
@@ -435,6 +459,8 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
 #define ARRAY_BIND_DECIMAL_CHARS 64
 // "HH:MM:SS.fffffff" plus a NUL, rounded up.
 #define ARRAY_BIND_TIME_CHARS 24
+// Room for a 64-bit integer in decimal text plus sign and NUL.
+#define ARRAY_BIND_INT_CHARS 24
 
 struct ArrayParam {
   SQLSMALLINT c_type;
@@ -453,13 +479,22 @@ struct ArrayParam {
   struct ArrowSchemaView dict_sv;
 };
 
-// Longest value in a variable-length column, or -1 if it exceeds the cap.
-static int64_t ArrayParamVarLenMax(const struct ArrowArrayView* av, bool binary, int64_t nrows) {
+// Longest value in a variable-length column, measured in the unit it will be
+// bound in -- bytes for binary and for narrow strings, UTF-16 units for wide
+// ones -- or -1 if it exceeds the staging cap.
+static int64_t ArrayParamVarLenMax(const struct ArrowArrayView* av, bool binary, bool wide,
+                                   int64_t nrows) {
   int64_t max = 0;
   for (int64_t i = 0; i < nrows; i++) {
     if (ArrowArrayViewIsNull(av, i)) continue;
-    int64_t len = binary ? ArrowArrayViewGetBytesUnsafe(av, i).size_bytes
-                         : ArrowArrayViewGetStringUnsafe(av, i).size_bytes;
+    int64_t len;
+    if (binary) {
+      len = ArrowArrayViewGetBytesUnsafe(av, i).size_bytes;
+    } else {
+      struct ArrowStringView v = ArrowArrayViewGetStringUnsafe(av, i);
+      if (v.size_bytes > ARRAY_BIND_MAX_VARLEN) return -1;
+      len = wide ? Utf16Units(v.data, v.size_bytes) : v.size_bytes;
+    }
     if (len > max) {
       max = len;
       if (max > ARRAY_BIND_MAX_VARLEN) return -1;
@@ -468,11 +503,36 @@ static int64_t ArrayParamVarLenMax(const struct ArrowArrayView* av, bool binary,
   return max;
 }
 
+// Whether every non-null value of an integer column fits in SQLINTEGER.  The
+// row-at-a-time path prefers SQL_C_SLONG whenever it can because it is the most
+// widely supported integer binding; matching that choice keeps the two paths
+// sending byte-identical parameters.
+static bool ArrayParamIntFits32(const struct ArrowArrayView* av, bool is_unsigned, int64_t nrows) {
+  for (int64_t i = 0; i < nrows; i++) {
+    if (ArrowArrayViewIsNull(av, i)) continue;
+    if (is_unsigned) {
+      if (ArrowArrayViewGetUIntUnsafe(av, i) > (uint64_t)INT32_MAX) return false;
+    } else {
+      int64_t v = ArrowArrayViewGetIntUnsafe(av, i);
+      if (v < INT32_MIN || v > INT32_MAX) return false;
+    }
+  }
+  return true;
+}
+
+static bool ArrowTypeIsUnsignedInt(enum ArrowType type) {
+  return type == NANOARROW_TYPE_UINT8 || type == NANOARROW_TYPE_UINT16 ||
+         type == NANOARROW_TYPE_UINT32 || type == NANOARROW_TYPE_UINT64;
+}
+
 // Decide how one column will be bound.  Clears *supported (without raising an
 // error) when this batch cannot use array binding for this column, in which
-// case the caller replays it row-at-a-time.
+// case the caller replays it row-at-a-time.  The ODBC C/SQL type chosen here is
+// the one SlotFromArrowValue would choose for the same values, driver quirks
+// included, so the two paths send identical data.
 static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* sv,
-                           const struct ArrowArrayView* av, int64_t nrows, bool* supported) {
+                           const struct ArrowArrayView* av, int64_t nrows,
+                           const struct OdbcReaderOptions* opts, bool* supported) {
   memset(p, 0, sizeof(*p));
   if (sv->type == NANOARROW_TYPE_DICTIONARY) {
     // Plan against the dictionary's values; ArrayParamFill decodes per row.
@@ -484,7 +544,7 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       return;
     }
     const bool index_nulls = ArrowArrayViewComputeNullCount(av) > 0;
-    ArrayParamPlan(p, &dsv, av->dictionary, av->dictionary->length, supported);
+    ArrayParamPlan(p, &dsv, av->dictionary, av->dictionary->length, opts, supported);
     if (!*supported) return;
     p->dictionary = true;
     p->dict_sv = dsv;
@@ -495,34 +555,53 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
   }
   const uint8_t* data = av->buffer_views[1].data.as_uint8;
   const bool has_nulls = ArrowArrayViewComputeNullCount(av) > 0;
+  if (has_nulls && opts->null_param_as_varchar) {
+    // The driver only encodes NULL as a NULL VARCHAR whatever the column's type
+    // (clickhouse-odbc); that is a per-value switch only the row path can make.
+    *supported = false;
+    return;
+  }
   switch (sv->type) {
-    // Narrower-than-64-bit integers are widened into a staging buffer rather
-    // than bound in place: the narrow ODBC C types (SQL_C_STINYINT and friends)
-    // are mishandled by enough drivers that matching the row-at-a-time path's
-    // SQL_C_SBIGINT/SQL_C_UBIGINT is worth one copy.
+    // Integers wider than the value they hold are narrowed into a staging
+    // buffer: SQL_C_SLONG is the most widely supported integer binding, and it
+    // is what the row path picks whenever every value fits.
     case NANOARROW_TYPE_INT8:
     case NANOARROW_TYPE_INT16:
-      p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_INTEGER; p->elem_size = sizeof(SQLBIGINT);
-      p->needs_buffer = true; break;
+    case NANOARROW_TYPE_INT32:
+    case NANOARROW_TYPE_INT64:
     case NANOARROW_TYPE_UINT8:
     case NANOARROW_TYPE_UINT16:
-      p->c_type = SQL_C_UBIGINT; p->sql_type = SQL_BIGINT; p->elem_size = sizeof(SQLUBIGINT);
-      p->needs_buffer = true; break;
-    case NANOARROW_TYPE_INT32:
-      p->c_type = SQL_C_SLONG; p->sql_type = SQL_INTEGER; p->elem_size = 4; break;
     case NANOARROW_TYPE_UINT32:
-      p->c_type = SQL_C_UBIGINT; p->sql_type = SQL_BIGINT; p->elem_size = sizeof(SQLUBIGINT);
-      p->needs_buffer = true; break;
-    case NANOARROW_TYPE_INT64:
-      p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_BIGINT; p->elem_size = 8; break;
-    case NANOARROW_TYPE_UINT64:
-      p->c_type = SQL_C_UBIGINT; p->sql_type = SQL_BIGINT; p->elem_size = 8; break;
+    case NANOARROW_TYPE_UINT64: {
+      const bool is_unsigned = ArrowTypeIsUnsignedInt(sv->type);
+      if (ArrayParamIntFits32(av, is_unsigned, nrows)) {
+        p->c_type = SQL_C_SLONG; p->sql_type = SQL_INTEGER; p->elem_size = sizeof(SQLINTEGER);
+        p->needs_buffer = sv->type != NANOARROW_TYPE_INT32;
+      } else if (opts->bigint_param_as_string) {
+        // Oracle's driver rejects SQL_C_SBIGINT; send wide integers as numeric text.
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_NUMERIC;
+        p->column_size = 20; p->decimal_digits = 0;
+        p->elem_size = ARRAY_BIND_INT_CHARS;
+        p->needs_buffer = true; p->needs_indicators = true;
+      } else if (is_unsigned) {
+        p->c_type = SQL_C_UBIGINT; p->sql_type = SQL_BIGINT; p->elem_size = sizeof(SQLUBIGINT);
+        p->needs_buffer = sv->type != NANOARROW_TYPE_UINT64;
+      } else {
+        p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_BIGINT; p->elem_size = sizeof(SQLBIGINT);
+        p->needs_buffer = sv->type != NANOARROW_TYPE_INT64;
+      }
+      break;
+    }
     case NANOARROW_TYPE_FLOAT:
       p->c_type = SQL_C_FLOAT; p->sql_type = SQL_REAL; p->elem_size = 4; break;
     case NANOARROW_TYPE_DOUBLE:
       p->c_type = SQL_C_DOUBLE; p->sql_type = SQL_DOUBLE; p->elem_size = 8; break;
-    case NANOARROW_TYPE_BOOL:  // Arrow stores bits; ODBC wants one byte each
-      p->c_type = SQL_C_BIT; p->sql_type = SQL_BIT; p->elem_size = 1;
+    case NANOARROW_TYPE_BOOL:  // Arrow stores bits; ODBC wants one value each
+      if (opts->bool_param_as_int) {  // DuckDB rejects SQL_BIT parameters
+        p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_INTEGER; p->elem_size = sizeof(SQLBIGINT);
+      } else {
+        p->c_type = SQL_C_BIT; p->sql_type = SQL_BIT; p->elem_size = 1;
+      }
       p->needs_buffer = true; break;
     case NANOARROW_TYPE_HALF_FLOAT:
       p->c_type = SQL_C_DOUBLE; p->sql_type = SQL_DOUBLE; p->elem_size = sizeof(SQLDOUBLE);
@@ -550,10 +629,16 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       p->needs_buffer = true; break;
     case NANOARROW_TYPE_DECIMAL128:
     case NANOARROW_TYPE_DECIMAL256:
-      p->c_type = SQL_C_CHAR; p->sql_type = SQL_DECIMAL;
+      p->c_type = SQL_C_CHAR;
       p->elem_size = ARRAY_BIND_DECIMAL_CHARS;
-      p->column_size = (SQLULEN)sv->decimal_precision;
-      p->decimal_digits = (SQLSMALLINT)sv->decimal_scale;
+      if (opts->decimal_param_as_varchar) {  // DuckDB mis-scales SQL_DECIMAL parameters
+        p->sql_type = SQL_VARCHAR; p->column_size = ARRAY_BIND_DECIMAL_CHARS;
+        p->decimal_digits = 0;
+      } else {
+        p->sql_type = SQL_DECIMAL;
+        p->column_size = (SQLULEN)sv->decimal_precision;
+        p->decimal_digits = (SQLSMALLINT)sv->decimal_scale;
+      }
       p->needs_buffer = true; p->needs_indicators = true; break;
     case NANOARROW_TYPE_STRING:
     case NANOARROW_TYPE_LARGE_STRING:
@@ -565,7 +650,12 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       const bool binary = sv->type != NANOARROW_TYPE_STRING &&
                           sv->type != NANOARROW_TYPE_LARGE_STRING &&
                           sv->type != NANOARROW_TYPE_STRING_VIEW;
-      int64_t max = ArrayParamVarLenMax(av, binary, nrows);
+      // Strings go out as UTF-16, exactly as the row path sends them: a
+      // SQL_C_CHAR array is transcoded from the driver's narrow charset and
+      // mangles anything outside it (SQL Server stored "hello ?" for an emoji).
+      // Drivers whose SQLWCHAR is not UTF-16 keep the narrow, UTF-8 path.
+      const bool wide = !binary && !opts->wchar_as_utf8;
+      int64_t max = ArrayParamVarLenMax(av, binary, wide, nrows);
       if (max < 0) {  // too wide to stage: this batch goes row-at-a-time
         *supported = false;
         return;
@@ -576,6 +666,10 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
         p->c_type = SQL_C_BINARY;
         p->sql_type = max > 4000 ? SQL_LONGVARBINARY : SQL_VARBINARY;
         p->elem_size = max;
+      } else if (wide) {
+        p->c_type = SQL_C_WCHAR;
+        p->sql_type = max > 4000 ? SQL_WLONGVARCHAR : SQL_WVARCHAR;
+        p->elem_size = (max + 1) * (int64_t)sizeof(SQLWCHAR);  // room for a NUL
       } else {
         p->c_type = SQL_C_CHAR;
         p->sql_type = max > 4000 ? SQL_LONGVARCHAR : SQL_VARCHAR;
@@ -640,24 +734,14 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
     }
     if (ind) OdbcIndicatorSet(ind, (size_t)i, 0, q);
     switch (vsv->type) {
-      case NANOARROW_TYPE_BOOL:
-        *slot = (uint8_t)(ArrowArrayViewGetIntUnsafe(values, row) != 0);
-        break;
-      // Widths that the non-dictionary plan binds in place still have to be
-      // staged when they arrive dictionary-encoded.
-      case NANOARROW_TYPE_INT32: {
-        SQLINTEGER v = (SQLINTEGER)ArrowArrayViewGetIntUnsafe(values, row);
-        memcpy(slot, &v, sizeof(v));
-        break;
-      }
-      case NANOARROW_TYPE_INT64: {
-        SQLBIGINT v = (SQLBIGINT)ArrowArrayViewGetIntUnsafe(values, row);
-        memcpy(slot, &v, sizeof(v));
-        break;
-      }
-      case NANOARROW_TYPE_UINT64: {
-        SQLUBIGINT v = (SQLUBIGINT)ArrowArrayViewGetUIntUnsafe(values, row);
-        memcpy(slot, &v, sizeof(v));
+      case NANOARROW_TYPE_BOOL: {
+        const int64_t b = ArrowArrayViewGetIntUnsafe(values, row) != 0;
+        if (p->c_type == SQL_C_BIT) {
+          *slot = (uint8_t)b;
+        } else {  // bool_param_as_int
+          SQLBIGINT v = (SQLBIGINT)b;
+          memcpy(slot, &v, sizeof(v));
+        }
         break;
       }
       case NANOARROW_TYPE_FLOAT: {
@@ -670,17 +754,39 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
         memcpy(slot, &v, sizeof(v));
         break;
       }
+      // Every integer width lands here; the plan chose the C type from the
+      // values, and widths that the plan binds in place still have to be staged
+      // when they arrive dictionary-encoded.
       case NANOARROW_TYPE_INT8:
-      case NANOARROW_TYPE_INT16: {
-        SQLBIGINT v = (SQLBIGINT)ArrowArrayViewGetIntUnsafe(values, row);
-        memcpy(slot, &v, sizeof(v));
-        break;
-      }
+      case NANOARROW_TYPE_INT16:
+      case NANOARROW_TYPE_INT32:
+      case NANOARROW_TYPE_INT64:
       case NANOARROW_TYPE_UINT8:
       case NANOARROW_TYPE_UINT16:
-      case NANOARROW_TYPE_UINT32: {
-        SQLUBIGINT v = (SQLUBIGINT)ArrowArrayViewGetUIntUnsafe(values, row);
-        memcpy(slot, &v, sizeof(v));
+      case NANOARROW_TYPE_UINT32:
+      case NANOARROW_TYPE_UINT64: {
+        const bool is_unsigned = ArrowTypeIsUnsignedInt(vsv->type);
+        uint64_t u = 0;
+        int64_t v = 0;
+        if (is_unsigned) u = ArrowArrayViewGetUIntUnsafe(values, row);
+        else v = ArrowArrayViewGetIntUnsafe(values, row);
+        if (p->c_type == SQL_C_SLONG) {
+          SQLINTEGER x = is_unsigned ? (SQLINTEGER)u : (SQLINTEGER)v;
+          memcpy(slot, &x, sizeof(x));
+        } else if (p->c_type == SQL_C_UBIGINT) {
+          SQLUBIGINT x = is_unsigned ? (SQLUBIGINT)u : (SQLUBIGINT)v;
+          memcpy(slot, &x, sizeof(x));
+        } else if (p->c_type == SQL_C_SBIGINT) {
+          SQLBIGINT x = is_unsigned ? (SQLBIGINT)u : (SQLBIGINT)v;
+          memcpy(slot, &x, sizeof(x));
+        } else {  // bigint_param_as_string: numeric text
+          int len = is_unsigned
+                        ? snprintf((char*)slot, stride, "%llu", (unsigned long long)u)
+                        : snprintf((char*)slot, stride, "%lld", (long long)v);
+          if (len < 0) len = 0;
+          if ((size_t)len >= stride) len = (int)stride - 1;
+          if (ind) OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)len, q);
+        }
         break;
       }
       case NANOARROW_TYPE_HALF_FLOAT: {
@@ -719,9 +825,16 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
       case NANOARROW_TYPE_LARGE_STRING:
       case NANOARROW_TYPE_STRING_VIEW: {
         struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(values, row);
-        if (s.size_bytes > 0) memcpy(slot, s.data, (size_t)s.size_bytes);
-        slot[s.size_bytes] = '\0';
-        if (ind) OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)s.size_bytes, q);
+        if (p->c_type == SQL_C_WCHAR) {
+          int64_t units = Utf8ToUtf16Into((SQLWCHAR*)slot, s.data, s.size_bytes);
+          if (ind) {
+            OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)(units * (int64_t)sizeof(SQLWCHAR)), q);
+          }
+        } else {  // wchar_as_utf8
+          if (s.size_bytes > 0) memcpy(slot, s.data, (size_t)s.size_bytes);
+          slot[s.size_bytes] = '\0';
+          if (ind) OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)s.size_bytes, q);
+        }
         break;
       }
       case NANOARROW_TYPE_BINARY:
@@ -771,20 +884,49 @@ static void ArrayParamsResetStmt(SQLHSTMT hstmt) {
   SQLFreeStmt(hstmt, SQL_RESET_PARAMS);
 }
 
+// Rows affected by the parameter-array execute that just finished.
+//
+// SQL_PARAM_ARRAY_ROW_COUNTS says how the driver reports them.  SQL_PARC_BATCH
+// means one row count per parameter set, reachable with SQLMoreResults, which is
+// what psqlodbc does -- SQLRowCount alone would report the first set's count and
+// nothing else.  SQL_PARC_NO_BATCH means SQLRowCount already holds the total for
+// the whole array and there is nothing further to walk.  Summing what
+// SQLMoreResults hands back is right for both, and gives DB-API the number it
+// wants: an UPDATE whose parameter sets match nothing reports 0, not the number
+// of sets submitted.  Returns false when the driver declines to answer.
+static bool ArrayParamsRowCount(SQLHSTMT hstmt, const struct OdbcReaderOptions* opts,
+                                int64_t nsets, int64_t* affected) {
+  SQLLEN count = OdbcRowCount(hstmt, opts->sqllen_32bit);
+  bool answered = count >= 0;
+  int64_t total = answered ? (int64_t)count : 0;
+  if (opts->param_array_row_counts != SQL_PARC_NO_BATCH) {
+    // At most one result per parameter set; the bound also stops a driver that
+    // never says SQL_NO_DATA from spinning here forever.
+    for (int64_t i = 1; i < nsets && SQL_SUCCEEDED(SQLMoreResults(hstmt)); i++) {
+      count = OdbcRowCount(hstmt, opts->sqllen_32bit);
+      if (count >= 0) {
+        total += (int64_t)count;
+        answered = true;
+      }
+    }
+  }
+  *affected = total;
+  return answered;
+}
+
 /// Execute one Arrow batch using column-wise parameter arrays.
 ///
 /// On return *rows_done holds how many leading rows of the batch were applied;
 /// the caller replays the remainder row-at-a-time.  *use_array is cleared when
-/// the driver turns out not to support parameter arrays.  *probed tracks a
-/// one-parameter-set capability probe that proves the driver honours
-/// SQL_ATTR_PARAMS_PROCESSED_PTR before we trust the counts it reports.
+/// the driver turns out not to support parameter arrays, or when it stops
+/// accounting for every parameter set it was handed.
 static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
                                         const struct ArrowSchemaView* svs,
                                         const struct ArrowArrayView* view, int64_t ncols,
-                                        int64_t nrows, bool* probed, bool* use_array,
-                                        int64_t* rows_done, int64_t* total,
-                                        struct AdbcError* error) {
+                                        int64_t nrows, bool* use_array, int64_t* rows_done,
+                                        int64_t* total, struct AdbcError* error) {
   SQLHSTMT hstmt = stmt->ref->hstmt;
+  const struct OdbcReaderOptions* opts = &stmt->reader_opts;
   AdbcStatusCode status = ADBC_STATUS_OK;
   bool supported = true;
   *rows_done = 0;
@@ -796,7 +938,7 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
   }
   int64_t per_row = 0;
   for (int64_t i = 0; i < ncols; i++) {
-    ArrayParamPlan(&params[i], &svs[i], view->children[i], nrows, &supported);
+    ArrayParamPlan(&params[i], &svs[i], view->children[i], nrows, opts, &supported);
     if (!supported) break;
     if (params[i].needs_buffer) per_row += params[i].elem_size;
     if (params[i].needs_indicators) per_row += (int64_t)sizeof(SQLLEN);
@@ -809,9 +951,16 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
   int64_t chunk = nrows;
   if (per_row > 0 && chunk > ARRAY_BIND_MAX_CHUNK_BYTES / per_row) {
     chunk = ARRAY_BIND_MAX_CHUNK_BYTES / per_row;
-    if (chunk < 1) chunk = 1;
   }
   if (chunk > ARRAY_BIND_MAX_CHUNK_ROWS) chunk = ARRAY_BIND_MAX_CHUNK_ROWS;
+  // A one-set parameter array buys nothing and is actively dangerous: MariaDB's
+  // Connector/ODBC takes a non-array path for SQL_ATTR_PARAMSET_SIZE = 1 and then
+  // segfaults on the next, larger execute of the same prepared statement.  Never
+  // submit one; single leftover rows go to the row-at-a-time path instead.
+  if (chunk < 2) {
+    free(params);
+    return ADBC_STATUS_OK;
+  }
 
   SQLUSMALLINT* param_status = malloc(sizeof(SQLUSMALLINT) * (size_t)chunk);
   if (!param_status) {
@@ -846,7 +995,7 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
 
   for (int64_t row = 0; row < nrows;) {
     int64_t n = nrows - row < chunk ? nrows - row : chunk;
-    if (!*probed) n = 1;  // capability probe: a single parameter set
+    if (n < 2) break;  // trailing single row: leave it to the row-at-a-time path
 
     if (!SQL_SUCCEEDED(SQLSetStmtAttr(hstmt, SQL_ATTR_PARAMSET_SIZE, (SQLPOINTER)(SQLULEN)n, 0))) {
       *use_array = false;  // this chunk has not run yet
@@ -855,8 +1004,7 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     SQLFreeStmt(hstmt, SQL_CLOSE);
     for (int64_t i = 0; i < ncols; i++) {
       struct ArrayParam* p = &params[i];
-      status = ArrayParamFill(p, &svs[i], view->children[i], row, n,
-                              stmt->reader_opts.sqllen_32bit, error);
+      status = ArrayParamFill(p, &svs[i], view->children[i], row, n, opts->sqllen_32bit, error);
       if (status != ADBC_STATUS_OK) break;
       SQLPOINTER data =
           p->buffer ? (SQLPOINTER)p->buffer
@@ -875,7 +1023,7 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     SQLRETURN r = stmt->prepared ? SQLExecute(hstmt)
                                  : SQLExecDirect(hstmt, (SQLCHAR*)stmt->query, SQL_NTS);
     if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
-      if (OdbcReadULen(&processed, stmt->reader_opts.sqllen_32bit) == 0 && row == 0) {
+      if (OdbcReadULen(&processed, opts->sqllen_32bit) == 0 && row == 0) {
         // Nothing was applied.  Let the row-at-a-time path run: it either
         // succeeds (the driver simply dislikes parameter arrays) or reports the
         // genuine data error with the offending row's own diagnostics.
@@ -887,22 +1035,12 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
       break;
     }
 
-    // SQLRowCount after a parameter-array execute reports rows affected across
-    // the whole chunk, which is exactly the number DB-API's rowcount wants: an
-    // UPDATE/DELETE whose parameter sets match nothing must report 0, not the
-    // number of sets submitted.  Only when the driver declines to answer (an
-    // error, or the "unavailable" -1) do we fall back to counting parameter
-    // sets, which is right for INSERT and the best guess otherwise.
-    SQLLEN row_count = 0;
+    int64_t affected = 0;
     bool have_row_count = true;
     if (r == SQL_NO_DATA) {
-      row_count = 0;  // the statement affected no rows at all
+      affected = 0;  // the statement affected no rows at all
     } else {
-      row_count = OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
-      if (row_count < 0) {
-        have_row_count = false;
-        row_count = 0;
-      }
+      have_row_count = ArrayParamsRowCount(hstmt, opts, n, &affected);
     }
     SQLSMALLINT nres = 0;
     SQLNumResultCols(hstmt, &nres);
@@ -918,26 +1056,32 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
       }
     }
 
-    // SQL_ATTR_PARAMS_PROCESSED_PTR is a SQLULEN the driver writes; `processed` was
-    // zeroed just above, so a 32-bit-SQLLEN driver's low half is the whole count.
-    int64_t done = (int64_t)OdbcReadULen(&processed, stmt->reader_opts.sqllen_32bit);
-    if (!*probed) {
-      *probed = true;
-      if (done != 1) {
-        // The driver ignores SQL_ATTR_PARAMS_PROCESSED_PTR, so we could never
-        // tell how many parameter sets a multi-row execute really applied.
-        *use_array = false;
-        // Count the probe set the way the row-at-a-time path counts a row, so
-        // the two modes agree on the total.
-        *total += (int64_t)row_count;
-        *rows_done = row + 1;  // the probe row itself did go in
-        goto cleanup;
-      }
-    }
+    // How many parameter sets the driver owns up to having run.  ODBC requires
+    // SQL_ATTR_PARAMS_PROCESSED_PTR to be written; the parameter-status array is
+    // the fallback for drivers that fill only that.  Fewer than the whole chunk
+    // means the rest did not go in, so the remainder is replayed one row at a
+    // time and this statement stops using arrays.  `processed` was zeroed just
+    // before the execute, so a 32-bit-SQLLEN driver's low half is the count.
+    int64_t done = (int64_t)OdbcReadULen(&processed, opts->sqllen_32bit);
     if (done > n) done = n;
+    if (done <= 0 && status_filled) done = applied;
+    if (done <= 0) {
+      // Neither counter was written, so a successful-looking execute tells us
+      // nothing about what actually landed.  Replaying the chunk could duplicate
+      // rows the driver did apply, so stop here instead and say what to turn off.
+      InternalAdbcSetError(
+          error,
+          "ODBC driver accepted a parameter array of %lld sets but reported neither "
+          "SQL_ATTR_PARAMS_PROCESSED_PTR nor SQL_ATTR_PARAM_STATUS_PTR, so the rows it "
+          "applied cannot be determined; set \"" ADBC_ODBC_OPTION_ARRAY_BINDING
+          "\" to \"false\" on the statement to bind one row at a time",
+          (long long)n);
+      status = ADBC_STATUS_INTERNAL;
+      break;
+    }
 
     if (have_row_count) {
-      *total += (int64_t)row_count;  // authoritative: rows affected by the chunk
+      *total += affected;  // authoritative: rows affected by the chunk
     } else if (status_filled) {
       *total += applied;
     } else {
@@ -946,7 +1090,7 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     row += done;
     *rows_done = row;
     if (done < n) {
-      *use_array = false;  // fewer sets applied than asked for: stop trusting it
+      *use_array = false;
       break;
     }
   }
@@ -1011,6 +1155,54 @@ static AdbcStatusCode BindAndExecuteRow(SQLHSTMT hstmt, bool prepared, const cha
 // Execute hstmt once per row of the bound stream, returning total rows affected.
 // Any result set an execution happens to produce is discarded; the caller that wants
 // one goes through BoundReaderInit instead.
+// ---------------------------------------------------------------------------
+// Automatic transaction batching
+//
+// Executing a bound stream row by row with the connection in autocommit costs a
+// commit -- for most engines a round trip and an fsync -- per row, which is what
+// made bulk ingest two orders of magnitude slower than the fetch path.  When the
+// caller has not opened a transaction of their own, turn autocommit off for the
+// duration of the execute and commit once at the end.
+
+struct OdbcAutoTxn {
+  struct OdbcConnection* conn;
+  bool active;
+};
+
+static void OdbcAutoTxnInit(struct OdbcAutoTxn* txn, struct OdbcConnection* conn) {
+  txn->conn = conn;
+  txn->active = false;
+}
+
+// Turn autocommit off, once.  A connection the caller has already taken out of
+// autocommit is left alone: that transaction is theirs to commit.  A driver that
+// refuses is simply left autocommitting -- slower, but correct.
+static void OdbcAutoTxnBegin(struct OdbcAutoTxn* txn) {
+  struct OdbcConnection* conn = txn->conn;
+  if (txn->active || !conn || !conn->connected) return;
+  if (!conn->autocommit || !conn->reader_opts.txn_capable) return;
+  if (!SQL_SUCCEEDED(SQLSetConnectAttr(conn->hdbc, SQL_ATTR_AUTOCOMMIT,
+                                       (SQLPOINTER)(uintptr_t)SQL_AUTOCOMMIT_OFF, 0))) {
+    return;
+  }
+  txn->active = true;
+}
+
+// Commit (or, when the execute failed, roll back) and restore autocommit.
+static AdbcStatusCode OdbcAutoTxnEnd(struct OdbcAutoTxn* txn, bool commit,
+                                     struct AdbcError* error) {
+  if (!txn->active) return ADBC_STATUS_OK;
+  txn->active = false;
+  struct OdbcConnection* conn = txn->conn;
+  AdbcStatusCode status = ADBC_STATUS_OK;
+  SQLRETURN r = SQLEndTran(SQL_HANDLE_DBC, conn->hdbc, commit ? SQL_COMMIT : SQL_ROLLBACK);
+  if (commit && !SQL_SUCCEEDED(r)) {
+    status = OdbcSetError(SQL_HANDLE_DBC, conn->hdbc, "SQLEndTran(SQL_COMMIT)", error);
+  }
+  SQLSetConnectAttr(conn->hdbc, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)(uintptr_t)SQL_AUTOCOMMIT_ON, 0);
+  return status;
+}
+
 static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affected,
                                   struct AdbcError* error) {
   SQLHSTMT hstmt = stmt->ref->hstmt;
@@ -1038,7 +1230,11 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
 
   // Array binding only helps for multi-row, non-result-producing executions.
   bool use_array = stmt->array_binding && ncols > 0;
-  bool probed = false;
+  // This function is only reached when the statement returns no rows, so there is
+  // never an open result set to keep alive across the commit.
+  struct OdbcAutoTxn txn;
+  OdbcAutoTxnInit(&txn, stmt->conn);
+  int64_t seen = 0;
 
   for (;;) {
     struct ArrowArray batch;
@@ -1056,11 +1252,14 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
       batch.release(&batch);
       break;
     }
+    // Once more than one row is in play, one commit for the lot beats one per row.
+    seen += batch.length;
+    if (seen > 1) OdbcAutoTxnBegin(&txn);
     int64_t row = 0;
     if (use_array && batch.length > 1) {
       int64_t done = 0;
-      status = ExecuteBatchArray(stmt, svs, &view, ncols, batch.length, &probed, &use_array, &done,
-                                 &total, error);
+      status = ExecuteBatchArray(stmt, svs, &view, ncols, batch.length, &use_array, &done, &total,
+                                 error);
       row = done;
     }
     for (; row < batch.length && status == ADBC_STATUS_OK; row++) {
@@ -1074,6 +1273,12 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
     }
     batch.release(&batch);
     if (status != ADBC_STATUS_OK) break;
+  }
+  {
+    // Commit everything the stream produced, or roll it back so a failed ingest
+    // does not leave half a table behind.
+    AdbcStatusCode txn_status = OdbcAutoTxnEnd(&txn, status == ADBC_STATUS_OK, error);
+    if (status == ADBC_STATUS_OK) status = txn_status;
   }
   ArrowArrayViewReset(&view);
   free(svs);

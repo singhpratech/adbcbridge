@@ -378,6 +378,23 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
 // Per-driver workarounds, keyed on SQL_DRIVER_NAME (or SQL_DBMS_NAME for a driver that
 // does not implement it), plus the capability probes the reader needs.
 static void OdbcDetectQuirks(struct OdbcConnection* conn) {
+  // Capabilities the driver reports for itself.
+  {
+    SQLUINTEGER parc = 0;
+    SQLUSMALLINT txn = 0;
+    SQLSMALLINT n = 0;
+    conn->reader_opts.param_array_row_counts = SQL_PARC_BATCH;
+    if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_PARAM_ARRAY_ROW_COUNTS, &parc, sizeof(parc), &n)) &&
+        parc == SQL_PARC_NO_BATCH) {
+      conn->reader_opts.param_array_row_counts = SQL_PARC_NO_BATCH;
+    }
+    conn->reader_opts.txn_capable = true;
+    if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_TXN_CAPABLE, &txn, sizeof(txn), &n)) &&
+        txn == SQL_TC_NONE) {
+      conn->reader_opts.txn_capable = false;
+    }
+  }
+
   SQLCHAR name[256] = {0};
   SQLSMALLINT len = 0;
 
@@ -412,10 +429,17 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // whole process, not just the call -- for any parameter whose type the binder
     // cannot infer, e.g. the "?" in "SELECT 1 + ?".
     conn->reader_opts.no_describe_param = true;
+    // DuckDB accepts SQL_ATTR_PARAMSET_SIZE but ignores the indicator array that goes
+    // with a column-wise parameter array: NULL parameter sets land as zeros and the
+    // values of the sets around them are dropped.  Row-at-a-time only.
+    conn->reader_opts.no_param_arrays = true;
   }
   if (strstr((const char*)name, "clickhouse")) {
     conn->reader_opts.null_param_as_varchar = true;
     conn->reader_opts.nullable_type_format = "Nullable(%s)";
+    // clickhouse-odbc applies only the first few sets of a parameter array and never
+    // writes SQL_ATTR_PARAMS_PROCESSED_PTR, so there is no way to tell what ran.
+    conn->reader_opts.no_param_arrays = true;
     // clickhouse-odbc reports only the whole-second Time for SQL_TYPE_TIME, with no
     // CREATE_PARAMS; a "13:45:10.123456" parameter bound into such a column is stored as
     // NULL without a diagnostic.  Time64(n) holds the fractional seconds (maximum 9).
@@ -434,6 +458,10 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // hands it UTF-16: bound strings lose three quarters of their characters and fetched
     // SQL_WVARCHAR columns come back as UTF-32. Stay on the narrow (UTF-8) path.
     conn->reader_opts.wchar_as_utf8 = true;
+    // OdbcFb accepts SQL_ATTR_PARAMSET_SIZE and returns success, but executes only the
+    // first parameter set and writes neither SQL_ATTR_PARAMS_PROCESSED_PTR nor the
+    // parameter-status array -- five bound rows insert one, silently.
+    conn->reader_opts.no_param_arrays = true;
   }
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
@@ -918,7 +946,9 @@ static AdbcStatusCode OdbcStatementNew(struct AdbcConnection* connection,
   }
   stmt->conn = conn;
   stmt->reader_opts = conn->reader_opts;
-  stmt->array_binding = false;  /* opt-in until verified across the compat matrix */
+  // On by default; drivers whose parameter arrays cannot be trusted opt out through
+  // OdbcDetectQuirks, and "adbc.odbc.array_binding" overrides either way.
+  stmt->array_binding = !conn->reader_opts.no_param_arrays;
   statement->private_data = stmt;
   return ADBC_STATUS_OK;
 }

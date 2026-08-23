@@ -152,6 +152,17 @@ struct OdbcReaderOptions {
   const char* fractional_time_type_format;
   // Largest fractional digit count fractional_time_type_format accepts (0 = no limit).
   int fractional_time_max_digits;
+  // Driver quirk: column-wise parameter arrays (SQL_ATTR_PARAMSET_SIZE) are accepted
+  // but only partly executed, so every bound row gets its own execute instead
+  // (DuckDB, clickhouse-odbc, Firebird's OdbcFb).
+  bool no_param_arrays;
+  // SQL_PARAM_ARRAY_ROW_COUNTS: SQL_PARC_NO_BATCH means one cumulative SQLRowCount for
+  // the whole parameter array; SQL_PARC_BATCH means one row count per parameter set,
+  // walked with SQLMoreResults.  Defaults to SQL_PARC_BATCH, which is safe either way.
+  int param_array_row_counts;
+  // SQL_TXN_CAPABLE said something other than SQL_TC_NONE, so turning autocommit off
+  // around a multi-row execute is worth trying.
+  bool txn_capable;
 };
 
 // --- 32-bit-SQLLEN driver quirk accessors -----------------------------------
