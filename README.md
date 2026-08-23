@@ -314,10 +314,15 @@ silently:
 Options meant for a native driver (`adbc.*` other than `adbc.odbc.*`) are held
 until that decision is made and passed on to the native driver; if delegation
 does not happen, `AdbcDatabaseInit` reports the option as unknown rather than
-dropping it. ODBC-specific options (`adbc.odbc.batch_size`, …) are meaningless
-to a native driver and are rejected by it. All `adbc.odbc.delegate*` options are
-frozen once `AdbcDatabaseInit` has run: setting them afterwards is
-`INVALID_STATE`, not a silent no-op.
+dropping it. Connection options work the same way: a connection does not know
+who will serve it until `AdbcConnectionInit`, so an option ODBC does not
+recognize (Flight SQL's `adbc.flight.sql.rpc.call_header.*`, a Snowflake
+connection setting, …) is held there too — replayed on the native connection,
+through the same typed setter it was set with, or reported by
+`AdbcConnectionInit` if the connection ends up on ODBC. ODBC-specific options
+(`adbc.odbc.batch_size`, …) are meaningless to a native driver and are rejected
+by it. All `adbc.odbc.delegate*` options are frozen once `AdbcDatabaseInit` has
+run: setting them afterwards is `INVALID_STATE`, not a silent no-op.
 
 ### Finding the native driver
 
@@ -367,7 +372,10 @@ answers `odbc`, on both the database and the connection.
 
 Delegation needs the driver manager's loader to be reachable in the process,
 and it is not implemented on Windows — there `auto` always takes the ODBC path
-and `always` fails with a clear message.
+and `always` fails with a clear message. The native-URI-to-ODBC fallback is
+unavailable on Windows for the same reason: it picks the ODBC driver to fall
+back to by enumerating `odbcinst.ini`, which is not implemented there either, so
+a native URI on the ODBC path is refused with an explanation instead.
 
 ## Python package
 

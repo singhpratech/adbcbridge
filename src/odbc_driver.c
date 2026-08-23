@@ -314,28 +314,62 @@ static AdbcStatusCode OdbcConnectionSetAutocommit(struct OdbcConnection* conn, b
 }
 
 // Remember an option set before AdbcConnectionInit: if the database turns out
-// to be delegated, the native connection has to be told about it too.
-static void OdbcConnectionRecordPreOption(struct OdbcConnection* conn, const char* key,
-                                          const char* value) {
-  if (conn->connected) return;
-  if (strncmp(key, "adbc.odbc.", 10) == 0) return;  // ours, never a native driver's
+// to be delegated, the native connection has to be told about it too.  Returns
+// the slot to fill in (emptied of any previous value for `key`), or NULL when
+// the option is not one to keep.
+static struct OdbcPreOption* OdbcConnectionPreOption(struct OdbcConnection* conn,
+                                                     const char* key) {
+  if (conn->connected) return NULL;
+  if (strncmp(key, "adbc.odbc.", 10) == 0) return NULL;  // ours, never a native driver's
   for (size_t i = 0; i < conn->pre_count; i++) {
-    if (strcmp(conn->pre_keys[i], key) == 0) {
-      char* copy = value ? strdup(value) : NULL;
-      free(conn->pre_values[i]);
-      conn->pre_values[i] = copy;
-      return;
+    if (strcmp(conn->pre[i].key, key) == 0) {
+      free(conn->pre[i].value);
+      free(conn->pre[i].bytes);
+      char* keep = conn->pre[i].key;
+      memset(&conn->pre[i], 0, sizeof(conn->pre[i]));
+      conn->pre[i].key = keep;
+      return &conn->pre[i];
     }
   }
-  char** keys = realloc(conn->pre_keys, (conn->pre_count + 1) * sizeof(char*));
-  if (!keys) return;
-  conn->pre_keys = keys;
-  char** values = realloc(conn->pre_values, (conn->pre_count + 1) * sizeof(char*));
-  if (!values) return;
-  conn->pre_values = values;
-  conn->pre_keys[conn->pre_count] = strdup(key);
-  conn->pre_values[conn->pre_count] = value ? strdup(value) : NULL;
-  if (conn->pre_keys[conn->pre_count]) conn->pre_count++;
+  struct OdbcPreOption* bigger = realloc(conn->pre, (conn->pre_count + 1) * sizeof(*bigger));
+  if (!bigger) return NULL;
+  conn->pre = bigger;
+  struct OdbcPreOption* slot = &conn->pre[conn->pre_count];
+  memset(slot, 0, sizeof(*slot));
+  slot->key = strdup(key);
+  if (!slot->key) return NULL;
+  conn->pre_count++;
+  return slot;
+}
+
+static void OdbcConnectionRecordPreOption(struct OdbcConnection* conn, const char* key,
+                                          const char* value) {
+  struct OdbcPreOption* slot = OdbcConnectionPreOption(conn, key);
+  if (!slot) return;
+  slot->type = ODBC_PRE_OPTION_STRING;
+  slot->value = value ? strdup(value) : NULL;
+}
+
+// Would an option the ODBC path just refused still make sense to a native
+// driver?  Before AdbcConnectionInit there is no database to ask -- conn->proxy
+// only comes into existence there -- so such an option is held rather than
+// refused: it is replayed on the native connection at init
+// (OdbcProxyConnectionInit) and reported as unknown only if the connection ends
+// up on ODBC after all (OdbcConnectionInit).  This mirrors what the database
+// does with the adbc.* options set before AdbcDatabaseInit.
+static bool OdbcConnectionCanHold(const struct OdbcConnection* conn, const char* key,
+                                  AdbcStatusCode odbc_status) {
+  return odbc_status == ADBC_STATUS_NOT_IMPLEMENTED && !conn->connected && !conn->proxy &&
+         strncmp(key, "adbc.odbc.", 10) != 0;
+}
+
+// Note `key` as held and drop the ODBC path's "unknown option" complaint, which
+// is not the answer until the connection has been initialized.
+static AdbcStatusCode OdbcConnectionHeld(struct OdbcConnection* conn, const char* key,
+                                         struct AdbcError* error) {
+  if (!conn->held_option) conn->held_option = strdup(key);
+  if (error && error->release) error->release(error);
+  return ADBC_STATUS_OK;
 }
 
 static AdbcStatusCode OdbcConnectionSetOptionOdbc(struct AdbcConnection* connection,
@@ -371,8 +405,13 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
   if (!conn) return ADBC_STATUS_INVALID_STATE;
   if (conn->proxy) return OdbcProxyConnectionSetOption(conn->proxy, key, value, error);
   AdbcStatusCode status = OdbcConnectionSetOptionOdbc(connection, key, value, error);
-  if (status == ADBC_STATUS_OK) OdbcConnectionRecordPreOption(conn, key, value);
-  return status;
+  if (status == ADBC_STATUS_OK) {
+    OdbcConnectionRecordPreOption(conn, key, value);
+    return status;
+  }
+  if (!OdbcConnectionCanHold(conn, key, status)) return status;
+  OdbcConnectionRecordPreOption(conn, key, value);
+  return OdbcConnectionHeld(conn, key, error);
 }
 
 // Per-driver workarounds, keyed on SQL_DRIVER_NAME (or SQL_DBMS_NAME for a driver that
@@ -466,10 +505,24 @@ static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
   if (db->proxy) {
     // A native driver serves this database: stand its connection up instead,
     // replaying whatever was set on this one before init.
-    RAISE_ADBC(OdbcProxyConnectionInit(db->proxy, conn->pre_keys, conn->pre_values,
-                                       conn->pre_count, &conn->proxy, error));
+    RAISE_ADBC(OdbcProxyConnectionInit(db->proxy, conn->pre, conn->pre_count, &conn->proxy,
+                                       error));
     conn->db = db;
     return ADBC_STATUS_OK;
+  }
+  // Options were held while it was still unknown who would serve this
+  // connection (OdbcConnectionCanHold).  ODBC does, and ODBC does not
+  // understand them: report the first rather than dropping it, exactly as
+  // AdbcDatabaseInit does for a held database option.
+  if (conn->held_option) {
+    InternalAdbcSetError(error,
+                         "Unknown connection option %s (it is only understood by a native ADBC "
+                         "driver, and this connection is served by ODBC: %s)",
+                         conn->held_option,
+                         db->delegate.last_error && *db->delegate.last_error
+                             ? db->delegate.last_error
+                             : "delegation was not attempted");
+    return ADBC_STATUS_NOT_IMPLEMENTED;
   }
   if (!db->henv) {
     InternalAdbcSetError(error, "Database not initialized");
@@ -519,11 +572,12 @@ static AdbcStatusCode OdbcConnectionRelease(struct AdbcConnection* connection,
     SQLFreeHandle(SQL_HANDLE_DBC, conn->hdbc);
   }
   for (size_t i = 0; i < conn->pre_count; i++) {
-    free(conn->pre_keys[i]);
-    free(conn->pre_values[i]);
+    free(conn->pre[i].key);
+    free(conn->pre[i].value);
+    free(conn->pre[i].bytes);
   }
-  free(conn->pre_keys);
-  free(conn->pre_values);
+  free(conn->pre);
+  free(conn->held_option);
   free(conn);
   connection->private_data = NULL;
   return status;
@@ -807,7 +861,19 @@ static AdbcStatusCode OdbcConnectionSetOptionInt(struct AdbcConnection* connecti
   if (conn->proxy) return OdbcProxyConnectionSetOptionInt(conn->proxy, key, value, error);
   char buf[32];
   snprintf(buf, sizeof(buf), "%lld", (long long)value);
-  return OdbcConnectionSetOption(connection, key, buf, error);
+  AdbcStatusCode status = OdbcConnectionSetOptionOdbc(connection, key, buf, error);
+  if (status == ADBC_STATUS_OK) {
+    OdbcConnectionRecordPreOption(conn, key, buf);
+    return status;
+  }
+  if (!OdbcConnectionCanHold(conn, key, status)) return status;
+  // Held as an integer: a native driver that has ConnectionSetOptionInt for this
+  // key may well not take the same value spelled as a string.
+  struct OdbcPreOption* slot = OdbcConnectionPreOption(conn, key);
+  if (!slot) return status;
+  slot->type = ODBC_PRE_OPTION_INT;
+  slot->number = value;
+  return OdbcConnectionHeld(conn, key, error);
 }
 
 static AdbcStatusCode OdbcConnectionSetOptionDouble(struct AdbcConnection* connection,
@@ -816,6 +882,16 @@ static AdbcStatusCode OdbcConnectionSetOptionDouble(struct AdbcConnection* conne
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
   if (!conn) return ADBC_STATUS_INVALID_STATE;
   if (conn->proxy) return OdbcProxyConnectionSetOptionDouble(conn->proxy, key, value, error);
+  // ODBC has no double-valued connection option of its own, so every one of
+  // them is a native driver's until the connection says otherwise.
+  if (OdbcConnectionCanHold(conn, key, ADBC_STATUS_NOT_IMPLEMENTED)) {
+    struct OdbcPreOption* slot = OdbcConnectionPreOption(conn, key);
+    if (slot) {
+      slot->type = ODBC_PRE_OPTION_DOUBLE;
+      slot->real = value;
+      return OdbcConnectionHeld(conn, key, error);
+    }
+  }
   InternalAdbcSetError(error, "Unknown connection option %s", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
@@ -826,6 +902,19 @@ static AdbcStatusCode OdbcConnectionSetOptionBytes(struct AdbcConnection* connec
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
   if (!conn) return ADBC_STATUS_INVALID_STATE;
   if (conn->proxy) return OdbcProxyConnectionSetOptionBytes(conn->proxy, key, value, length, error);
+  if (OdbcConnectionCanHold(conn, key, ADBC_STATUS_NOT_IMPLEMENTED)) {
+    struct OdbcPreOption* slot = OdbcConnectionPreOption(conn, key);
+    if (slot) {
+      uint8_t* copy = malloc(length ? length : 1);
+      if (copy) {
+        if (length) memcpy(copy, value, length);
+        slot->type = ODBC_PRE_OPTION_BYTES;
+        slot->bytes = copy;
+        slot->length = length;
+        return OdbcConnectionHeld(conn, key, error);
+      }
+    }
+  }
   InternalAdbcSetError(error, "Unknown connection option %s", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }

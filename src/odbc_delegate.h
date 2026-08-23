@@ -163,11 +163,29 @@ AdbcStatusCode OdbcProxyDatabaseGetOptionBytes(struct OdbcDelegateProxy* proxy, 
                                                uint8_t* value, size_t* length,
                                                struct AdbcError* error);
 
-/// Create and initialize the native connection.  `pre_keys`/`pre_values` are the
-/// options set on the connection before AdbcConnectionInit.
+/// One option set on a connection before AdbcConnectionInit, kept until it is
+/// known whether the connection is served by ODBC or by a native driver.
+struct OdbcPreOption {
+  char* key;
+  enum OdbcPreOptionType {
+    ODBC_PRE_OPTION_STRING,
+    ODBC_PRE_OPTION_INT,
+    ODBC_PRE_OPTION_DOUBLE,
+    ODBC_PRE_OPTION_BYTES,
+  } type;
+  char* value;     ///< ODBC_PRE_OPTION_STRING (may be NULL)
+  uint8_t* bytes;  ///< ODBC_PRE_OPTION_BYTES
+  size_t length;   ///< ODBC_PRE_OPTION_BYTES
+  int64_t number;  ///< ODBC_PRE_OPTION_INT
+  double real;     ///< ODBC_PRE_OPTION_DOUBLE
+};
+
+/// Create and initialize the native connection.  `pre` holds the options set on
+/// the connection before AdbcConnectionInit, replayed here in the order they
+/// were set.
 AdbcStatusCode OdbcProxyConnectionInit(struct OdbcDelegateProxy* proxy,
-                                       char* const* pre_keys, char* const* pre_values,
-                                       size_t pre_count, struct OdbcProxyConnection** out,
+                                       const struct OdbcPreOption* pre, size_t pre_count,
+                                       struct OdbcProxyConnection** out,
                                        struct AdbcError* error);
 AdbcStatusCode OdbcProxyConnectionRelease(struct OdbcProxyConnection* conn,
                                           struct AdbcError* error);
