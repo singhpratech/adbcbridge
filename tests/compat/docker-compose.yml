@@ -55,6 +55,16 @@ services:
     environment: { FIREBIRD_ROOT_PASSWORD: adbc, FIREBIRD_USER: adbc, FIREBIRD_PASSWORD: adbc,
                    FIREBIRD_DATABASE: adbc.fdb, FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8 }
     ports: ["127.0.0.1:13050:3050"]
+  # Databend, a MySQL-wire analytic warehouse.  It is in the "extra" profile, so a plain
+  # `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d databend
+  databend:
+    image: datafuselabs/databend
+    profiles: ["extra"]
+    # The built-in "root" account; without QUERY_DEFAULT_PASSWORD it has no password.
+    environment: { QUERY_DEFAULT_USER: root, QUERY_DEFAULT_PASSWORD: adbc }
+    # 3307 is Databend's MySQL wire protocol port (8000 is its own HTTP API).
+    ports: ["127.0.0.1:13311:3307"]
   # YugabyteDB (PostgreSQL-compatible distributed SQL).  yugabyted runs a master
   # and a tserver inside the one container; left alone they size their heaps as a
   # fraction of total host RAM.  The caps below keep the node under 1 GiB.

@@ -231,6 +231,150 @@ binds timestamps with an explicit scale, so it stores and reads back the full mi
 and the matrix assertion passes — the benchmark's pyodbc column is the only place the
 truncation is visible.
 
+
+## Databend
+
+Databend is a column-store analytic warehouse that speaks the **MySQL wire protocol**, so
+MySQL Connector/ODBC drives it and no new driver download is needed -- point
+`DATABEND_ODBC_DRIVER` at the same `libmyodbc9w.so` the `mysql` entry uses (see
+[MySQL 8](#mysql-8) for where to unpack it).
+
+Server (or the `databend` service in `docker-compose.yml`, which is in the `extra`
+compose profile so a plain `up -d` does not start it):
+
+```sh
+docker run -d --name adbcbridge-databend --memory=2g -p 127.0.0.1:13311:3307 \
+  -e QUERY_DEFAULT_USER=root -e QUERY_DEFAULT_PASSWORD=adbc datafuselabs/databend
+```
+
+It is ready in a few seconds; `docker logs` prints `MySQL listened at 0.0.0.0:3307`.
+
+Run the entry:
+
+```sh
+export DATABEND_ODBC_DRIVER=$MYSQL_ODBC_DRIVER
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+python tests/compat/test_matrix.py databend
+# databend  PASS  (MySQL 8.0.90-v1.2.881-...)
+```
+
+The `LD_PRELOAD` is the same static-TLS workaround the `mysql` entry needs; see that
+section for why.
+
+### Connection string: `NO_SSPS=1` and `PLUGIN_DIR`
+
+Two settings in the entry's connection string are load-bearing.
+
+`NO_SSPS=1` is what makes the entry work at all. Databend's MySQL handler refuses
+`COM_STMT_PREPARE` outright:
+
+```
+Prepare is not support in Databend. (1105) (SQLPrepare)
+```
+
+so every parameterised statement fails at `SQLPrepare`. With `NO_SSPS=1` the connector
+stops using the server-side prepare protocol and substitutes bound parameters into the
+SQL text itself, sending each statement as a plain query.
+
+`PLUGIN_DIR` is needed only for the unpacked (non-root) tarball. Databend authenticates
+with `mysql_native_password`, which is no longer built into Connector/ODBC 9 -- it is a
+loadable plugin, shipped in `lib/plugin` beside the driver, and the driver's compiled-in
+default path (`/usr/local/mysql/lib/plugin`) does not exist in a tarball install:
+
+```
+Authentication plugin 'mysql_native_password' cannot be loaded:
+/usr/local/mysql/lib/plugin/mysql_native_password.so: cannot open shared object file
+```
+
+The entry writes `{plugin}` in its connection string rather than a fixed path;
+`test_matrix.py` expands that to `PLUGIN_DIR=<dir of the driver>/plugin` when such a
+directory exists and to nothing when it does not, so a packaged root install (whose
+default plugin path is correct) is unaffected.
+
+### Driver quirks: MySQL syntax against a server that is not MySQL
+
+Both quirks come from the same root cause -- MySQL Connector/ODBC assumes the server on
+the other end is a MySQL -- and both are keyed in `OdbcDetectQuirks` on the driver being
+`myodbc` *and* the server reporting `SQL_TXN_CAPABLE = SQL_TC_NONE`. MySQL and MariaDB are
+both transactional, so that pair identifies a MySQL-wire warehouse without keying on a
+version string.
+
+**`_binary` charset introducers** (`temporal_binary_param_as_varchar`). In `NO_SSPS` mode
+the connector renders every parameter whose SQL type is not character or numeric as a
+MySQL charset-introducer literal -- `_binary'2024-02-29'` for a `DATE`, likewise for
+`TIMESTAMP` and `VARBINARY`. Introducers are MySQL/MariaDB syntax, so Databend's parser
+rejects them:
+
+```
+1 | (_binary'2024-02-29'
+  |         ^^ unexpected `'2024-02-29'`
+```
+
+A standalone C probe confirms this is the ODBC driver's own rendering and not anything
+adbcbridge does: binding the identical value as `SQL_C_CHAR -> SQL_VARCHAR` succeeds where
+`SQL_C_TYPE_DATE -> SQL_TYPE_DATE`, `SQL_C_CHAR -> SQL_TYPE_DATE` and
+`SQL_C_BINARY -> SQL_VARBINARY` all fail -- it is the *SQL* type that decides. The quirk
+therefore binds dates, timestamps and binaries as plain `SQL_VARCHAR` text and lets the
+server's own literal parsing coerce them, the same trick the sub-second `TIME` path
+already uses for every driver. The column-wise parameter-array path defers those columns
+to the row-at-a-time path, exactly as `null_param_as_varchar` does; nothing is lost,
+because a driver that substitutes parameters into the SQL text sends one statement per
+parameter set either way.
+
+**MySQL type names in ingest DDL** (`ignore_driver_type_names`). `SQLGetTypeInfo` answers
+with MySQL's type system whatever the server is -- `bit` for `SQL_BIT`, `long varchar` for
+`SQL_LONGVARCHAR`, `long varbinary`, `datetime` -- and Databend rejects most of those
+names:
+
+```
+CREATE TABLE `adbc_ing` (`a` bigint, `b` long varchar, `c` double, `d` date, `e` bit)
+                                         --- ^^^^ unexpected `long`
+```
+
+The quirk skips `SQLGetTypeInfo` and uses the portable ISO names `ColumnTypeSql()` already
+carries as its per-type fallbacks (`BOOLEAN`, `BIGINT`, `DOUBLE PRECISION`, `TEXT`,
+`BLOB`, `DATE`, `TIMESTAMP`, `DECIMAL(p,s)`), every one of which Databend accepts.
+
+### Entry notes
+
+Databend needs no `sql_mode` `setup` step: its default dialect is PostgreSQL, so the
+double-quoted identifiers `adbc_ingest` emits already parse.
+
+Three things the entry has to tolerate, all of them Databend's own MySQL-wire metadata
+rather than driver bugs:
+
+* **`decimal_as_string`.** Databend describes every `DECIMAL` column with scale 0 --
+  `DECIMAL(10,3)` arrives as precision 9, scale 0 -- while sending the digits themselves
+  in full. Taken at face value that scale rounds `12.345` to `12`, so the entry sets the
+  `adbc.odbc.decimal_as_string` database option (via the entry's `db_kwargs`) and reads
+  decimals as their exact text.
+* **`b` is `VARCHAR`, not `BINARY`** -- the same choice the ClickHouse entry makes with
+  `String`. A Databend `BINARY` column is rendered as *hex text* on the MySQL wire, so
+  `b"\x01\x02"` reads back as `b"0102"` and no byte string ever round-trips. A character
+  column carries the two bytes through unchanged.
+* **`bool_type="int16"`.** Databend sends `BOOLEAN` as a `SMALLINT`; MySQL's own `BOOLEAN`
+  is `TINYINT(1)`, which the same driver reports as `SQL_TINYINT` -> `int8`.
+
+Everything else in the workload passes unchanged: the emoji round-trip, microsecond
+timestamps, NULL parameters, `GetObjects`, error mapping and affected-row counts (Databend
+answers `SQLRowCount` for its own `INSERT`s even though it reports `SQL_TC_NONE` for
+transactions).
+
+The entry sets `big_rows=2000` rather than the default 5000. Databend commits a fresh
+immutable data block per `INSERT`, and the connector in `NO_SSPS` mode sends one statement
+per parameter set -- a parameter array is not turned into a multi-row `INSERT` -- so
+single-row ingest runs at a few tens of rows per second (35-44 rows/s on the benchmark's
+narrower row). 2000 rows still crosses the reader's 1024-row batch boundary, which is what
+that step exists to test. Reads are not affected: the same server streams 2000 rows back
+at ~78,000 rows/s.
+
+### Clean up
+
+```sh
+docker rm -f adbcbridge-databend
+```
+
 ## MonetDB
 
 Server (Dec2025-SP3, 11.55.x) on `127.0.0.1:15000`, database `adbc`, user `monetdb`:

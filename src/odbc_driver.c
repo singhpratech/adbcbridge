@@ -609,6 +609,19 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       conn->reader_opts.no_param_arrays = true;
     }
   }
+  if (strstr((const char*)name, "myodbc") && !conn->reader_opts.txn_capable) {
+    // MySQL Connector/ODBC against a server that reports SQL_TC_NONE: not a MySQL or a
+    // MariaDB (both are transactional) but one of the analytic warehouses that speak the
+    // MySQL wire protocol -- Databend is the verified one.  Those have no prepared
+    // statements, so the connector has to run with NO_SSPS=1 and substitute parameters
+    // into the SQL text, where it writes dates, timestamps and binaries as MySQL
+    // charset-introducer literals (`_binary'...'`) that only MySQL and MariaDB parse.
+    // Send those parameters as ordinary quoted text instead.
+    conn->reader_opts.temporal_binary_param_as_varchar = true;
+    // Its SQLGetTypeInfo answers with MySQL's type system whatever the server is, so
+    // ingest DDL has to fall back to portable type names.
+    conn->reader_opts.ignore_driver_type_names = true;
+  }
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;

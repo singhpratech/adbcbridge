@@ -175,6 +175,31 @@ struct OdbcReaderOptions {
   // wire protocol, rejects those with "unsupported column type" while accepting the
   // standard spellings.
   bool ansi_ddl_type_names;
+  // Driver quirk: bind date, timestamp and binary parameters as SQL_VARCHAR text and
+  // let the server's own literal parsing coerce them, instead of using SQL_TYPE_DATE /
+  // SQL_TYPE_TIMESTAMP / SQL_VARBINARY.
+  //
+  // MySQL Connector/ODBC substitutes bound parameters into the SQL text itself whenever
+  // server-side prepared statements are off (NO_SSPS=1, which is the only way to reach a
+  // MySQL-wire server that has no prepare support at all -- Databend answers
+  // COM_STMT_PREPARE with "Prepare is not support in Databend").  In that mode it writes
+  // every parameter whose *SQL* type is not character or numeric as a MySQL
+  // charset-introducer literal: `_binary'2024-02-29'` for a DATE, `_binary'...'` for a
+  // TIMESTAMP or a VARBINARY.  Introducers are MySQL/MariaDB syntax, so on any other
+  // server behind that driver the statement fails to parse.  Binding the same values as
+  // plain SQL_VARCHAR makes the driver emit an ordinary quoted literal, which such
+  // servers accept and coerce -- the same trick the sub-second TIME path in
+  // SlotFromArrowValue() already uses for every driver.
+  bool temporal_binary_param_as_varchar;
+  // Driver quirk: the driver's SQLGetTypeInfo describes a different DBMS than the server
+  // on the other end of it, so its type names cannot be used to build CREATE TABLE for a
+  // bulk ingest.  MySQL Connector/ODBC always answers with MySQL's type system -- "bit"
+  // for SQL_BIT, "long varchar" for SQL_LONGVARCHAR, "long varbinary", "datetime" -- and
+  // a MySQL-wire server that is not MySQL rejects most of those names.  Skip
+  // SQLGetTypeInfo entirely and use the portable ISO type names ColumnTypeSql() already
+  // carries as its per-type fallbacks (BOOLEAN, BIGINT, DOUBLE PRECISION, TEXT, BLOB,
+  // DATE, TIMESTAMP, DECIMAL(p,s)), which such servers do accept.
+  bool ignore_driver_type_names;
   // Driver quirk: the ODBC driver was compiled with a 32-bit SQLLEN/SQLULEN while the
   // driver manager and this driver use 64-bit ones.  IBM's freely downloadable Db2
   // "clidriver" ships exactly such a libdb2.so on 64-bit Linux (the 64-bit-SQLLEN build
