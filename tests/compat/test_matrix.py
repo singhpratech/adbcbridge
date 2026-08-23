@@ -16,6 +16,8 @@ Each database is enabled by an environment variable holding the path to its ODBC
     QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER,
     RISINGWAVE_ODBC_DRIVER
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER, QUESTDB_ODBC_DRIVER,
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -317,6 +319,22 @@ DBS = {
         # Firebird upper-cases unquoted identifiers; NUMERIC(10,3) is stored as a scaled
         # BIGINT and OdbcFb reports the storage precision (18), not the declared one.
         ident=str.upper, decimal_type="decimal128(18, 3)", ts_us=(123400,)),
+    "virtuoso": dict(
+        # OpenLink Virtuoso is ODBC-native: virtodbc.so speaks the server's own wire
+        # protocol on 1111, so HOST is "host:port" and there is no database to name (the
+        # dba user lands in DB.DBA).  Use the ANSI virtodbc.so, not the Unicode
+        # virtodbcu.so -- see tests/compat/README.md for why the Unicode build cannot be
+        # driven through unixODBC's ANSI entry points at all.
+        env="VIRTUOSO_ODBC_DRIVER",
+        conn="Driver={drv};HOST=127.0.0.1:11111;UID=dba;PWD=adbc;",
+        # Virtuoso's type names are its own: NVARCHAR is the wide (character) string type
+        # while a plain VARCHAR is a byte string, DATETIME is the microsecond timestamp
+        # (TIMESTAMP is a separate "row timestamp" type the driver describes as binary),
+        # and there is no BOOLEAN at all -- SMALLINT is what Virtuoso itself uses for one,
+        # so `bo` reads back as int16.
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s NVARCHAR(50), b VARBINARY(10),"
+            " d DATE, ts DATETIME, n DECIMAL(10,3), bo SMALLINT)",
+        bool_type="int16"),
     "access": dict(
         env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
         # No server: MDB Tools opens an .mdb file. It is read-only (it executes no DDL and
