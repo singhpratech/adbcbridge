@@ -30,17 +30,21 @@ object it returns is a plain ``adbc_driver_manager.dbapi.Connection``.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from adbc_driver_manager import dbapi as _dbapi
-
+from . import _preload
 from ._locate import (
     DriverNotFoundError,
     OdbcDriver,
     driver_path,
+    odbc_driver_library,
     odbc_drivers,
     odbcinst_ini,
 )
+from ._preload import preload_odbc_driver
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from adbc_driver_manager import dbapi as _dbapi
 
 __all__ = [
     "DriverNotFoundError",
@@ -48,14 +52,29 @@ __all__ = [
     "__version__",
     "connect",
     "driver_path",
+    "odbc_driver_library",
     "odbc_drivers",
     "odbcinst_ini",
+    "preload_odbc_driver",
 ]
 
 __version__ = "0.1.0"
 
 # Local alias: the `driver_path` parameter of connect() shadows the function.
 _find_driver = driver_path
+
+
+def _dbapi_module():
+    """Import ``adbc_driver_manager.dbapi`` -- and, with it, pyarrow.
+
+    Deferred rather than done at import time so that ``import adbcbridge`` does
+    not pull pyarrow into the process: an ODBC driver that needs static
+    thread-local storage can then still be loaded first (see ``_preload``).
+    """
+    from adbc_driver_manager import dbapi
+
+    return dbapi
+
 
 #: Prefix for this driver's own options, e.g. ``adbc.odbc.batch_size``.
 OPTION_PREFIX = "adbc.odbc."
@@ -126,7 +145,11 @@ def connect(
         db_kwargs[_option_key(key)] = _option_value(value)
 
     driver = driver_path if driver_path is not None else _find_driver()
-    return _dbapi.connect(
+    if _preload.preload_enabled():
+        # Before pyarrow comes in below.  Best effort: a driver that will not
+        # load here still gets its real failure reported by the connection.
+        preload_odbc_driver(uri=uri, dsn=dsn)
+    return _dbapi_module().connect(
         driver=driver,
         db_kwargs=db_kwargs,
         conn_kwargs=dict(conn_kwargs or {}),

@@ -30,6 +30,7 @@ __all__ = [
     "DriverNotFoundError",
     "OdbcDriver",
     "driver_path",
+    "odbc_driver_library",
     "odbc_drivers",
 ]
 
@@ -363,3 +364,128 @@ def odbc_drivers() -> List[OdbcDriver]:
             )
         )
     return drivers
+
+
+# --- resolving the *ODBC* driver library behind a connection string ----------
+
+
+def odbc_ini() -> Optional[pathlib.Path]:
+    """Path of the ``odbc.ini`` holding DSNs, as reported by ``odbcinst -j``."""
+    try:
+        out = subprocess.run(
+            ["odbcinst", "-j"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        ).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    for line in out.splitlines():
+        # "SYSTEM DATA SOURCES: /etc/odbc.ini"
+        if "DATA SOURCES" in line.upper() and ":" in line:
+            candidate = pathlib.Path(line.split(":", 1)[1].strip())
+            if candidate.is_file():
+                return candidate
+    ini = os.environ.get("ODBCINI")
+    fallbacks = [pathlib.Path(ini)] if ini else []
+    sysini = os.environ.get("ODBCSYSINI")
+    if sysini:
+        fallbacks.append(pathlib.Path(sysini) / "odbc.ini")
+    fallbacks += [
+        pathlib.Path.home() / ".odbc.ini",
+        pathlib.Path("/etc/odbc.ini"),
+        pathlib.Path("/usr/local/etc/odbc.ini"),
+        pathlib.Path("/opt/homebrew/etc/odbc.ini"),
+    ]
+    for candidate in fallbacks:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _ini_value(path: Optional[pathlib.Path], section: str, key: str) -> Optional[str]:
+    """One key of one section of an ODBC ini file, matched case-insensitively."""
+    if path is None:
+        return None
+    import configparser
+
+    parser = configparser.RawConfigParser(strict=False)
+    parser.optionxform = str
+    try:
+        parser.read_string(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, configparser.Error):
+        return None
+    for name in parser.sections():
+        if name.lower() != section.lower():
+            continue
+        for option, value in parser.items(name):
+            if option.lower() == key.lower():
+                return value.strip()
+    return None
+
+
+def connection_string_attribute(uri: str, key: str) -> Optional[str]:
+    """Read one ``KEY=VALUE`` attribute out of an ODBC connection string.
+
+    Values wrapped in ``{}`` -- the ODBC way of quoting a value that contains a
+    semicolon -- are unwrapped.  Returns ``None`` when the key is not there.
+    """
+    if not uri:
+        return None
+    field = ""
+    fields = []
+    braced = False
+    for char in uri:
+        if char == "{":
+            braced = True
+        elif char == "}":
+            braced = False
+        elif char == ";" and not braced:
+            fields.append(field)
+            field = ""
+            continue
+        field += char
+    fields.append(field)
+    for entry in fields:
+        name, sep, value = entry.partition("=")
+        if not sep or name.strip().lower() != key.lower():
+            continue
+        value = value.strip()
+        if value.startswith("{") and value.endswith("}"):
+            value = value[1:-1]
+        return value
+    return None
+
+
+def odbc_driver_library(
+    driver: Optional[str] = None,
+    *,
+    uri: Optional[str] = None,
+    dsn: Optional[str] = None,
+) -> Optional[str]:
+    """Absolute path of the ODBC driver library a connection would load.
+
+    *driver* is either that path already or a name registered in
+    ``odbcinst.ini``.  When it is not given, the ``Driver=`` attribute of *uri*
+    is used, and failing that the ``Driver`` entry of the *dsn* section of
+    ``odbc.ini``.  Returns ``None`` when nothing resolves to a file that is
+    there -- this is a best-effort lookup, not a validation.
+    """
+    if driver is None and uri:
+        driver = connection_string_attribute(uri, "Driver")
+    if driver is None and dsn is None and uri:
+        dsn = connection_string_attribute(uri, "DSN")
+    if driver is None and dsn:
+        driver = _ini_value(odbc_ini(), dsn, "Driver")
+    if not driver:
+        return None
+    candidate = pathlib.Path(driver).expanduser()
+    if candidate.is_file():
+        return str(candidate.resolve())
+    for entry in odbc_drivers():
+        if entry.name.lower() != driver.lower() or not entry.path:
+            continue
+        path = pathlib.Path(entry.path).expanduser()
+        if path.is_file():
+            return str(path.resolve())
+    return None

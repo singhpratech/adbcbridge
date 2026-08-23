@@ -16,6 +16,12 @@ to the directory holding it. The file-based entries need no server at all: `sqli
 `duckdb` create their database in a temp dir, and `access` reads a checked-in `.mdb`
 fixture.
 
+The script opens the driver libraries of the entries it is about to run *before* it
+imports pyarrow. MySQL Connector/ODBC cannot be loaded at all once pyarrow has been
+imported, so without that the eleven MySQL-wire entries would fail with unixODBC's
+`Can't open lib ... : file not found`; see
+[`docs/TROUBLESHOOTING.md`](../../docs/TROUBLESHOOTING.md).
+
 Services under the `extra` compose profile are not started by a plain `up -d`; name the
 profile to bring one up:
 

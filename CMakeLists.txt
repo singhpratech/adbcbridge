@@ -260,6 +260,23 @@ if(ADBC_ODBC_BUILD_TESTS AND NOT WIN32)
     target_compile_options(adbc_fake_native_driver PRIVATE -Wall -Wextra)
   endif()
 
+  # Fixture for tests/test_driver_load_errors.py: a pair of libraries that
+  # reproduce "cannot allocate memory in static TLS block" on demand, without
+  # depending on which ODBC drivers or Python packages the host happens to have.
+  # See tests/c/tls_dep.c.  ELF/glibc only -- the failure does not exist on
+  # Windows, and macOS reserves static TLS differently.
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT APPLE)
+    add_library(adbc_odbc_tls_dep SHARED tests/c/tls_dep.c)
+    add_library(adbc_odbc_tls_user SHARED tests/c/tls_user.c)
+    target_link_libraries(adbc_odbc_tls_user PRIVATE adbc_odbc_tls_dep)
+    foreach(tls_target IN ITEMS adbc_odbc_tls_dep adbc_odbc_tls_user)
+      set_target_properties(${tls_target} PROPERTIES
+        PREFIX "lib"
+        BUILD_WITH_INSTALL_RPATH OFF)
+      target_compile_options(${tls_target} PRIVATE -Wall -Wextra)
+    endforeach()
+  endif()
+
   add_test(NAME adbc_odbc_c_smoke
     COMMAND adbc_odbc_test_driver $<TARGET_FILE:adbc_driver_odbc>)
   # SQLITE_ODBC_DRIVER is inherited from the environment ctest runs in; the
