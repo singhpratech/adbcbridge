@@ -1830,6 +1830,114 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down tidb
 docker rm -f adbcbridge-tidb
 ```
 
+## Materialize 26
+
+Materialize is a streaming warehouse: a `MATERIALIZED VIEW` there is not a snapshot you
+refresh but a dataflow kept incrementally up to date as its inputs change. It speaks the
+PostgreSQL wire protocol, so the same `psqlodbc` build used for the `postgres` entry
+drives it — there is no Materialize ODBC driver. Unlike QuestDB or CrateDB, the SQL layer
+really is PostgreSQL's: the workload's DDL, the type names psqlodbc's `SQLGetTypeInfo`
+puts in the generated ingest DDL, and the catalog queries all work unchanged.
+
+### Get the ODBC driver without root
+
+The same `psqlodbc` as the `postgres` entry; if you already exported
+`POSTGRES_ODBC_DRIVER`, just point the Materialize variable at it:
+
+```sh
+export MATERIALIZE_ODBC_DRIVER=$POSTGRES_ODBC_DRIVER
+```
+
+Otherwise unpack it first (no root needed):
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export MATERIALIZE_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d materialize
+# or standalone:
+docker run -d --name adbcbridge-materialize --memory=2g \
+  -p 127.0.0.1:16875:6875 materialize/materialized:latest
+```
+
+The single-node image needs no configuration: PostgreSQL wire is on `16875` with one
+`materialize` superuser, no authentication and a `materialize` database. It takes about
+half a minute to come up (it bootstraps its catalog and starts the `quickstart` cluster),
+and settles at roughly 1.3 GB resident — the `--memory=2g` cap is comfortable. It is
+ready when the last startup phase has logged:
+
+```sh
+until docker logs adbcbridge-materialize 2>&1 |
+        grep -q 'envd serve: postamble complete'; do sleep 1; done
+```
+
+### Run the entry
+
+```sh
+MATERIALIZE_ODBC_DRIVER=$POSTGRES_ODBC_DRIVER \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py materialize
+# materialize PASS  (PostgreSQL (via ODBC) 9.5.0)
+```
+
+`GetInfo` reports `PostgreSQL 9.5.0`, because 9.5 is the wire version Materialize
+advertises, and `SQL_DRIVER_NAME` is `psqlodbcw.so` — the same pair real PostgreSQL
+gives. `SELECT version()` is what tells them apart:
+
+```
+PostgreSQL 9.5 on x86_64-unknown-linux-gnu (Materialize 26.38.1)
+```
+
+### Quirks
+
+**`Protocol=7.4-0` in the connection string (required for large ingests).** This is a
+psqlodbc setting, not a Materialize one. Once psqlodbc is inside a transaction it wraps
+each further execute in a `SAVEPOINT` so it can roll back that one statement; Materialize
+implements no `SAVEPOINT`, and the whole batch fails with
+
+```
+ERROR: Expected a keyword at the beginning of a statement, found identifier "savepoint" (42601)
+```
+
+psqlodbc splits a parameter array into a second batch once the statement text it inlines
+the values into grows past its internal limit, so where that happens depends on how wide
+the rows are: the matrix workload's 5000 narrow rows still go as one batch and pass
+without the setting, while `bench/matrix_bench.py`'s wider rows split at about 4000 and do
+not. The `questdb` entry sets `Protocol=7.4-0` for exactly the same reason.
+
+**`NUMERIC` reads back as a string.** Materialize has a single arbitrary-precision
+`numeric`: `NUMERIC(10,3)` keeps the scale but not the precision, and psqlodbc describes
+the column at the type's own maximum of 39 digits. An Arrow `decimal128` tops out at 38,
+so the reader falls back to the exact decimal string (`decimal_type="string"` in the
+entry). No precision is lost — this is the same fallback the `sqlite` entry uses.
+
+Everything else is stock PostgreSQL behaviour: `BYTEA`, `DATE`, microsecond `TIMESTAMP`,
+`BOOLEAN`, astral-plane Unicode, parameter arrays, row counts and `GetObjects` all behave
+as they do against `postgres`.
+
+### What the entry checks beyond the standard workload
+
+The plain workload would just be a slower duplicate of `postgres`, so the entry's `extra`
+steps exercise the reason to run Materialize at all: they create a table and a
+`MATERIALIZED VIEW` aggregating it, bulk-ingest through ADBC into the view's *input*, and
+read the aggregate straight back. That passes only if the write really did flow through
+the maintained dataflow — no refresh step anywhere.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down materialize
+# or, if started standalone:
+docker rm -f adbcbridge-materialize
+```
+
 ## libSQL server (sqld) — no PostgreSQL wire protocol, so no ODBC route
 
 libSQL is Turso's fork of SQLite, and `sqld` (the `ghcr.io/tursodatabase/libsql-server`
