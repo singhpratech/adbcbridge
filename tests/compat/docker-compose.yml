@@ -533,3 +533,22 @@ services:
     image: dremio/dremio-oss:latest
     mem_limit: 5g
     ports: ["127.0.0.1:9047:9047", "127.0.0.1:32010:32010"]
+  # TDengine: a time-series database, driven by its own ODBC driver (taos-odbc, built
+  # from source -- see tests/compat/README.md).  In the "extra" profile, so a plain
+  # `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d tdengine
+  # TAOS_SERVER_PORT, hostname/TAOS_FQDN and the identically numbered published port are
+  # not decoration: a native TDengine client connects to the endpoint the cluster
+  # advertises for its dnode ("fqdn:serverPort"), not to the address it was handed, so
+  # that endpoint has to resolve and connect from outside the container too.  With the
+  # server on 16030 and 127.0.0.1:16030 published to it, the advertised
+  # "localhost:16030" is reachable from the host unchanged.
+  #   taosAdapter's REST/WebSocket port (6041) is not published: the ODBC driver used
+  # here speaks the native protocol.
+  tdengine:
+    profiles: ["extra"]
+    image: tdengine/tdengine:latest
+    hostname: localhost
+    environment: { TAOS_FQDN: localhost, TAOS_SERVER_PORT: "16030" }
+    mem_limit: 2g
+    ports: ["127.0.0.1:16030:16030"]

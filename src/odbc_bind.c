@@ -217,7 +217,9 @@ static void TimestampFromArrow(int64_t v, enum ArrowTimeUnit unit, TIMESTAMP_STR
 }
 
 // Render an ODBC TIMESTAMP_STRUCT as "YYYY-MM-DD HH:MM:SS[.ffffff]"; returns its
-// length.  Used by temporal_binary_param_as_varchar, which sends timestamps as text.
+// length.  The single textual form for timestamp parameters, shared by the two quirks
+// that need one: temporal_binary_param_as_varchar (server-side literal parsing) and
+// timestamp_as_text (a driver with no TIMESTAMP_STRUCT parameter conversion at all).
 static int TimestampTextFromStruct(const TIMESTAMP_STRUCT* ts, enum ArrowTimeUnit unit,
                                    char* out, size_t out_size) {
   const int digits = FractionalDigits(unit);
@@ -230,6 +232,13 @@ static int TimestampTextFromStruct(const TIMESTAMP_STRUCT* ts, enum ArrowTimeUni
   return snprintf(out, out_size, "%04d-%02d-%02d %02d:%02d:%02d.%0*lld", ts->year, ts->month,
                   ts->day, ts->hour, ts->minute, ts->second, digits,
                   (long long)(ts->fraction / scale));
+}
+
+// Column size (characters) of the textual form TimestampTextFromStruct produces: the
+// "YYYY-MM-DD HH:MM:SS" 19, plus the point and the unit's own fractional digits.
+static SQLULEN TimestampTextColumnSize(enum ArrowTimeUnit unit) {
+  const int digits = FractionalDigits(unit);
+  return (SQLULEN)(digits ? 20 + digits : 19);
 }
 
 static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct ArrowSchemaView* sv,
@@ -263,8 +272,11 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
         p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = 5;
         p->data = p->fixed.text; p->buffer_length = n + 1;
         if (p->indicator != SQL_NULL_DATA) p->indicator = n;
-      } else if (opts->bool_param_as_int) {
-        p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_INTEGER;
+      } else if (opts->bool_param_as_int || opts->bool_param_as_tinyint) {
+        // bool_param_as_tinyint: same integer, described as SQL_TINYINT -- the one
+        // boolean parameter conversion taos-odbc has.
+        p->c_type = SQL_C_SBIGINT;
+        p->sql_type = opts->bool_param_as_tinyint ? SQL_TINYINT : SQL_INTEGER;
         p->fixed.i64 = ArrowArrayViewGetIntUnsafe(av, row) ? 1 : 0;
         p->data = &p->fixed.i64; p->buffer_length = sizeof(SQLBIGINT);
       } else {
@@ -396,18 +408,25 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
       break;
     }
     case NANOARROW_TYPE_TIMESTAMP: {
-      TimestampFromArrow(ArrowArrayViewGetIntUnsafe(av, row), sv->time_unit, &p->fixed.ts);
-      if (opts->temporal_binary_param_as_varchar) {
-        // fixed.ts and fixed.text are the same union member, so take a copy of the
-        // struct before rendering the text over it.
-        const TIMESTAMP_STRUCT ts = p->fixed.ts;
+      const int64_t v = ArrowArrayViewGetIntUnsafe(av, row);
+      if (opts->temporal_binary_param_as_varchar || opts->timestamp_as_text) {
+        // Two quirks, one wire form.  temporal_binary_param_as_varchar lets the server
+        // parse the literal itself; timestamp_as_text is for a driver with no
+        // TIMESTAMP_STRUCT parameter conversion (taos-odbc: "Parameter converstion from
+        // `SQL_C_TYPE_TIMESTAMP` ... not implemented yet").  Either way the value goes
+        // across as text, the way the sub-second TIME path above already does.  Render
+        // from a local struct: fixed.ts and fixed.text are the same union member.
+        TIMESTAMP_STRUCT ts;
+        TimestampFromArrow(v, sv->time_unit, &ts);
         const int n = TimestampTextFromStruct(&ts, sv->time_unit, p->fixed.text,
                                               sizeof(p->fixed.text));
-        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = (SQLULEN)n;
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR;
+        p->column_size = TimestampTextColumnSize(sv->time_unit); p->decimal_digits = 0;
         p->data = p->fixed.text; p->buffer_length = n + 1;
         if (p->indicator != SQL_NULL_DATA) p->indicator = n;
         break;
       }
+      TimestampFromArrow(v, sv->time_unit, &p->fixed.ts);
       p->c_type = SQL_C_TYPE_TIMESTAMP; p->sql_type = SQL_TYPE_TIMESTAMP;
       TimestampParamSize(sv->time_unit, &p->column_size, &p->decimal_digits);
       p->data = &p->fixed.ts; p->buffer_length = sizeof(TIMESTAMP_STRUCT);
@@ -507,6 +526,8 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
 #define ARRAY_BIND_DECIMAL_CHARS 64
 // "HH:MM:SS.fffffff" plus a NUL, rounded up.
 #define ARRAY_BIND_TIME_CHARS 24
+// "YYYY-MM-DD HH:MM:SS.fffffffff" plus a NUL, rounded up (timestamp_as_text).
+#define ARRAY_BIND_TIMESTAMP_CHARS 32
 // Room for a 64-bit integer in decimal text plus sign and NUL.
 #define ARRAY_BIND_INT_CHARS 24
 // "true"/"false" plus a NUL (bool_param_as_varchar).
@@ -651,8 +672,11 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
         p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = 5;
         p->elem_size = ARRAY_BIND_BOOL_CHARS;
         p->needs_indicators = true;
-      } else if (opts->bool_param_as_int) {  // DuckDB rejects SQL_BIT parameters
-        p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_INTEGER; p->elem_size = sizeof(SQLBIGINT);
+      } else if (opts->bool_param_as_int || opts->bool_param_as_tinyint) {
+        // DuckDB rejects SQL_BIT parameters; taos-odbc takes the integer only when it
+        // is described as SQL_TINYINT (bool_param_as_tinyint).
+        p->c_type = SQL_C_SBIGINT; p->elem_size = sizeof(SQLBIGINT);
+        p->sql_type = opts->bool_param_as_tinyint ? SQL_TINYINT : SQL_INTEGER;
       } else {
         p->c_type = SQL_C_BIT; p->sql_type = SQL_BIT; p->elem_size = 1;
       }
@@ -676,9 +700,16 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
         *supported = false;
         return;
       }
-      p->c_type = SQL_C_TYPE_TIMESTAMP; p->sql_type = SQL_TYPE_TIMESTAMP;
-      p->elem_size = sizeof(TIMESTAMP_STRUCT);
-      TimestampParamSize(sv->time_unit, &p->column_size, &p->decimal_digits);
+      if (opts->timestamp_as_text) {  // see SlotFromArrowValue
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR;
+        p->elem_size = ARRAY_BIND_TIMESTAMP_CHARS;
+        p->column_size = TimestampTextColumnSize(sv->time_unit); p->decimal_digits = 0;
+        p->needs_indicators = true;
+      } else {
+        p->c_type = SQL_C_TYPE_TIMESTAMP; p->sql_type = SQL_TYPE_TIMESTAMP;
+        p->elem_size = sizeof(TIMESTAMP_STRUCT);
+        TimestampParamSize(sv->time_unit, &p->column_size, &p->decimal_digits);
+      }
       p->needs_buffer = true; break;
     case NANOARROW_TYPE_TIME32:
     case NANOARROW_TYPE_TIME64:
@@ -878,9 +909,17 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
         break;
       }
       case NANOARROW_TYPE_TIMESTAMP: {
-        TIMESTAMP_STRUCT ts;
-        TimestampFromArrow(ArrowArrayViewGetIntUnsafe(values, row), vsv->time_unit, &ts);
-        memcpy(slot, &ts, sizeof(ts));
+        const int64_t v = ArrowArrayViewGetIntUnsafe(values, row);
+        if (p->c_type == SQL_C_CHAR) {  // timestamp_as_text
+          TIMESTAMP_STRUCT ts;
+          TimestampFromArrow(v, vsv->time_unit, &ts);
+          int len = TimestampTextFromStruct(&ts, vsv->time_unit, (char*)slot, stride);
+          if (ind) ind[i] = (SQLLEN)len;
+        } else {
+          TIMESTAMP_STRUCT ts;
+          TimestampFromArrow(v, vsv->time_unit, &ts);
+          memcpy(slot, &ts, sizeof(ts));
+        }
         break;
       }
       case NANOARROW_TYPE_TIME32:

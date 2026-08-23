@@ -34,6 +34,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, VERTICA_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, OCEANBASE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, DREMIO_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, TDENGINE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -110,6 +111,41 @@ ARCADEDB_BIG_ROWS = 100000
 # joined, with the row number computed from their digits.
 DREMIO_DIGITS = "(VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9))"
 DREMIO_ROWNO = "d1.n * 10000 + d2.n * 1000 + d3.n * 100 + d4.n * 10 + d5.n"
+
+# TDengine keeps no table without a primary-key TIMESTAMP first column, so the shared
+# EXTRA_ROWS (a BIGINT first) cannot be ingested into one.  These are the same four rows
+# behind a leading timestamp, and without the date32 column -- TDengine has no DATE type.
+TDENGINE_ROWS = pa.table({
+    "ts": pa.array([datetime.datetime(2024, 4, 1, 0, 0, i) for i in range(4)], pa.timestamp("us")),
+    "a": pa.array([1, 2, 3, 4], pa.int64()),
+    "b": pa.array(["p", "q", "r", "s"]),
+    "c": pa.array([1.5, 2.5, None, 4.5]),
+    "e": pa.array([True, None, False, True], pa.bool_()),
+})
+# The two tables the `tdengine` entry reads, built by its `setup` (see the entry).  Every
+# statement is idempotent: the tables are created IF NOT EXISTS and every row carries a
+# fixed primary-key timestamp, which TDengine overwrites in place rather than appending a
+# duplicate -- so replaying this on every connection (bench/matrix_bench.py opens several)
+# leaves exactly these rows.
+def tdengine_setup(n=20000, chunk=1000, base=1709210000000000):
+    rows = ["(%d, %d, 'r%d')" % (base + i * 1000, i, i) for i in range(n)]
+    return [
+        # 'us': the workload's timestamp carries microseconds, and a TDengine database
+        # stores its timestamps at the precision it was created with (default 'ms').
+        "CREATE DATABASE IF NOT EXISTS adbc PRECISION 'us'",
+        "USE adbc",
+        "CREATE TABLE IF NOT EXISTS adbc_t (ts TIMESTAMP, i INT, f DOUBLE, s NCHAR(50),"
+        " b VARBINARY(20), d TIMESTAMP, n VARCHAR(20), bo BOOL)",
+        "INSERT INTO adbc_t VALUES ('2024-02-29 13:45:10.123456', 1, 1.5, 'h\u00e9llo \U0001f680',"
+        " '\\x0102', '2024-02-29 00:00:00', '12.345', true)",
+        # Row 2 is the all-NULL row of the standard workload; its `ts` cannot be NULL
+        # (it is the primary key), hence not_null below.
+        "INSERT INTO adbc_t VALUES ('2024-03-01 00:00:00.000000', 2, NULL, NULL, NULL, NULL,"
+        " NULL, NULL)",
+        "CREATE TABLE IF NOT EXISTS adbc_big (ts TIMESTAMP, a INT, b VARCHAR(20))",
+    ] + ["INSERT INTO adbc_big VALUES " + ",".join(rows[i:i + chunk])
+         for i in range(0, n, chunk)]
+
 
 DBS = {
     "sqlite": dict(
@@ -1178,6 +1214,68 @@ DBS = {
             ("SELECT COUNT(*), MIN(a), MAX(a) FROM adbc_big WHERE a >= 50000",
              (50000, 50000, 99999)),
         ]),
+    "tdengine": dict(
+        # TDengine is a time-series database with its own SQL dialect and its own ODBC
+        # driver (taos-odbc, built from taosdata/taos-connector-odbc against the client
+        # libraries shipped in the server image -- see tests/compat/README.md).
+        #   read_only: nothing about the *driver* stops a write (it binds parameters and
+        # reports row counts fine -- the `extra` steps below bulk ingest through it), but
+        # the standard write side of this workload cannot be expressed against a TDengine
+        # table at all.  Every table's first column must be a TIMESTAMP primary key whose
+        # values are non-NULL, distinct and inside the database's retention window, and
+        # the workload's INSERT fills the columns positionally from `i` (1, 2) while
+        # adbc_ingest's generated DDL declares no timestamp column at all -- "First column
+        # must be timestamp" for the CREATE, "Timestamp data out of range" for epoch-based
+        # values.  So `setup` builds adbc_t and adbc_big with literal SQL, as the
+        # `flightsql` entry does, and the whole read side runs unchanged.
+        env="TDENGINE_ODBC_DRIVER",
+        # No DB= : `setup` creates the database and switches to it, so a fresh container
+        # needs no server-side preparation.  TIMESTAMP_AS_IS=1 is taos-odbc's, not the
+        # server's: without it the driver describes every TIMESTAMP column as an
+        # SQL_WVARCHAR holding the formatted text ("2024-02-29 13:45:10.123456") and the
+        # reader has no timestamp to read at all.
+        conn="Driver={drv};SERVER=127.0.0.1:16030;UID=root;PWD=taosdata;TIMESTAMP_AS_IS=1;",
+        read_only=True,
+        # TDengine's parser has no double-quoted identifiers -- `FROM "adbc_big"` is a
+        # syntax error -- and taos-odbc answers SQL_IDENTIFIER_QUOTE_CHAR with a backtick,
+        # which is what adbc_ingest quotes with too.
+        quote="`",
+        # What `setup` creates; TDengine's own type names.  NCHAR is the wide (character)
+        # string, VARCHAR is a byte-length one, and there is no DATE type, so `d` is a
+        # second TIMESTAMP.
+        #   `n` is a VARCHAR holding the exact digits, not a DECIMAL: TDengine 3.3.6 has
+        # DECIMAL, but taos-odbc does not implement it -- a DECIMAL(10,3) column fails the
+        # whole SELECT with "`UNKNOWN`[21] not supported yet" (21 is TSDB_DATA_TYPE_DECIMAL64)
+        # and DECIMAL(20,3), the 128-bit one, is not in its type table either.  The column
+        # reads back as its exact string form, as `databend` and `flightsql` do for
+        # decimals their drivers misdescribe.
+        ddl="CREATE TABLE adbc_t (ts TIMESTAMP, i INT, f DOUBLE, s NCHAR(50), b VARBINARY(20),"
+            " d TIMESTAMP, n VARCHAR(20), bo BOOL)",
+        setup=tdengine_setup(),
+        # The primary-key timestamp has to come first, so the columns are not in the
+        # order the workload declares them; GetObjects compares them as a set.
+        column_order=False,
+        # `ts` is that primary key: it is the one column of row 2 that cannot be NULL.
+        not_null=("ts",),
+        big_rows=20000,
+        extra=[
+            # A real ADBC bulk ingest through this driver: append into a table whose shape
+            # TDengine accepts (timestamp first).  mode="append" is the only mode possible
+            # here -- create/replace would have to emit the CREATE, and no generated DDL
+            # names a timestamp primary key.
+            ("DROP TABLE IF EXISTS adbc_ing{sfx}", None),
+            # `a` is INT, not BIGINT, and that is the driver's doing: taos-odbc looks a
+            # parameter up by the exact (C type, SQL type, column type) triple, and an
+            # int64 payload whose values all fit in 32 bits is bound -- here as everywhere
+            # else -- as SQL_C_SLONG/SQL_INTEGER, which its table maps only to a TDengine
+            # INT.  (Values past 2^31 go as SQL_C_SBIGINT/SQL_BIGINT, which does reach a
+            # BIGINT column.)
+            ("CREATE TABLE adbc_ing{sfx} (ts TIMESTAMP, a INT, b VARCHAR(20), c DOUBLE,"
+             " e BOOL)", None),
+            (("adbc_ing{sfx}", TDENGINE_ROWS), (4,)),
+            ("SELECT `b`, `c` FROM adbc_ing{sfx} WHERE `a` = 3", ("r", None)),
+            ("SELECT COUNT(*) FROM adbc_ing{sfx}", (4,)),
+        ]),
     "access": dict(
         env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
         # No server: MDB Tools opens an .mdb file. It is read-only (it executes no DDL and
@@ -1363,8 +1461,6 @@ def run(name, cfg):
         if ro or not cfg.get("ingest_create", True):
             check_big(cur, cfg, "SELECT %s, %s FROM %s"
                                 % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "adbc_big")))
-            check_big(cur, cfg, "SELECT %s, %s FROM %s" % (
-                qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "adbc_big")))
         else:
             check_ingest(cur, cfg, ing_name)
         # extra: per-database steps run after the standard workload, for features
@@ -1430,7 +1526,7 @@ def qi(cfg, name):
     mode at all (StarRocks accepts the `ANSI_QUOTES` value but its parser ignores it, so
     MySQL Connector/ODBC correctly reports the backtick and ingest quotes with that;
     GreptimeDB is a MySQL dialect with no ANSI_QUOTES at all, so a "..." there is a
-    string literal).
+    string literal; TDengine quotes with backticks and rejects `FROM "t"` outright).
     """
     q = cfg.get("quote", '"')
     return q + name + q
@@ -1490,8 +1586,6 @@ def check_ingest(cur, cfg, ing_name):
     cur.execute("SELECT %s, %s, %s, %s FROM %s WHERE %s = 2"
                 % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "c"), qi(cfg, "d"),
                    qi(cfg, ing_name), qi(cfg, "a")))
-    cur.execute("SELECT %s, %s, %s, %s FROM %s WHERE %s = 2" % (
-        qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "c"), qi(cfg, "d"), qi(cfg, ing_name), qi(cfg, "a")))
     got = cur.fetch_arrow_table().to_pylist()
     # The ingest DDL asks the driver for a date (or, where the server has no date type,
     # a timestamp) column; a server whose timestamp carries a zone -- psqlodbc's
@@ -1508,8 +1602,6 @@ def check_ingest(cur, cfg, ing_name):
     refresh(cur, cfg, ing_name)
     check_big(cur, cfg, "SELECT %s, %s FROM %s ORDER BY %s"
               % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, ing_name), qi(cfg, "a")))
-    check_big(cur, cfg, "SELECT %s, %s FROM %s ORDER BY %s" % (
-        qi(cfg, "a"), qi(cfg, "b"), qi(cfg, ing_name), qi(cfg, "a")))
 
 
 if __name__ == "__main__":

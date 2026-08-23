@@ -4853,3 +4853,200 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down dremio
 # or, if started standalone:
 docker rm -f adbcbridge-dremio
 ```
+
+## TDengine 3.3.6
+
+TDengine is a time-series database with its own ODBC driver, **taos-odbc**
+(`taosdata/taos-connector-odbc`, MIT). There is no Linux binary release of it, so it is
+built from source below — against the client libraries that ship inside the server
+image, which is what makes the whole thing root-free.
+
+The entry is `read_only`, and unusually the reason is the *server*, not the driver: see
+[Why the entry is read-only](#why-the-entry-is-read-only).
+
+### Get the driver without root
+
+Copy the client libraries and headers out of the server image (they are the ones the
+driver links against, so their version matches the server exactly), and give them the
+`.so`/`.so.1` symlinks a linker needs:
+
+```sh
+mkdir -p /tmp/dbs/tdengine/lib /tmp/dbs/tdengine/include /tmp/dbs/tdengine/log
+docker create --name taosc tdengine/tdengine:latest
+docker cp taosc:/usr/local/taos/driver/. /tmp/dbs/tdengine/lib/
+docker cp taosc:/usr/local/taos/include/. /tmp/dbs/tdengine/include/
+docker rm taosc
+for f in libtaos libtaosnative libtaosws; do
+  ln -sf $f.so.3.3.6.13 /tmp/dbs/tdengine/lib/$f.so
+  ln -sf $f.so.3.3.6.13 /tmp/dbs/tdengine/lib/$f.so.1
+done
+```
+
+Then build the connector. Take the **`3.3.6` branch**, not `main`: `main` calls
+`taos_connect_with()`, which is not in the 3.3.6 client's `taos.h`, and the build stops
+at `implicit declaration of function 'taos_connect_with'`. Requirements are cmake, flex,
+bison, gcc and `unixodbc-dev` (all already needed to build adbcbridge itself, except flex
+and bison); the build fetches cJSON itself:
+
+```sh
+git clone --depth 1 -b 3.3.6 https://github.com/taosdata/taos-connector-odbc.git
+cd taos-connector-odbc
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_FLAGS=-I/tmp/dbs/tdengine/include \
+  -DCMAKE_LIBRARY_PATH=/tmp/dbs/tdengine/lib \
+  -DCMAKE_SHARED_LINKER_FLAGS="-L/tmp/dbs/tdengine/lib -Wl,-rpath,/tmp/dbs/tdengine/lib"
+cmake --build build -j4 --target taos_odbc
+cp -a build/src/libtaos_odbc.so* /tmp/dbs/tdengine/
+```
+
+Two environment variables are needed at run time, both root-free:
+
+* `LD_LIBRARY_PATH=/tmp/dbs/tdengine/lib` — `libtaos.so` `dlopen()`s `libtaosnative.so`
+  by name, and a `dlopen` does not go through the `RPATH` baked into the ODBC driver.
+  Without it `SQLAllocHandle(SQL_HANDLE_ENV)` fails with
+  `failed to load libtaosnative.so since No such file or directory`.
+* `TAOS_LOG_DIR=/tmp/dbs/tdengine/log` — the TDengine *client* insists on a writable log
+  directory and defaults to `/var/log/taos`, which needs root; failing to create it fails
+  the environment handle too. (TDengine reads its client configuration from environment
+  variables named `TAOS_<setting>`, so this needs no `taos.cfg`.)
+
+### Start the server
+
+```sh
+docker run -d --name adbcbridge-tdengine --memory=2g \
+  --hostname localhost -e TAOS_FQDN=localhost -e TAOS_SERVER_PORT=16030 \
+  -p 127.0.0.1:16030:16030 tdengine/tdengine:latest
+```
+
+or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d tdengine`.
+
+The port arithmetic is the fiddly part. A native TDengine client does not keep talking to
+the address it was given: it asks the cluster for its dnode list and connects to the
+endpoint advertised there, which is `TAOS_FQDN:TAOS_SERVER_PORT` (`SHOW DNODES` prints
+it). The stock `-p 127.0.0.1:16030:6030` therefore fails *after* connecting, on the first
+query, with `rpc network error` — the client is dialling `localhost:6030`, which is
+inside the container. Moving the server itself to 16030 and publishing the same number
+makes the advertised `localhost:16030` correct on both sides.
+
+### Run the entry
+
+```sh
+export TDENGINE_ODBC_DRIVER=/tmp/dbs/tdengine/libtaos_odbc.so
+LD_LIBRARY_PATH=/tmp/dbs/tdengine/lib:$LD_LIBRARY_PATH \
+TAOS_LOG_DIR=/tmp/dbs/tdengine/log \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+python tests/compat/test_matrix.py tdengine
+# tdengine  PASS  (tdengine (via ODBC) 03.03.0613 ...)
+```
+
+The entry's `setup` creates the database (`PRECISION 'us'`, so the workload's
+microseconds survive) and both tables, so a fresh container needs no preparation. Every
+statement in it is idempotent: the tables are `CREATE TABLE IF NOT EXISTS` and each row
+carries a fixed primary-key timestamp, which TDengine overwrites in place rather than
+appending a duplicate — replaying the whole thing on every connection (which
+`bench/matrix_bench.py` does) leaves exactly the same rows.
+
+### Why the entry is read-only
+
+Nothing about the driver stops a write — the `extra` steps below bulk ingest through it.
+The standard *write* side of the matrix workload simply cannot be expressed against a
+TDengine table:
+
+* **Every table starts with a TIMESTAMP primary key.** `CREATE TABLE t (i INT, ...)` is
+  refused with `First column must be timestamp` (0x80002641). The workload's `INSERT`
+  fills columns positionally from `i`, so the first bound value would be `1`, and
+  `adbc_ingest`'s generated DDL declares no timestamp column at all.
+* **That key is range-checked.** It has to be non-NULL, distinct per row and inside the
+  database's retention window, so even feeding it the workload's integers fails:
+  `INSERT INTO t VALUES (1, ...)` is `Timestamp data out of range` (0x8000060B) — 1 µs
+  after the epoch is far outside the default `KEEP` of 3650 days. The same rules out
+  `ingest_types` casting the ingest payload's `a` column to a timestamp: its values are
+  `0..n-1` and one of them is NULL.
+
+So `setup` builds `adbc_t` and `adbc_big` with literal SQL, exactly as the `flightsql`
+entry does, and the whole read side of the workload — types, NULLs, the emoji,
+parameters, batched reads across the 1024-row boundary, `GetObjects`, error mapping —
+runs unchanged. The `extra` steps then cover the write path where TDengine's shape allows
+one: they create a table whose first column *is* a timestamp and `adbc_ingest(...,
+mode="append")` into it, through the driver's real parameter binding.
+
+### Connection string
+
+```
+Driver={drv};SERVER=127.0.0.1:16030;UID=root;PWD=taosdata;TIMESTAMP_AS_IS=1;
+```
+
+`TIMESTAMP_AS_IS=1` is taos-odbc's own setting and the entry does not work without it:
+by default the driver describes every TIMESTAMP column as an `SQL_WVARCHAR` holding the
+formatted text, so `d` and `ts` would read back as strings rather than as Arrow
+timestamps. There is no `DB=` — `setup` issues `CREATE DATABASE IF NOT EXISTS adbc` and
+`USE adbc`, which is what lets a fresh container work.
+
+### Driver quirks
+
+Both are keyed on `SQL_DRIVER_NAME` (`libtaos_odbc.so`) in `OdbcDetectQuirks`. They have
+the same root: taos-odbc looks a conversion up by the exact `(C type, SQL type, TDengine
+type)` triple and its table is sparse.
+
+* **No `SQL_C_TYPE_TIMESTAMP`, in either direction** (`reader_opts.timestamp_as_text`).
+  `SQLBindCol` on a timestamp column fails the whole result set with
+  `#1 Column converstion to 'SQL_C_TYPE_TIMESTAMP[0x5d/93]' not implemented yet`, and
+  `SQLBindParameter` fails the same way for a timestamp parameter. Its bound conversions
+  are the numeric C types, `SQL_C_CHAR`, `SQL_C_WCHAR` and `SQL_C_BINARY` — so the
+  reader takes the column as text and parses it with the ISO-8601 parser the
+  timestamp-with-timezone columns already use (the Arrow type stays a naive
+  `timestamp[us]`, and the column keeps its place in the block cursor instead of dropping
+  the result set to one-row `SQLGetData`), and a timestamp parameter goes across as
+  `"YYYY-MM-DD HH:MM:SS.ffffff"` `SQL_VARCHAR` text, which is what the sub-second `TIME`
+  path already does for every driver.
+* **A boolean parameter only as `SQL_TINYINT`** (`reader_opts.bool_param_as_tinyint`).
+  `SQL_C_BIT` → `SQL_BIT` is "not implemented yet"; the one route into a TDengine `BOOL`
+  column is `SQL_C_SBIGINT` described as `SQL_TINYINT`. The existing
+  `bool_param_as_int` sends the same integer as `SQL_INTEGER`, which is not in the
+  driver's table, and `bool_param_as_varchar`'s `"true"`/`"false"` is parsed there with
+  `strtoll` and refused, so this is its own flag.
+
+Ingest needs no `ansi_ddl_type_names`-style help: adbcbridge quotes generated identifiers
+with whatever `SQL_IDENTIFIER_QUOTE_CHAR` reports, and taos-odbc answers with a backtick,
+which is the only identifier quote TDengine's parser has.
+
+### Entry notes
+
+* **`quote`**, which the entry sets to a backtick — the same point on the *test
+  harness* side. The workload's own generated
+  SQL (`SELECT "a", "b" FROM "adbc_big"`) is ANSI-quoted, and TDengine reads `"..."` as a
+  string literal: `FROM "adbc_big"` is `syntax error near '"adbc_big"'`. The entry's
+  `quote` key is what the harness spells its identifiers with.
+* `n` is a `VARCHAR(20)` holding `12.345`, not a `DECIMAL(10,3)`. TDengine 3.3.6 does
+  have `DECIMAL`, but taos-odbc does not implement it: a single such column fails the
+  whole `SELECT` with `'UNKNOWN'[21] not supported yet` (21 is `TSDB_DATA_TYPE_DECIMAL64`,
+  and the 128-bit `TSDB_DATA_TYPE_DECIMAL` is missing from its type table too). The
+  column reads back as its exact text, which is what the `databend` and `flightsql`
+  entries do for decimals their drivers misdescribe.
+* `not_null=("ts",)` — row 2 of the workload is NULL in every column but `i`; the
+  primary-key timestamp cannot be one.
+* `column_order=False` — that primary key has to be declared first, so the columns are
+  not in the order the workload lists them; `GetObjects` compares them as a set.
+* `d` is a second `TIMESTAMP`: TDengine has no `DATE` type. `s` is `NCHAR` (the wide
+  string type — the emoji round-trips), `b` is `VARBINARY`, `bo` is `BOOL`.
+* The `extra` ingest table declares `a` as `INT` rather than `BIGINT`, and that is the
+  driver again: an int64 payload whose values all fit in 32 bits is bound — here as
+  everywhere else — as `SQL_C_SLONG`/`SQL_INTEGER`, and the driver's table maps that only
+  to a TDengine `INT`. Values past 2³¹ go as `SQL_C_SBIGINT`/`SQL_BIGINT`, which does
+  reach a `BIGINT` column.
+* pyodbc drives this driver only on its narrow path: pyodbc sends statement text as
+  UTF-16 by default, and taos-odbc fails any statement carrying a non-ASCII character
+  with `conversion for 'UTF-8' to 'UTF-8' not found` (`SQLExecDirectW`). Add
+  `conn.setencoding(encoding="utf-8", ctype=pyodbc.SQL_CHAR)` when probing with pyodbc.
+  adbcbridge is unaffected: it calls the narrow `SQLExecDirect`/`SQLPrepare` throughout.
+
+### Benchmark
+
+`read_only`, so `bench/matrix_bench.py` times only the read: **403k rows/s** for the
+20,000-row `adbc_big` (three columns, one of them a text-parsed timestamp).
+
+### Clean up
+
+```sh
+docker rm -f adbcbridge-tdengine
+```
