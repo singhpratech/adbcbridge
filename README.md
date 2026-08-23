@@ -91,6 +91,13 @@ Planned: conformance suite, prebuilt binaries.
 
 The bridge runs within 7% of the raw ODBC floor; the remaining cost is the ODBC driver itself.
 
+### Rust
+
+`bench/rust/` runs the same read and bulk-ingest workload from Rust, comparing the bridge
+against the [`odbc-api`](https://crates.io/crates/odbc-api) and
+[`arrow-odbc`](https://crates.io/crates/arrow-odbc) crates talking to the same ODBC driver.
+Per-database results are in [`bench/RUST_BENCHMARKS.md`](bench/RUST_BENCHMARKS.md).
+
 ## Compatibility matrix
 
 Same workload (types, NULLs, Unicode incl. emoji, parameters, bulk ingest, batched

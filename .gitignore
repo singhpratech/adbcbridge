@@ -12,3 +12,4 @@ private/
 tests/java/target/
 bench/.matrix_bench.json
 build-*/
+bench/rust/target/
