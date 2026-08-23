@@ -14,9 +14,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# ADBC driver manifest for adbcbridge.  Configured by CMake and installed as
-# <prefix>/etc/adbc/drivers/odbc.toml so that the ADBC driver manager can find
-# the driver by the name "odbc".
+# ADBC driver manifest for adbcbridge.  Expanded by CMake at install time and
+# installed as <prefix>/etc/adbc/drivers/odbc.toml, so the ADBC driver manager
+# can find the driver by the name "odbc".
 # Format: https://arrow.apache.org/adbc/current/format/driver_manifests.html
 
 manifest_version = 1

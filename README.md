@@ -57,8 +57,14 @@ This installs two things:
 
 The manifest is what lets applications ask for the driver by name instead of by
 path (see below). Pass `-DADBCBRIDGE_INSTALL_MANIFEST=OFF` to skip it, or
-`-DADBCBRIDGE_MANIFEST_DIR=<dir>` (prefix-relative) to install it elsewhere —
-for example `-DADBCBRIDGE_MANIFEST_DIR=share/adbc/drivers`.
+`-DADBCBRIDGE_MANIFEST_DIR=<dir>` to install it elsewhere — relative to the
+install prefix (`share/adbc/drivers`) or absolute (`/etc/adbc/drivers`).
+
+The absolute library path inside the manifest is computed while
+`cmake --install` runs, not at configure time. A single build tree can
+therefore be installed into as many prefixes as you like — `/usr/local`,
+`"$VIRTUAL_ENV"`, a packaging staging root via `DESTDIR=` — and every installed
+manifest points at its own copy of the library.
 
 ## Use by name (driver manifest)
 
@@ -79,9 +85,9 @@ The driver manager looks for `odbc.toml` in, among others:
 | location | how to use it |
 |---|---|
 | `$ADBC_DRIVER_PATH` | colon-separated list of directories (`;`-separated on Windows) |
-| `$VIRTUAL_ENV/etc/adbc/drivers` | install into an active virtualenv: `cmake --install build --prefix "$VIRTUAL_ENV"` |
-| `~/.config/adbc/drivers` | per-user install (`$XDG_CONFIG_HOME/adbc/drivers` if set) |
-| `/etc/adbc/drivers` | system-wide install (`cmake --install build --prefix /usr`) |
+| `<sys.prefix>/etc/adbc/drivers` | added by the Python driver manager inside a virtualenv: `cmake --install build --prefix "$VIRTUAL_ENV"` |
+| `~/.config/adbc/drivers` | per-user install: `-DADBCBRIDGE_MANIFEST_DIR="$HOME/.config/adbc/drivers"` (`$XDG_CONFIG_HOME/adbc/drivers` if set) |
+| `/etc/adbc/drivers` | system-wide install: configure with `-DADBCBRIDGE_MANIFEST_DIR=/etc/adbc/drivers`, then `cmake --install build --prefix /usr` |
 
 On macOS the user/system directories are `~/Library/Application Support/ADBC/Drivers`
 and `/Library/Application Support/ADBC/Drivers`; on Windows the driver manager
@@ -90,6 +96,17 @@ equivalent.
 
 Loading by path keeps working, and is what you want for a build tree:
 `driver="/path/to/libadbc_driver_odbc.so"`.
+
+If `driver="odbc"` fails with
+
+```
+dlsym(AdbcDriverInit) failed: .../libodbc.so: undefined symbol: AdbcDriverInit
+```
+
+then no manifest was found, and the driver manager fell back to loading a plain
+shared library named `odbc` — which on Unix is unixODBC's own driver manager,
+not this driver. Check that the directory holding `odbc.toml` is one of the
+locations above, and that the path recorded inside `odbc.toml` exists.
 
 ## Use (Python)
 

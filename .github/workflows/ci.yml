@@ -102,14 +102,20 @@ jobs:
         run: python tests/test_sqlite.py
 
       # Check that the installed manifest really lets the driver manager find
-      # the driver by name.
+      # the driver by name.  Both install flavours are covered: the prefix
+      # given at configure time (dist, installed above) and a prefix given at
+      # install time with `cmake --install --prefix` (dist-relocated), which is
+      # what the README's install instructions use.  The latter is a regression
+      # test: the manifest used to freeze the library path at configure time,
+      # so a relocated install shipped a manifest pointing at the old prefix.
       - name: Check driver manifest discovery (Linux)
         if: runner.os == 'Linux'
         env:
           SQLITE_ODBC_DRIVER: /usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
-          ADBC_DRIVER_PATH: ${{ github.workspace }}/dist/etc/adbc/drivers
         run: |
-          python - <<'PY'
+          cmake --install build --config Debug --prefix "${{ github.workspace }}/dist-relocated"
+          cat dist-relocated/etc/adbc/drivers/odbc.toml
+          cat > check_manifest.py <<'PY'
           import os
           import adbc_driver_manager.dbapi as dbapi
 
@@ -118,5 +124,9 @@ jobs:
               with conn.cursor() as cur:
                   cur.execute("SELECT 1 AS one")
                   assert cur.fetch_arrow_table().to_pydict() == {"one": [1]}
-          print("manifest discovery OK")
+          print("manifest discovery OK:", os.environ["ADBC_DRIVER_PATH"])
           PY
+          for prefix in dist dist-relocated; do
+            ADBC_DRIVER_PATH="${{ github.workspace }}/$prefix/etc/adbc/drivers" \
+              python check_manifest.py
+          done

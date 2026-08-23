@@ -122,21 +122,45 @@ if(ADBCBRIDGE_INSTALL_MANIFEST)
   set(ADBCBRIDGE_MANIFEST_PLATFORM
       "${ADBCBRIDGE_MANIFEST_OS}_${ADBCBRIDGE_MANIFEST_ARCH}")
 
-  # Where the shared library will live once installed.  On Windows the DLL goes
-  # to the runtime (bin) directory, elsewhere to the library directory.
+  # Where the shared library will live once installed, relative to the install
+  # prefix.  On Windows the DLL goes to the runtime (bin) directory, elsewhere
+  # to the library directory.
   if(WIN32)
-    set(ADBCBRIDGE_MANIFEST_LIBDIR "${CMAKE_INSTALL_FULL_BINDIR}")
+    set(ADBCBRIDGE_MANIFEST_LIBDIR "${CMAKE_INSTALL_BINDIR}")
   else()
-    set(ADBCBRIDGE_MANIFEST_LIBDIR "${CMAKE_INSTALL_FULL_LIBDIR}")
+    set(ADBCBRIDGE_MANIFEST_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
   endif()
+
+  # The manifest has to spell out an absolute path to the library, so it can
+  # only be written once the install prefix is known -- and the prefix is not
+  # known until `cmake --install` runs, because `cmake --install --prefix DIR`
+  # overrides the configure-time CMAKE_INSTALL_PREFIX.  Generating the manifest
+  # at configure time would bake in the wrong path for every relocated install
+  # (the driver manager would then fail to dlopen it, or worse, fall back to
+  # some other library that happens to be called "odbc").  So the template is
+  # expanded during installation instead, into a staging file that the
+  # following install(FILES) copies into place (which also gets DESTDIR and
+  # install_manifest.txt handling for free).
+  set(ADBCBRIDGE_MANIFEST_STAGE
+      "${CMAKE_CURRENT_BINARY_DIR}/manifest/odbc.toml")
+
   # The target sets PREFIX "lib" on every platform (so the DLL is
   # libadbc_driver_odbc.dll, not adbc_driver_odbc.dll), hence the literal "lib"
   # instead of CMAKE_SHARED_LIBRARY_PREFIX.
-  set(ADBCBRIDGE_MANIFEST_DRIVER_PATH
-      "${ADBCBRIDGE_MANIFEST_LIBDIR}/libadbc_driver_odbc${CMAKE_SHARED_LIBRARY_SUFFIX}")
-
-  configure_file(adbc_driver_odbc.toml.in
-                 "${CMAKE_CURRENT_BINARY_DIR}/odbc.toml" @ONLY)
-  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/odbc.toml"
+  install(CODE "
+set(PROJECT_VERSION \"${PROJECT_VERSION}\")
+set(ADBCBRIDGE_MANIFEST_PLATFORM \"${ADBCBRIDGE_MANIFEST_PLATFORM}\")
+set(_adbcbridge_libdir \"${ADBCBRIDGE_MANIFEST_LIBDIR}\")
+if(NOT IS_ABSOLUTE \"\${_adbcbridge_libdir}\")
+  set(_adbcbridge_libdir \"\${CMAKE_INSTALL_PREFIX}/\${_adbcbridge_libdir}\")
+endif()
+set(ADBCBRIDGE_MANIFEST_DRIVER_PATH
+    \"\${_adbcbridge_libdir}/libadbc_driver_odbc${CMAKE_SHARED_LIBRARY_SUFFIX}\")
+configure_file(\"${CMAKE_CURRENT_SOURCE_DIR}/adbc_driver_odbc.toml.in\"
+               \"${ADBCBRIDGE_MANIFEST_STAGE}\" @ONLY)
+message(STATUS
+        \"adbcbridge: driver manifest points at \${ADBCBRIDGE_MANIFEST_DRIVER_PATH}\")
+")
+  install(FILES "${ADBCBRIDGE_MANIFEST_STAGE}"
           DESTINATION "${ADBCBRIDGE_MANIFEST_DIR}")
 endif()
