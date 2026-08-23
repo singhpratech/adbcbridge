@@ -282,6 +282,109 @@ docker compose -f tests/compat/docker-compose.yml down cockroachdb
 # or, if started standalone:
 docker stop adbcbridge-cockroach && docker rm adbcbridge-cockroach
 ```
+## YugabyteDB
+
+YugabyteDB's YSQL layer is the PostgreSQL 15 query engine running on top of a
+distributed (Raft-replicated, sharded) storage layer, so it speaks the
+PostgreSQL wire protocol and the same `psqlodbc` build used for the `postgres`
+entry drives it -- no ODBC driver of its own.
+
+### Get the ODBC driver without root
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+# the driver and the shared libraries it links against:
+export YUGABYTE_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml up -d yugabyte
+# or standalone:
+docker run -d --name adbcbridge-yugabyte -p 127.0.0.1:15433:5433 \
+  yugabytedb/yugabyte:latest bin/yugabyted start --background=false \
+  --tserver_flags=memory_limit_hard_bytes=805306368,use_memory_defaults_optimized_for_ysql=false \
+  --master_flags=memory_limit_hard_bytes=402653184,use_memory_defaults_optimized_for_ysql=false
+```
+
+`yugabyted` starts a master and a tserver in the one container, and left alone
+they size their heaps as a fraction of *total host RAM*. The two
+`memory_limit_hard_bytes` caps above hold the whole node under 1 GiB resident
+(measured: ~800 MiB steady state), which is what makes it cheap enough to run
+next to the rest of the matrix. `use_memory_defaults_optimized_for_ysql=false`
+goes with them: it keeps the pre-2024 memory-division defaults instead of the
+YSQL-optimised ones, which are tuned for nodes with at least 2 GiB.
+
+The single node comes up on `127.0.0.1:15433` (YSQL, user `yugabyte`, **no
+password**, database `yugabyte`). The image is a ~1.65 GB pull; once it is local
+the node is ready about half a minute after `up -d`, when this succeeds:
+
+```sh
+docker exec adbcbridge-yugabyte bin/ysqlsh -h "$(docker exec adbcbridge-yugabyte hostname -i)" \
+  -U yugabyte -d yugabyte -c 'SELECT version()'
+```
+
+`ysqlsh` cannot use `-h 127.0.0.1` *inside* the container: `yugabyted` binds YSQL
+to the container's own address, not to loopback. From the host the published
+port works normally.
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py yugabyte
+# yugabyte  PASS  (PostgreSQL (via ODBC) 15.0.12)
+```
+
+### Notes
+
+The entry needs **no tolerance flags and no driver quirk**: YugabyteDB passes the
+full workload through the unmodified PostgreSQL code path, with the same DDL the
+`postgres` entry uses. `GetInfo` reports `PostgreSQL 15.0.12` because YSQL
+advertises a PostgreSQL server version over the wire (`SQL_DBMS_NAME` is
+`PostgreSQL`, `SQL_DRIVER_NAME` is `psqlodbcw.so`) -- exactly as CockroachDB
+does. `SELECT version()` is the only way to tell them apart:
+
+```
+PostgreSQL 15.12-YB-2026.1.1.1-b0 on x86_64-pc-linux-gnu, ...
+```
+
+Any future YugabyteDB-specific quirk would therefore have to key on that
+`-YB-` marker in `SQL_DBMS_VER`/`version()`, never on the DBMS or driver name,
+which real PostgreSQL shares.
+
+Unlike CockroachDB, the DDL needs **no explicit `PRIMARY KEY`**. A YSQL table
+declared without one still gets an internal row identifier, but it is a *system*
+column (`ybctid`, `attnum` -7) rather than a user column with a hidden flag, so
+`information_schema.columns` never lists it and `SQLColumns`/`GetObjects`
+/`GetTableSchema` see exactly the eight declared columns.
+
+Types behave as in PostgreSQL 15 and need no translation:
+
+| Type in the DDL | YSQL behaviour |
+|---|---|
+| `INTEGER` | 32-bit, as in PostgreSQL (**not** 64-bit as in CockroachDB) -> `int32` |
+| `DOUBLE PRECISION`, `BYTEA`, `DATE`, `BOOLEAN` | identical to PostgreSQL |
+| `TIMESTAMP` | microsecond precision, without time zone; the round-trip is exact |
+| `NUMERIC(10,3)` | reported with the declared precision -> `decimal128(10, 3)` |
+
+An `adbc_ingest` of `int64/string/double/date32/bool` lands as `bigint / text /
+double precision / date / boolean`, the same mapping `psqlodbc` negotiates for
+PostgreSQL through `SQLGetTypeInfo`. The 5000-row batched ingest and read-back
+complete in about two seconds on a single local node.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml stop yugabyte
+docker compose -f tests/compat/docker-compose.yml rm -f yugabyte
+# or, if started standalone:
+docker stop adbcbridge-yugabyte && docker rm adbcbridge-yugabyte
+```
 ## Firebird 5
 
 Server (port 13050, database `/var/lib/firebird/data/adbc.fdb`, user `adbc`/`adbc`):

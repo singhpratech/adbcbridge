@@ -38,3 +38,14 @@ services:
     environment: { FIREBIRD_ROOT_PASSWORD: adbc, FIREBIRD_USER: adbc, FIREBIRD_PASSWORD: adbc,
                    FIREBIRD_DATABASE: adbc.fdb, FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8 }
     ports: ["127.0.0.1:13050:3050"]
+  # YugabyteDB (PostgreSQL-compatible distributed SQL).  yugabyted runs a master
+  # and a tserver inside the one container; left alone they size their heaps as a
+  # fraction of total host RAM.  The caps below keep the node under 1 GiB.
+  yugabyte:
+    image: yugabytedb/yugabyte:latest
+    command: >
+      bin/yugabyted start --background=false
+      --tserver_flags=memory_limit_hard_bytes=805306368,use_memory_defaults_optimized_for_ysql=false
+      --master_flags=memory_limit_hard_bytes=402653184,use_memory_defaults_optimized_for_ysql=false
+    # 5433 is YSQL, the PostgreSQL wire-protocol port psqlodbc connects to.
+    ports: ["127.0.0.1:15433:5433"]

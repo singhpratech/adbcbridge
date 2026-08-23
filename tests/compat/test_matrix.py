@@ -6,7 +6,8 @@ Usage:
 Each database is enabled by an environment variable holding the path to its ODBC driver:
     SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, POSTGRES_ODBC_DRIVER, MARIADB_ODBC_DRIVER,
     MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER,
-    DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER
+    DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
+    YUGABYTE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars).
 See README.md in this directory for how to obtain each driver without root.
 """
@@ -72,6 +73,12 @@ DBS = {
         # as a 9th column even though SELECT * never returns it.
         env="COCKROACH_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=16257;Database=defaultdb;Uid=root;",
         ddl="CREATE TABLE adbc_t (i INTEGER PRIMARY KEY, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)"),
+    "yugabyte": dict(
+        # YugabyteDB's YSQL layer reuses the PostgreSQL 15 query engine on top of a
+        # distributed storage layer, so it speaks the PostgreSQL wire protocol and the
+        # same psqlodbc build drives it; the types below are plain PostgreSQL types.
+        env="YUGABYTE_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15433;Database=yugabyte;Uid=yugabyte;",
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"),
     "firebird": dict(
         env="FIREBIRD_ODBC_DRIVER",
         conn="Driver={drv};DBNAME=inet://127.0.0.1:13050//var/lib/firebird/data/adbc.fdb;UID=adbc;PWD=adbc;CHARSET=UTF8;",
