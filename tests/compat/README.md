@@ -2994,3 +2994,131 @@ benchmark reads whatever `adbc_big` holds, which `setup` sizes at 100,000 rows.
 ```sh
 docker rm -f adbcbridge-arcadedb
 ```
+
+## InfluxDB 3 Core (Arrow Flight SQL)
+
+InfluxDB 3 Core is a time-series database whose query interface is Arrow Flight SQL
+(DataFusion behind it), so the ODBC route is the same Arrow Flight SQL ODBC driver the
+[`flightsql`](#arrow-flight-sql-sqlflite-155--duckdb-111) entry uses — read that section
+first: everything it documents about the driver (no `SQLBindParameter`, `SQLColumns`
+segfaults on the first `SQLFetch`, decimals described as `(19, 0)`) is the driver's and
+therefore true here too. This entry exists to run the workload against a *second*, very
+different Flight SQL server: `flightsql` is DuckDB behind the protocol, this is a
+time-series engine with its own column model.
+
+Server:
+
+```sh
+docker run -d --name adbcbridge-influxdb3 --memory=2g -p 127.0.0.1:18181:8181 \
+  influxdb:3-core influxdb3 serve --node-id=n1 --object-store=memory --without-auth
+```
+
+(or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d influxdb3`;
+it is in the `extra` profile, so a plain `up -d` leaves it alone). It is ready in about
+three seconds — `curl -s http://127.0.0.1:18181/health` answers `OK`. `--without-auth`
+runs it with no token, which is what lets the ODBC connection go through without one;
+`--object-store=memory` keeps the whole database in RAM, so removing the container
+removes the data. Port 8181 serves the HTTP API and the Flight SQL endpoint at once.
+
+Driver: none to install — this is the same library the `flightsql` entry extracts, so
+point a second variable at it:
+
+```sh
+export INFLUXDB3_ODBC_DRIVER=$FLIGHTSQL_ODBC_DRIVER
+```
+
+### Loading the data (the entry cannot)
+
+InfluxDB 3's SQL is query-only: `CREATE TABLE`, `CREATE VIEW` and `INSERT` all come back
+as `Error during planning: DDL not supported`, and a table exists only once line protocol
+has been written to it. Together with the driver's missing `SQLBindParameter` that leaves
+no way at all to load a table over the ODBC connection, so the entry is `read_only=True`
+and its two tables are written over the HTTP API first:
+
+```sh
+python3 tests/compat/fixtures/load_influxdb3.py            # http://127.0.0.1:18181, db "adbc"
+# wrote 100002 points to adbc (HTTP 204)
+```
+
+That script (stdlib only) writes `adbc_t` — the workload's two rows — and `adbc_big`,
+100,000 `(a, b)` points one nanosecond apart. It takes about a second and is idempotent:
+a point replaces the one with the same table, tag set and timestamp.
+
+Run the entry:
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py influxdb3
+# influxdb3 PASS  (InfluxDB IOx (via ODBC) 02.00.0000)
+```
+
+### The database name is a gRPC header, not a Flight SQL concept
+
+Flight SQL has no "connect to database X" step, so InfluxDB reads the database from a
+gRPC metadata header (`database`). The driver forwards every connection property it does
+not recognise as a header of exactly that name, so nothing more than this is needed:
+
+```
+Driver={drv};Host=127.0.0.1;Port=18181;useEncryption=false;database=adbc;
+```
+
+`useEncryption=false` matches the server's plain-gRPC listener (it is only TLS when
+`--tls-cert`/`--tls-key` are given). No `UID`/`PWD`: the server was started
+`--without-auth`.
+
+### What works
+
+The whole read side of the workload, exactly as for `flightsql`: `int64`, `double`,
+`string` (including `"héllo 🚀"` — the driver describes InfluxDB's strings as
+`SQL_VARCHAR`, so the reader is on its correct narrow UTF-8 path and the astral-plane
+emoji survives), `bool`, `DATE`, `TIMESTAMP`, the all-NULL row, the 100,000-row batched
+read, `GetObjects`, `GetTableSchema` and the error text (`table
+'public.iox.adbc_no_such_table' not found`). `GetObjects` works because the existing
+`no_sql_columns` quirk already covers this driver. **No driver change was needed for
+InfluxDB.** The entry also runs two things only a time-series engine does: a `date_bin`
+1-hour bucketed aggregate, and a range scan on the `time` column InfluxDB partitions by.
+
+Fetch: **1.03M rows/s** over the 100,000-row `adbc_big` (`bench/matrix_bench.py`). There
+is no ingest number — nothing can be written through this driver.
+
+### The entry's tolerances are all InfluxDB's column model
+
+An InfluxDB table is *tags* (strings), *fields* (float, integer, unsigned, string or
+boolean — that is the whole list) and `time`, a nanosecond timestamp that every point
+carries and that is always spelled `time`. Four of the workload's eight columns therefore
+cannot exist as declared, and since the server allows no view to paper over it, the
+entry's `select` does the aliasing and casting in the query itself:
+
+```sql
+SELECT i, f, s, b, CAST(d AS DATE) AS d, time AS ts, n, bo FROM adbc_t ORDER BY i
+```
+
+| flag | why |
+|---|---|
+| `read_only=True` | no DDL and no DML: InfluxDB's SQL is query-only, and the driver has no `SQLBindParameter` — two independent reasons, either one enough. The tables come from `fixtures/load_influxdb3.py`. |
+| `params=False` | the driver answers `SQLBindParameter` with `HYC00 "Unsupported function"` on a virgin statement handle; the parameterised query runs with a literal. |
+| `select=...` | `ts` is the table's own `time` column (so the entry reads the server's real timestamp rather than a stand-in), and `d` is a text field cast back to `DATE` — InfluxDB has no date type. |
+| `catalog_cols=("b", "bo", "d", "f", "i", "n", "s", "time")` | what `GetObjects`/`GetTableSchema` really report: the same eight columns with `time` in place of `ts`, in InfluxDB's own alphabetical order. |
+| `not_null=("ts",)` | `time` has no NULL state — every point has one — so the all-NULL row reads back with its timestamp, as Access `YESNO` reads back `False`. |
+| `binary_text="\\x0102"` | no binary type at all, so the two bytes are stored as text, exactly as for CrateDB. |
+| `decimal_type="string"` | no `DECIMAL` either; `n` is a string field read back as its exact digits — the same place the `flightsql` entry ends up for a different reason (see its quirk 3). |
+
+Two further things are worth knowing and cost the entry nothing:
+
+* The driver describes **every** `SQL_TYPE_TIMESTAMP` column as scale 3, whatever the
+  Arrow unit behind it — `Timestamp(ns)`, `Timestamp(µs)` and `Timestamp(ms)` all come
+  back `size=23 scale=3` — while `SQLGetData` hands over the full digits
+  (`2024-02-29 13:45:10.123456000`). The reader sizes the Arrow column from the described
+  scale, so timestamps arrive as `timestamp[ms]`: `.123456` reads back `.123000`, which
+  the workload's `ts_us` default already allows. This is not InfluxDB-specific — it is
+  the same for sqlflite — so it is left alone rather than special-cased.
+* Writing points dated 2024 into a server whose clock says 2026 is accepted: InfluxDB 3
+  Core applies no ingest-time window to a past timestamp.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down influxdb3
+# or, if started standalone:
+docker rm -f adbcbridge-influxdb3
+```
