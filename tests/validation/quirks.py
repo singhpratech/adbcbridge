@@ -140,8 +140,10 @@ class OdbcSqliteQuirks(model.DriverQuirks):
         quirk_bulk_ingest_temporary_shares_namespace=True,
         # StatementExecuteSchema is implemented (prepare + SQLDescribeCol).
         statement_execute_schema=True,
-        # StatementGetParameterSchema is NOT in the driver vtable.
-        statement_get_parameter_schema=False,
+        # StatementGetParameterSchema is SQLNumParams + SQLDescribeParam, with an
+        # N-nullable-utf8-fields fallback for drivers (SQLiteODBC) that cannot
+        # describe parameters.
+        statement_get_parameter_schema=True,
         statement_prepare=True,
         statement_rows_affected=True,
         # SQLRowCount after DDL returns 0 from SQLiteODBC, and the driver

@@ -157,6 +157,8 @@ static bool IsUnsigned(SQLHSTMT hstmt, SQLUSMALLINT col) {
 static bool TypeNameIsBool(SQLHSTMT hstmt, SQLUSMALLINT col) {
   SQLCHAR name[64] = {0};
   SQLSMALLINT len = 0;
+  // hstmt is NULL when classifying a *parameter*, which has no IRD row to query.
+  if (!hstmt) return false;
   if (!SQL_SUCCEEDED(SQLColAttribute(hstmt, col, SQL_DESC_TYPE_NAME, name, sizeof(name), &len, NULL))) {
     return false;
   }
@@ -491,6 +493,55 @@ AdbcStatusCode OdbcDescribeResultSchema(SQLHSTMT hstmt, const struct OdbcReaderO
   struct OdbcColumn* cols = NULL;
   SQLSMALLINT n = 0;
   RAISE_ADBC(DescribeColumns(hstmt, opts, &cols, &n, error));
+  AdbcStatusCode s = BuildSchema(cols, n, out, error);
+  FreeColumns(cols, n);
+  return s;
+}
+
+AdbcStatusCode OdbcDescribeParameterSchema(SQLHSTMT hstmt, const struct OdbcReaderOptions* opts,
+                                           struct ArrowSchema* out, struct AdbcError* error) {
+  SQLSMALLINT n = 0;
+  ODBC_CHECK(SQLNumParams(hstmt, &n), SQL_HANDLE_STMT, hstmt, "SQLNumParams", error);
+  if (n < 0) n = 0;
+  struct OdbcColumn* cols = calloc((size_t)(n > 0 ? n : 1), sizeof(struct OdbcColumn));
+  if (!cols) {
+    InternalAdbcSetError(error, "out of memory");
+    return ADBC_STATUS_INTERNAL;
+  }
+  // ADBC names parameter fields positionally; match the SQLite driver's "0".."N-1".
+  bool described = true;
+  for (SQLSMALLINT i = 0; i < n; i++) {
+    struct OdbcColumn* c = &cols[i];
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", (int)i);
+    c->name = strdup(buf);
+    if (!c->name) {
+      FreeColumns(cols, n);
+      InternalAdbcSetError(error, "out of memory");
+      return ADBC_STATUS_INTERNAL;
+    }
+    if (!described) continue;
+    if (opts->no_describe_param) {
+      described = false;
+      continue;
+    }
+    SQLRETURN ret = SQLDescribeParam(hstmt, (SQLUSMALLINT)(i + 1), &c->sql_type, &c->column_size,
+                                     &c->decimal_digits, &c->nullable);
+    if (!SQL_SUCCEEDED(ret) || c->sql_type == SQL_UNKNOWN_TYPE) {
+      // Plenty of ODBC drivers cannot describe parameters at all (SQLiteODBC among
+      // them).  Fall back to the shape every ADBC caller can consume: N nullable
+      // utf8 fields, which is what the upstream SQLite driver reports.
+      described = false;
+      continue;
+    }
+    ClassifyColumn(NULL, 0, c, opts);
+  }
+  if (!described) {
+    for (SQLSMALLINT i = 0; i < n; i++) {
+      cols[i].kind = FETCH_CHAR;
+      cols[i].nullable = SQL_NULLABLE;
+    }
+  }
   AdbcStatusCode s = BuildSchema(cols, n, out, error);
   FreeColumns(cols, n);
   return s;

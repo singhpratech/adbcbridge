@@ -106,6 +106,8 @@ struct OdbcReaderOptions {
   bool null_param_as_varchar;
   // Driver quirk: DDL type wrapper for nullable columns, e.g. "Nullable(%s)" (ClickHouse).
   const char* nullable_type_format;
+  // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
+  bool no_describe_param;
 };
 
 struct OdbcDatabase;
@@ -159,6 +161,12 @@ AdbcStatusCode OdbcConnectionGetObjects(struct AdbcConnection* connection, int d
 /// Describe the result set of an executed/prepared statement as an Arrow schema.
 AdbcStatusCode OdbcDescribeResultSchema(SQLHSTMT hstmt, const struct OdbcReaderOptions* opts,
                                         struct ArrowSchema* out, struct AdbcError* error);
+
+/// Describe the parameters of a prepared statement as an Arrow struct schema
+/// (SQLNumParams + SQLDescribeParam).  Drivers that cannot describe parameters get
+/// N nullable utf8 fields named "0".."N-1".
+AdbcStatusCode OdbcDescribeParameterSchema(SQLHSTMT hstmt, const struct OdbcReaderOptions* opts,
+                                           struct ArrowSchema* out, struct AdbcError* error);
 
 /// Build an ArrowArrayStream that fetches from an executed statement.
 /// Takes a reference on `ref`.

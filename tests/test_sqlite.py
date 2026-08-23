@@ -253,3 +253,127 @@ def test_types():
 
 if __name__ == "__main__":
     test_types()
+
+
+def test_bound_params():
+    """Parameter-binding regressions.
+
+    D8  an Arrow `na` (untyped-null) parameter column binds as SQL NULL.
+    D9  a multi-row parameter batch on a result-returning query executes once
+        per row and exposes the concatenated result sets as one stream.
+    D14 StatementGetParameterSchema reports one field per parameter marker.
+    """
+    import pyarrow as pa
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "bind.db")
+
+    def stmt_of(cur, query, prepare=True):
+        s = cur.adbc_statement
+        s.set_sql_query(query)
+        if prepare:
+            s.prepare()
+        return s
+
+    def read(handle):
+        return pa.RecordBatchReader._import_from_c(handle.address).read_all()
+
+    def param_schema(s):
+        # Keep the handle alive: it releases the ArrowSchema when collected.
+        handle = s.get_parameter_schema()
+        return pa.Schema._import_from_c(handle.address)
+
+    with connect(db) as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TABLE t (id INTEGER, v TEXT)")
+
+        # --- D8: Arrow `na` binds as a NULL parameter ----------------------
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "INSERT INTO t (id, v) VALUES (?, ?)")
+            s.bind(pa.RecordBatch.from_pydict(
+                {"0": pa.array([7001], pa.int64()), "1": pa.nulls(1)}))
+            s.execute_update()
+        with conn.cursor() as cur:
+            cur.execute("SELECT v FROM t WHERE id = 7001")
+            assert cur.fetch_arrow_table().column("v").to_pylist() == [None]
+        # ...and on a query that returns a result set
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "SELECT ? AS v")
+            s.bind(pa.RecordBatch.from_pydict({"0": pa.nulls(2)}))
+            tbl = read(s.execute_query()[0])
+            assert tbl.column("v").to_pylist() == [None, None], tbl
+
+        # --- D9: multi-row bind on a result-returning query ----------------
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "SELECT 1 + ? AS v")
+            s.bind(pa.RecordBatch.from_pydict({"0": pa.array([1, 2, 3, 4], pa.int64())}))
+            handle, rows = s.execute_query()
+            tbl = read(handle)
+            # The whole batch is one logical stream carrying the first result's schema.
+            assert tbl.column("v").to_pylist() == [2, 3, 4, 5], tbl
+            assert rows == -1, rows
+        # many rows, so the lazy re-execution loop is driven many times
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "SELECT ? AS v")
+            s.bind(pa.RecordBatch.from_pydict({"0": pa.array(range(500), pa.int64())}))
+            tbl = read(s.execute_query()[0])
+            assert tbl.column("v").to_pylist() == list(range(500)), tbl.num_rows
+        # a query that yields several rows per execution
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "SELECT id FROM t WHERE id = ? OR id = ? ORDER BY id")
+            s.bind(pa.RecordBatch.from_pydict(
+                {"0": pa.array([7001, 7001], pa.int64()),
+                 "1": pa.array([7001, 7001], pa.int64())}))
+            tbl = read(s.execute_query()[0])
+            assert tbl.column("id").to_pylist() == [7001, 7001], tbl
+        # an empty parameter batch executes nothing and yields no rows
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "SELECT 1 + ? AS v")
+            s.bind(pa.RecordBatch.from_pydict({"0": pa.array([], pa.int64())}))
+            assert read(s.execute_query()[0]).num_rows == 0
+        # a bound statement that returns nothing still reports rows affected,
+        # even when the caller asked for a result stream
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "INSERT INTO t (id, v) VALUES (?, ?)")
+            s.bind(pa.RecordBatch.from_pydict(
+                {"0": pa.array([1, 2, 3], pa.int64()), "1": pa.array(["a", "b", "c"])}))
+            handle, rows = s.execute_query()
+            assert read(handle).num_rows == 0
+            assert rows == 3, rows
+
+        # the stream owns the parameter stream and the statement handle, so it
+        # stays readable after the statement that produced it is gone
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "SELECT 1 + ? AS v")
+            s.bind(pa.RecordBatch.from_pydict({"0": pa.array([10, 20, 30], pa.int64())}))
+            handle, _ = s.execute_query()
+            reader = pa.RecordBatchReader._import_from_c(handle.address)
+            first = reader.read_next_batch()
+        assert first.column(0).to_pylist() == [11], first
+        rest = [b.column(0).to_pylist() for b in reader]
+        assert rest == [[21], [31]], rest
+
+        # --- D14: StatementGetParameterSchema ------------------------------
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "SELECT 1 + ?")
+            sch = param_schema(s)
+            assert [f.name for f in sch] == ["0"], sch
+            # SQLiteODBC cannot describe parameters, so the fallback applies.
+            assert sch.field(0).type == pa.string() and sch.field(0).nullable, sch
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "SELECT 1 + ? + ?")
+            sch = param_schema(s)
+            assert [f.name for f in sch] == ["0", "1"], sch
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "SELECT 1")
+            sch = param_schema(s)
+            assert len(sch) == 0, sch
+        # it also works without an explicit prepare
+        with conn.cursor() as cur:
+            s = stmt_of(cur, "INSERT INTO t (id, v) VALUES (?, ?)", prepare=False)
+            sch = param_schema(s)
+            assert len(sch) == 2, sch
+    print("BOUND PARAMS OK")
+
+
+if __name__ == "__main__":
+    test_bound_params()

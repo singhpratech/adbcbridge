@@ -223,6 +223,10 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     conn->reader_opts.min_buffer_rows = 2048;
     conn->reader_opts.bool_param_as_int = true;
     conn->reader_opts.decimal_param_as_varchar = true;
+    // SQLDescribeParam throws an uncaught duckdb::BinderException -- which aborts the
+    // whole process, not just the call -- for any parameter whose type the binder
+    // cannot infer, e.g. the "?" in "SELECT 1 + ?".
+    conn->reader_opts.no_describe_param = true;
   }
   if (strstr((const char*)name, "clickhouse")) {
     conn->reader_opts.null_param_as_varchar = true;
@@ -738,6 +742,19 @@ static AdbcStatusCode OdbcStatementExecuteSchema(struct AdbcStatement* statement
   return OdbcDescribeResultSchema(stmt->ref->hstmt, &stmt->reader_opts, schema, error);
 }
 
+static AdbcStatusCode OdbcStatementGetParameterSchema(struct AdbcStatement* statement,
+                                                      struct ArrowSchema* schema,
+                                                      struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (!stmt->query) {
+    InternalAdbcSetError(error, "Must call StatementSetSqlQuery first");
+    return ADBC_STATUS_INVALID_STATE;
+  }
+  if (!stmt->prepared) RAISE_ADBC(OdbcStatementPrepare(statement, error));
+  return OdbcDescribeParameterSchema(stmt->ref->hstmt, &stmt->reader_opts, schema, error);
+}
+
 static AdbcStatusCode OdbcStatementCancel(struct AdbcStatement* statement,
                                           struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
@@ -799,6 +816,7 @@ AdbcStatusCode AdbcDriverOdbcInit(int version, void* raw_driver, struct AdbcErro
   driver->StatementBind = OdbcStatementBind;
   driver->StatementBindStream = OdbcStatementBindStream;
   driver->StatementExecuteQuery = OdbcStatementExecuteQuery;
+  driver->StatementGetParameterSchema = OdbcStatementGetParameterSchema;
   driver->StatementNew = OdbcStatementNew;
   driver->StatementPrepare = OdbcStatementPrepare;
   driver->StatementRelease = OdbcStatementRelease;
