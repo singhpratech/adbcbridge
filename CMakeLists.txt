@@ -58,7 +58,11 @@ endif()
 install(TARGETS adbc_driver_odbc LIBRARY DESTINATION lib)
 
 # --- Tests ---
-if(ADBC_ODBC_BUILD_TESTS)
+# The C smoke test is POSIX-only: it uses dlopen()/dlsym() and mkdtemp() to
+# load the driver and create a scratch directory, so it is built only when
+# ADBC_ODBC_BUILD_TESTS is ON *and* we are not targeting Windows. The library
+# build itself never depends on this test code.
+if(ADBC_ODBC_BUILD_TESTS AND NOT WIN32)
   enable_testing()
 
   # Dependency-free C smoke test: dlopen()s the driver and drives the ADBC
@@ -85,4 +89,7 @@ if(ADBC_ODBC_BUILD_TESTS)
   # test reports "skipped" (77) when it is unset and no SQLite ODBC driver is
   # registered under the default name.
   set_tests_properties(adbc_odbc_c_smoke PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+elseif(ADBC_ODBC_BUILD_TESTS AND WIN32)
+  message(STATUS
+    "adbc_driver_odbc: skipping the C smoke test (POSIX-only: dlopen/mkdtemp)")
 endif()

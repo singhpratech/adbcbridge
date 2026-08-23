@@ -18,6 +18,14 @@
 // Environment:
 //   ADBC_ODBC_DRIVER    path to the driver library (if argv[1] is absent)
 //   SQLITE_ODBC_DRIVER  path/name of the SQLite ODBC driver (default SQLite3)
+//
+// This file is POSIX-only (dlopen/dlsym, mkdtemp). CMake builds it only when
+// ADBC_ODBC_BUILD_TESTS is ON and the target is not Windows; the driver
+// library itself has no dependency on this test.
+
+#if defined(_WIN32)
+#error "tests/c/test_driver.c is POSIX-only; it is not built on Windows"
+#endif
 
 #include <dlfcn.h>
 #include <stdbool.h>
