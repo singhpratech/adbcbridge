@@ -13,3 +13,7 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment: { ACCEPT_EULA: "Y", MSSQL_SA_PASSWORD: "Adbc!Bridge2026" }
     ports: ["127.0.0.1:14331:1433"]
+  cockroachdb:
+    image: cockroachdb/cockroach:latest
+    command: start-single-node --insecure --cache=128MiB --max-sql-memory=128MiB
+    ports: ["127.0.0.1:16257:26257", "127.0.0.1:18080:8080"]
