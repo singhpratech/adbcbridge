@@ -207,6 +207,11 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // array size is not a multiple of 2048.
     conn->reader_opts.min_buffer_rows = 2048;
     conn->reader_opts.bool_param_as_int = true;
+    conn->reader_opts.decimal_param_as_varchar = true;
+  }
+  if (strstr((const char*)name, "sqora")) {
+    // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
+    conn->reader_opts.bigint_param_as_string = true;
   }
 }
 

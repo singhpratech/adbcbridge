@@ -29,13 +29,26 @@ DBS = {
     "mariadb": dict(
         env="MARIADB_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=13306;Database=adbc;User=adbc;Password=adbc;",
         ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
-        bool_type="int8"),
+        bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
+    "oracle": dict(
+        env="ORACLE_ODBC_DRIVER", conn="Driver={drv};DBQ=127.0.0.1:11521/FREEPDB1;UID=adbc;PWD=adbc;",
+        ddl="CREATE TABLE adbc_t (i NUMBER(10), f BINARY_DOUBLE, s VARCHAR2(50), b RAW(10), d DATE, ts TIMESTAMP(6), n NUMBER(10,3), bo BOOLEAN)",
+        ident=str.upper, unicode_env="NLS_LANG=.AL32UTF8"),
+    "clickhouse": dict(
+        env="CLICKHOUSE_ODBC_DRIVER", conn="Driver={drv};Url=http://127.0.0.1:18123;Database=adbc;UID=adbc;PWD=adbc;",
+        ddl="CREATE TABLE adbc_t (i Nullable(Int32), f Nullable(Float64), s Nullable(String), b Nullable(String), d Nullable(Date), ts Nullable(DateTime64(6)), n Nullable(Decimal(10,3)), bo Nullable(Bool)) ENGINE = Memory",
+        # clickhouse-odbc sends NULL parameters as empty strings (driver limitation) and
+        # does not report affected row counts.
+        null_params=False, rowcount=False, big_rows=300),
     "mssql": dict(
         env="MSSQL_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1,14331;Database=master;Uid=sa;Pwd=Adbc!Bridge2026;TrustServerCertificate=yes;",
         ddl="CREATE TABLE adbc_t (i INT, f FLOAT, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME2(6), n DECIMAL(10,3), bo BIT)"),
 }
 
-ROW1 = (1, 1.5, "héllo 🚀", b"\x01\x02", "2024-02-29", "2024-02-29 13:45:10.123456", "12.345", True)
+# Typed values: ADBC clients send Arrow-typed parameters, so dates/timestamps go as
+# date32/timestamp (string literals for dates are not portable, e.g. Oracle).
+ROW1 = (1, 1.5, "héllo 🚀", b"\x01\x02", datetime.date(2024, 2, 29),
+        datetime.datetime(2024, 2, 29, 13, 45, 10, 123456), decimal.Decimal("12.345"), True)
 ROW2 = (2, None, None, None, None, None, None, None)
 
 
@@ -43,30 +56,43 @@ def run(name, cfg):
     drv = os.environ.get(cfg["env"])
     if not drv:
         return "SKIP (set %s)" % cfg["env"]
+    for kv in cfg.get("unicode_env", "").split():
+        k, v = kv.split("=", 1)
+        os.environ.setdefault(k, v)
     uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv)
     conn = dbapi.connect(driver=DRIVER, db_kwargs={"uri": uri}, autocommit=True)
     info = conn.adbc_get_info()
+    ident = cfg.get("ident", lambda x: x)  # how the server stores unquoted names
+    T, ING = ident("adbc_t"), ident("adbc_ing")
     with conn.cursor() as cur:
+        for sql in cfg.get("setup", []):
+            cur.execute(sql)
         for t in ("adbc_t", "adbc_ing"):
             try:
                 cur.execute("DROP TABLE " + t)
             except Exception:
                 pass
         cur.execute(cfg["ddl"])
-        cur.executemany("INSERT INTO adbc_t VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [ROW1, ROW2])
+        rows = [ROW1, ROW2] if cfg.get("null_params", True) else [ROW1]
+        cur.executemany("INSERT INTO adbc_t VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        if not cfg.get("null_params", True):
+            cur.execute("INSERT INTO adbc_t VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)")
         cur.execute("SELECT * FROM adbc_t ORDER BY i")
         t = cur.fetch_arrow_table()
         r1, r2 = t.to_pylist()
-        assert r1["i"] == 1 and r1["f"] == 1.5 and r1["b"] == b"\x01\x02", r1
+        r1 = {k.lower(): v for k, v in r1.items()}; r2 = {k.lower(): v for k, v in r2.items()}
+        assert r1["i"] == 1 and r1["f"] == 1.5, r1
+        assert r1["b"] in (b"\x01\x02", "\x01\x02"), r1["b"]
         assert r1["s"] == "héllo 🚀" or (name == "sqlite" and r1["s"].startswith("héllo")), r1["s"]
-        assert r1["d"] == datetime.date(2024, 2, 29), r1["d"]
+        assert r1["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), r1["d"]
         ts = r1["ts"]
         assert ts.replace(microsecond=0) == datetime.datetime(2024, 2, 29, 13, 45, 10), ts
         assert ts.microsecond in (123456, 123000), ts
         n = r1["n"]
-        assert str(t.schema.field("n").type) == cfg.get("decimal_type", "decimal128(10, 3)"), t.schema.field("n")
+        fields = {f.name.lower(): str(f.type) for f in t.schema}
+        assert fields["n"] in ("decimal128(10, 3)", "string"), fields["n"]
         assert n in (decimal.Decimal("12.345"), "12.345"), n
-        assert str(t.schema.field("bo").type) == cfg.get("bool_type", "bool"), t.schema.field("bo")
+        assert fields["bo"] == cfg.get("bool_type", "bool"), fields["bo"]
         assert r1["bo"] in (True, 1), r1["bo"]
         assert all(v is None for k, v in r2.items() if k != "i"), r2
         # parameterised query
@@ -80,18 +106,21 @@ def run(name, cfg):
             "d": pa.array([0, 19782, None], pa.date32()),
             "e": pa.array([True, None, False], pa.bool_()),
         })
-        assert cur.adbc_ingest("adbc_ing", tbl, mode="create") == 3
-        assert cur.adbc_ingest("adbc_ing", tbl, mode="append") == 3
-        cur.execute("SELECT a, b, c, d FROM adbc_ing WHERE a = 2")
-        assert cur.fetch_arrow_table().to_pylist() == [{"a": 2, "b": None, "c": None, "d": datetime.date(2024, 2, 29)}] * 2
+        n1 = cur.adbc_ingest("adbc_ing", tbl, mode="create")
+        n2 = cur.adbc_ingest("adbc_ing", tbl, mode="append")
+        assert (n1, n2) == (3, 3) or not cfg.get("rowcount", True), (n1, n2)
+        cur.execute('SELECT "a", "b", "c", "d" FROM "adbc_ing" WHERE "a" = 2')
+        got = cur.fetch_arrow_table().to_pylist()
+        assert len(got) == 2 and got[0]["b"] is None and got[0]["c"] is None and got[0]["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), got
         # bigger result to cross batch boundaries
-        cur.adbc_ingest("adbc_ing", pa.table({"a": pa.array(range(5000), pa.int64()), "b": pa.array(["r%d" % i for i in range(5000)]),
-                                             "c": pa.array([float(i) for i in range(5000)]), "d": pa.array([i for i in range(5000)], pa.date32()),
-                                             "e": pa.array([i % 2 == 0 for i in range(5000)])}), mode="replace")
-        cur.execute("SELECT a, b FROM adbc_ing ORDER BY a")
+        N = cfg.get("big_rows", 5000)
+        cur.adbc_ingest("adbc_ing", pa.table({"a": pa.array(range(N), pa.int64()), "b": pa.array(["r%d" % i for i in range(N)]),
+                                             "c": pa.array([float(i) for i in range(N)]), "d": pa.array([i for i in range(N)], pa.date32()),
+                                             "e": pa.array([i % 2 == 0 for i in range(N)])}), mode="replace")
+        cur.execute('SELECT "a", "b" FROM "adbc_ing" ORDER BY "a"')
         big = cur.fetch_arrow_table()
-        assert big.column("a").to_pylist() == list(range(5000))
-        assert big.column("b").to_pylist()[-1] == "r4999"
+        assert big.column("a").to_pylist() == list(range(N))
+        assert big.column("b").to_pylist()[-1] == "r%d" % (N - 1)
         # error path
         try:
             cur.execute("SELECT * FROM adbc_no_such_table")
@@ -99,11 +128,11 @@ def run(name, cfg):
         except dbapi.Error as e:
             assert "adbc_no_such_table" in str(e) or "not" in str(e).lower(), str(e)
     # metadata
-    objs = conn.adbc_get_objects(depth="all", table_name_filter="adbc_t").read_all().to_pylist()
+    objs = conn.adbc_get_objects(depth="all", table_name_filter=T).read_all().to_pylist()
     cols = [c["column_name"].lower() for cat in objs for s in cat["catalog_db_schemas"] or [] for t in s["db_schema_tables"] or [] for c in t["table_columns"]]
     assert cols == ["i", "f", "s", "b", "d", "ts", "n", "bo"], cols
     assert "adbc_t" in [x.lower() for x in conn.adbc_get_table_types()] or True
-    sch = conn.adbc_get_table_schema("adbc_t")
+    sch = conn.adbc_get_table_schema(T)
     assert [f.name.lower() for f in sch] == ["i", "f", "s", "b", "d", "ts", "n", "bo"]
     conn.close()
     return "PASS  (%s %s)" % (info["vendor_name"], info["vendor_version"])

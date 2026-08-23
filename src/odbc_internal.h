@@ -63,6 +63,10 @@ struct OdbcReaderOptions {
   int64_t min_buffer_rows;
   // Driver quirk: bind boolean parameters as integers (DuckDB rejects SQL_BIT params).
   bool bool_param_as_int;
+  // Driver quirk: no SQL_C_SBIGINT parameter support (Oracle); send 64-bit ints as numeric text.
+  bool bigint_param_as_string;
+  // Driver quirk: bind decimal parameters as VARCHAR text instead of SQL_DECIMAL (DuckDB).
+  bool decimal_param_as_varchar;
 };
 
 struct OdbcDatabase;

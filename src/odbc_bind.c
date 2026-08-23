@@ -19,6 +19,7 @@ struct ParamSlot {
   struct ArrowBuffer wbuf;  // UTF-16 conversion of string parameters
   union {
     unsigned char bit;
+    SQLINTEGER i32;
     SQLBIGINT i64;
     SQLUBIGINT u64;
     SQLDOUBLE f64;
@@ -103,17 +104,36 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
       break;
     case NANOARROW_TYPE_INT8: case NANOARROW_TYPE_INT16:
     case NANOARROW_TYPE_INT32: case NANOARROW_TYPE_INT64:
-      p->c_type = SQL_C_SBIGINT;
-      p->sql_type = sv->type == NANOARROW_TYPE_INT64 ? SQL_BIGINT : SQL_INTEGER;
-      p->fixed.i64 = ArrowArrayViewGetIntUnsafe(av, row);
-      p->data = &p->fixed.i64; p->buffer_length = sizeof(SQLBIGINT);
-      break;
     case NANOARROW_TYPE_UINT8: case NANOARROW_TYPE_UINT16:
-    case NANOARROW_TYPE_UINT32: case NANOARROW_TYPE_UINT64:
-      p->c_type = SQL_C_UBIGINT; p->sql_type = SQL_BIGINT;
-      p->fixed.u64 = ArrowArrayViewGetUIntUnsafe(av, row);
-      p->data = &p->fixed.u64; p->buffer_length = sizeof(SQLUBIGINT);
+    case NANOARROW_TYPE_UINT32: case NANOARROW_TYPE_UINT64: {
+      bool is_unsigned = sv->type == NANOARROW_TYPE_UINT8 || sv->type == NANOARROW_TYPE_UINT16 ||
+                         sv->type == NANOARROW_TYPE_UINT32 || sv->type == NANOARROW_TYPE_UINT64;
+      uint64_t u = 0; int64_t v = 0;
+      if (p->indicator != SQL_NULL_DATA) {
+        if (is_unsigned) u = ArrowArrayViewGetUIntUnsafe(av, row);
+        else v = ArrowArrayViewGetIntUnsafe(av, row);
+      }
+      bool fits32 = is_unsigned ? (u <= INT32_MAX) : (v >= INT32_MIN && v <= INT32_MAX);
+      if (fits32) {
+        // SQL_C_SLONG is the most universally supported integer binding.
+        p->c_type = SQL_C_SLONG; p->sql_type = SQL_INTEGER;
+        p->fixed.i32 = is_unsigned ? (SQLINTEGER)u : (SQLINTEGER)v;
+        p->data = &p->fixed.i32; p->buffer_length = sizeof(SQLINTEGER);
+      } else if (opts->bigint_param_as_string) {
+        int n = is_unsigned ? snprintf(p->fixed.text, sizeof(p->fixed.text), "%llu", (unsigned long long)u)
+                            : snprintf(p->fixed.text, sizeof(p->fixed.text), "%lld", (long long)v);
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_NUMERIC; p->column_size = 20; p->decimal_digits = 0;
+        p->data = p->fixed.text; p->buffer_length = n + 1;
+        if (p->indicator != SQL_NULL_DATA) p->indicator = n;
+      } else if (is_unsigned) {
+        p->c_type = SQL_C_UBIGINT; p->sql_type = SQL_BIGINT;
+        p->fixed.u64 = u; p->data = &p->fixed.u64; p->buffer_length = sizeof(SQLUBIGINT);
+      } else {
+        p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_BIGINT;
+        p->fixed.i64 = v; p->data = &p->fixed.i64; p->buffer_length = sizeof(SQLBIGINT);
+      }
       break;
+    }
     case NANOARROW_TYPE_HALF_FLOAT: case NANOARROW_TYPE_FLOAT: case NANOARROW_TYPE_DOUBLE:
       p->c_type = SQL_C_DOUBLE; p->sql_type = SQL_DOUBLE;
       p->fixed.f64 = ArrowArrayViewGetDoubleUnsafe(av, row);
@@ -172,7 +192,14 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
       ts->hour = (SQLUSMALLINT)(sod / 3600); ts->minute = (SQLUSMALLINT)((sod % 3600) / 60);
       ts->second = (SQLUSMALLINT)(sod % 60); ts->fraction = (SQLUINTEGER)(frac * frac_mul);
       p->c_type = SQL_C_TYPE_TIMESTAMP; p->sql_type = SQL_TYPE_TIMESTAMP;
-      p->column_size = 29; p->decimal_digits = 9;
+      // Fractional digits by unit; capped at 7 (SQL Server's DATETIME2 maximum).
+      {
+        int digits = sv->time_unit == NANOARROW_TIME_UNIT_SECOND ? 0
+                     : sv->time_unit == NANOARROW_TIME_UNIT_MILLI ? 3
+                     : sv->time_unit == NANOARROW_TIME_UNIT_MICRO ? 6 : 7;
+        p->decimal_digits = (SQLSMALLINT)digits;
+        p->column_size = (SQLULEN)(digits ? 20 + digits : 19);
+      }
       p->data = ts; p->buffer_length = sizeof(TIMESTAMP_STRUCT);
       break;
     }
@@ -192,8 +219,13 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
         ArrowBufferReset(&buf);
         p->indicator = (SQLLEN)n;
       }
-      p->c_type = SQL_C_CHAR; p->sql_type = SQL_DECIMAL;
-      p->column_size = (SQLULEN)sv->decimal_precision; p->decimal_digits = (SQLSMALLINT)sv->decimal_scale;
+      p->c_type = SQL_C_CHAR;
+      if (opts->decimal_param_as_varchar) {
+        p->sql_type = SQL_VARCHAR; p->column_size = sizeof(p->fixed.text); p->decimal_digits = 0;
+      } else {
+        p->sql_type = SQL_DECIMAL;
+        p->column_size = (SQLULEN)sv->decimal_precision; p->decimal_digits = (SQLSMALLINT)sv->decimal_scale;
+      }
       p->data = p->fixed.text; p->buffer_length = (SQLLEN)sizeof(p->fixed.text);
       break;
     }
@@ -326,56 +358,88 @@ AdbcStatusCode OdbcStatementExecuteBound(struct OdbcStatement* stmt, struct Arro
 // ---------------------------------------------------------------------------
 // Bulk ingest
 
-// Ask the driver for its name of a SQL type; fall back to a generic name.
-static void TypeNameFor(SQLHDBC hdbc, SQLSMALLINT sql_type, int64_t length, const char* fallback,
-                        char* out, size_t out_size) {
+// Ask the driver for its name of one SQL type via SQLGetTypeInfo. Returns false if the
+// driver has no such type.
+static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, int64_t length, int32_t precision,
+                        int32_t scale, char* out, size_t out_size) {
   SQLHSTMT hstmt = NULL;
   bool done = false;
-  if (SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) {
-    if (SQL_SUCCEEDED(SQLGetTypeInfo(hstmt, sql_type)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
-      char name[256] = {0}, params[256] = {0};
-      SQLLEN ind1 = 0, ind2 = 0;
-      SQLGetData(hstmt, 1, SQL_C_CHAR, name, sizeof(name), &ind1);
-      SQLGetData(hstmt, 6, SQL_C_CHAR, params, sizeof(params), &ind2);  // CREATE_PARAMS
-      if (ind1 > 0) {
-        if (ind2 > 0 && length > 0 && strstr(params, "length")) {
-          snprintf(out, out_size, "%s(%lld)", name, (long long)length);
-        } else {
-          snprintf(out, out_size, "%s", name);
-        }
-        done = true;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
+  if (SQL_SUCCEEDED(SQLGetTypeInfo(hstmt, sql_type)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
+    char name[256] = {0}, params[256] = {0};
+    SQLLEN ind1 = 0, ind2 = 0;
+    SQLGetData(hstmt, 1, SQL_C_CHAR, name, sizeof(name), &ind1);
+    SQLGetData(hstmt, 6, SQL_C_CHAR, params, sizeof(params), &ind2);  // CREATE_PARAMS
+    if (ind1 > 0) {
+      // Some drivers return names with embedded parameters, e.g. "NUMBER(19,0)" or
+      // "decimal(p,s)"; strip anything from '(' so we can apply our own parameters.
+      char* paren = strchr(name, '(');
+      if (paren) *paren = '\0';
+      bool has_params = ind2 > 0;
+      if (has_params && strstr(params, "precision") && precision > 0) {
+        snprintf(out, out_size, "%s(%d,%d)", name, precision, scale);
+      } else if (has_params && strstr(params, "length") && length > 0) {
+        snprintf(out, out_size, "%s(%lld)", name, (long long)length);
+      } else {
+        snprintf(out, out_size, "%s", name);
       }
+      done = true;
     }
-    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
   }
-  if (!done) snprintf(out, out_size, "%s", fallback);
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+  return done;
+}
+
+// Try a chain of candidate SQL types (e.g. BIGINT, then NUMERIC(19,0) for Oracle).
+static void TypeNameFor(SQLHDBC hdbc, const SQLSMALLINT* candidates, int n, int64_t length,
+                        int32_t precision, int32_t scale, const char* fallback, char* out,
+                        size_t out_size) {
+  for (int i = 0; i < n; i++) {
+    if (TypeNameOne(hdbc, candidates[i], length, precision, scale, out, out_size)) return;
+  }
+  snprintf(out, out_size, "%s", fallback);
 }
 
 static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct ArrowSchemaView* sv, char* out,
                                     size_t out_size, struct AdbcError* error) {
+#define TYPES(...) ((const SQLSMALLINT[]){__VA_ARGS__})
+#define CHAIN(fallback, ...)                                                              \
+  TypeNameFor(hdbc, TYPES(__VA_ARGS__), (int)(sizeof(TYPES(__VA_ARGS__)) / sizeof(SQLSMALLINT)), \
+              0, 0, 0, fallback, out, out_size)
   switch (sv->type) {
-    case NANOARROW_TYPE_BOOL: TypeNameFor(hdbc, SQL_BIT, 0, "BOOLEAN", out, out_size); break;
+    case NANOARROW_TYPE_BOOL: CHAIN("BOOLEAN", SQL_BIT, SQL_TINYINT, SQL_SMALLINT); break;
     case NANOARROW_TYPE_INT8: case NANOARROW_TYPE_UINT8:
-    case NANOARROW_TYPE_INT16: TypeNameFor(hdbc, SQL_SMALLINT, 0, "SMALLINT", out, out_size); break;
+    case NANOARROW_TYPE_INT16: CHAIN("SMALLINT", SQL_SMALLINT, SQL_INTEGER); break;
     case NANOARROW_TYPE_UINT16:
-    case NANOARROW_TYPE_INT32: TypeNameFor(hdbc, SQL_INTEGER, 0, "INTEGER", out, out_size); break;
-    case NANOARROW_TYPE_UINT32: case NANOARROW_TYPE_INT64:
-    case NANOARROW_TYPE_UINT64: TypeNameFor(hdbc, SQL_BIGINT, 0, "BIGINT", out, out_size); break;
+    case NANOARROW_TYPE_INT32: CHAIN("INTEGER", SQL_INTEGER, SQL_BIGINT); break;
+    case NANOARROW_TYPE_UINT32: case NANOARROW_TYPE_INT64: case NANOARROW_TYPE_UINT64:
+      if (!TypeNameOne(hdbc, SQL_BIGINT, 0, 0, 0, out, out_size) &&
+          !TypeNameOne(hdbc, SQL_DECIMAL, 0, 19, 0, out, out_size) &&
+          !TypeNameOne(hdbc, SQL_NUMERIC, 0, 19, 0, out, out_size)) {
+        snprintf(out, out_size, "BIGINT");
+      }
+      break;
     case NANOARROW_TYPE_HALF_FLOAT:
-    case NANOARROW_TYPE_FLOAT: TypeNameFor(hdbc, SQL_REAL, 0, "REAL", out, out_size); break;
-    case NANOARROW_TYPE_DOUBLE: TypeNameFor(hdbc, SQL_DOUBLE, 0, "DOUBLE PRECISION", out, out_size); break;
+    case NANOARROW_TYPE_FLOAT: CHAIN("REAL", SQL_REAL, SQL_FLOAT, SQL_DOUBLE); break;
+    case NANOARROW_TYPE_DOUBLE: CHAIN("DOUBLE PRECISION", SQL_DOUBLE, SQL_FLOAT); break;
     case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING:
-      TypeNameFor(hdbc, SQL_LONGVARCHAR, 0, "TEXT", out, out_size); break;
+      CHAIN("TEXT", SQL_LONGVARCHAR, SQL_WLONGVARCHAR, SQL_VARCHAR); break;
     case NANOARROW_TYPE_BINARY: case NANOARROW_TYPE_LARGE_BINARY: case NANOARROW_TYPE_FIXED_SIZE_BINARY:
-      TypeNameFor(hdbc, SQL_LONGVARBINARY, 0, "BLOB", out, out_size); break;
-    case NANOARROW_TYPE_DATE32: TypeNameFor(hdbc, SQL_TYPE_DATE, 0, "DATE", out, out_size); break;
-    case NANOARROW_TYPE_TIMESTAMP: TypeNameFor(hdbc, SQL_TYPE_TIMESTAMP, 0, "TIMESTAMP", out, out_size); break;
+      CHAIN("BLOB", SQL_LONGVARBINARY, SQL_VARBINARY); break;
+    case NANOARROW_TYPE_DATE32: CHAIN("DATE", SQL_TYPE_DATE, SQL_TYPE_TIMESTAMP); break;
+    case NANOARROW_TYPE_TIMESTAMP: CHAIN("TIMESTAMP", SQL_TYPE_TIMESTAMP); break;
     case NANOARROW_TYPE_DECIMAL128: case NANOARROW_TYPE_DECIMAL256:
-      snprintf(out, out_size, "DECIMAL(%d,%d)", sv->decimal_precision, sv->decimal_scale); break;
+      if (!TypeNameOne(hdbc, SQL_DECIMAL, 0, sv->decimal_precision, sv->decimal_scale, out, out_size) &&
+          !TypeNameOne(hdbc, SQL_NUMERIC, 0, sv->decimal_precision, sv->decimal_scale, out, out_size)) {
+        snprintf(out, out_size, "DECIMAL(%d,%d)", sv->decimal_precision, sv->decimal_scale);
+      }
+      break;
     default:
       InternalAdbcSetError(error, "Unsupported Arrow type for ingest: %s", ArrowTypeString(sv->type));
       return ADBC_STATUS_NOT_IMPLEMENTED;
   }
+#undef CHAIN
+#undef TYPES
   return ADBC_STATUS_OK;
 }
 
