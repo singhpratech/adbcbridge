@@ -191,6 +191,67 @@ Options (set on the statement):
 |---|---|
 | `adbc.odbc.array_binding` | `false` (default; opt-in while it is verified across the compatibility matrix) — `true` binds each Arrow batch as an ODBC parameter array, so bulk ingest and `executemany` issue one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE` fall back automatically. Reported rows-affected is identical in both modes. |
 
+## Use from C#
+
+```sh
+dotnet add package Apache.Arrow.Adbc --version 0.24.0
+```
+
+```csharp
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
+using Apache.Arrow.Adbc.C;
+using Apache.Arrow.Ipc;
+
+using AdbcDriver driver = CAdbcDriverImporter.Load("/path/to/libadbc_driver_odbc.so");
+
+string uri = "Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so;Database=my.db;";
+using AdbcDatabase database = driver.Open(new Dictionary<string, string> { ["uri"] = uri });
+using AdbcConnection connection = database.Connect(null);
+
+using AdbcStatement statement = connection.CreateStatement();
+statement.SqlQuery = "SELECT * FROM my_table";
+QueryResult result = statement.ExecuteQuery();
+
+IArrowArrayStream stream = result.Stream!;
+while (await stream.ReadNextRecordBatchAsync() is RecordBatch batch)
+{
+    Console.WriteLine($"{batch.Length} rows");
+}
+```
+
+`CAdbcDriverImporter.Load` `dlopen`s the shared library and calls its
+`AdbcDriverInit` export, so no driver manager or manifest is involved. Pass a
+second argument to use a different entry point.
+
+Parameters are bound as an Arrow `RecordBatch`, one column per `?` and one row
+per execution:
+
+```csharp
+using Apache.Arrow.Types;
+
+Schema parameters = new Schema.Builder()
+    .Field(new Field("id", Int64Type.Default, nullable: true))
+    .Field(new Field("name", StringType.Default, nullable: true))
+    .Build();
+RecordBatch batch = new RecordBatch(
+    parameters,
+    new IArrowArray[]
+    {
+        new Int64Array.Builder().Append(1).Append(2).Build(),
+        new StringArray.Builder().Append("ada").AppendNull().Build(),
+    },
+    length: 2);
+
+using AdbcStatement insert = connection.CreateStatement();
+insert.SqlQuery = "INSERT INTO my_table (id, name) VALUES (?, ?)";
+insert.Prepare();
+insert.Bind(batch, parameters);
+Console.WriteLine($"{insert.ExecuteUpdate().AffectedRows} rows inserted");
+```
+
+See `tests/csharp/` for a runnable example.
+
 ## Test
 
 ```sh
@@ -202,6 +263,13 @@ The same smoke tests from Rust (see `tests/rust/README.md`):
 
 ```sh
 cd tests/rust && SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so cargo test
+```
+
+And from C# (see [`tests/csharp/README.md`](tests/csharp/README.md) for the
+docker one-liner, which needs no .NET SDK on the host):
+
+```sh
+cd tests/csharp && SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so dotnet test
 ```
 ## Contributing
 
