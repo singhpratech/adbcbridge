@@ -191,6 +191,54 @@ Options (set on the statement):
 |---|---|
 | `adbc.odbc.array_binding` | `false` (default; opt-in while it is verified across the compatibility matrix) — `true` binds each Arrow batch as an ODBC parameter array, so bulk ingest and `executemany` issue one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE` fall back automatically. Reported rows-affected is identical in both modes. |
 
+## Use from Java
+
+```xml
+<!-- pom.xml -->
+<dependency>
+  <groupId>org.apache.arrow.adbc</groupId>
+  <artifactId>adbc-driver-jni</artifactId>   <!-- ADBC >= 0.21 -->
+  <version>0.24.0</version>
+</dependency>
+<dependency>
+  <groupId>org.apache.arrow</groupId>
+  <artifactId>arrow-memory-netty</artifactId> <!-- must match ADBC's Arrow -->
+  <version>19.0.0</version>
+  <scope>runtime</scope>
+</dependency>
+```
+
+`adbc-driver-jni` bundles the native ADBC driver manager, so Java loads the
+`.so` the same way every other binding does:
+
+```java
+Map<String, Object> parameters = new HashMap<>();
+JniDriver.PARAM_DRIVER.set(parameters, "/path/to/libadbc_driver_odbc.so");
+AdbcDriver.PARAM_URI.set(
+    parameters, "Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so;Database=my.db;");
+
+try (BufferAllocator allocator = new RootAllocator();
+    AdbcDatabase database = new JniDriver(allocator).open(parameters);
+    AdbcConnection connection = database.connect();
+    AdbcStatement statement = connection.createStatement()) {
+  statement.setSqlQuery("SELECT * FROM my_table");
+  try (AdbcStatement.QueryResult result = statement.executeQuery()) {
+    ArrowReader reader = result.getReader();
+    while (reader.loadNextBatch()) {
+      VectorSchemaRoot root = reader.getVectorSchemaRoot();
+      System.out.println(root.getRowCount() + " rows");
+    }
+  }
+}
+```
+
+`PARAM_DRIVER` also accepts a bare library name or a driver-manifest name
+(`"odbc"`, see above). Parameters are bound as a `VectorSchemaRoot`, one column
+per `?` and one row per execution: `statement.prepare(); statement.bind(root);`
+then `executeQuery()` or `executeUpdate()`. Run the JVM with
+`--add-opens=java.base/java.nio=ALL-UNNAMED`, which Arrow's off-heap allocator
+needs on JDK 17+. See `tests/java/` for a runnable example.
+
 ## Test
 
 ```sh
@@ -203,6 +251,16 @@ The same smoke tests from Rust (see `tests/rust/README.md`):
 ```sh
 cd tests/rust && SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so cargo test
 ```
+
+and from Java, in a container (see `tests/java/README.md` for the full command):
+
+```sh
+docker run --rm -v "$PWD":/work -v /usr/lib/x86_64-linux-gnu/odbc:/odbc:ro \
+  -w /work/tests/java -e ADBC_ODBC_DRIVER=/work/build/libadbc_driver_odbc.so \
+  -e SQLITE_ODBC_DRIVER=/odbc/libsqlite3odbc.so maven:3-eclipse-temurin-21 \
+  bash -c 'apt-get update -qq && apt-get install -y -qq unixodbc && mvn -B test'
+```
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the build/test loop, the
