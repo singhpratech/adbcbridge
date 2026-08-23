@@ -596,7 +596,17 @@ static AdbcStatusCode OdbcConnectionRelease(struct AdbcConnection* connection,
   AdbcStatusCode status = ADBC_STATUS_OK;
   if (conn->proxy) status = OdbcProxyConnectionRelease(conn->proxy, error);
   if (conn->hdbc) {
-    if (conn->connected) SQLDisconnect(conn->hdbc);
+    if (conn->connected) {
+      // ODBC forbids SQLDisconnect while a transaction is open (25000). Releasing a
+      // connection discards uncommitted work, so roll back first; otherwise drivers such
+      // as sqliteodbc refuse the disconnect and the underlying handle -- and its locks --
+      // leak for the rest of the process.
+      if (!conn->autocommit) SQLEndTran(SQL_HANDLE_DBC, conn->hdbc, SQL_ROLLBACK);
+      if (!SQL_SUCCEEDED(SQLDisconnect(conn->hdbc))) {
+        SQLEndTran(SQL_HANDLE_DBC, conn->hdbc, SQL_ROLLBACK);
+        SQLDisconnect(conn->hdbc);
+      }
+    }
     SQLFreeHandle(SQL_HANDLE_DBC, conn->hdbc);
   }
   for (size_t i = 0; i < conn->pre_count; i++) {

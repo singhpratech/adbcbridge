@@ -80,6 +80,46 @@ def main():
             print("error ok:", type(e).__name__, str(e)[:120])
     print("ALL OK")
 
+def test_release_with_open_transaction_drops_locks():
+    """Closing a connection mid-transaction must roll back and really disconnect.
+
+    ODBC rejects SQLDisconnect while a transaction is open (SQLSTATE 25000); if the
+    driver ignored that, sqliteodbc kept the handle -- and the read lock taken by the
+    SELECT -- alive, and the next writer's commit spun in SQLite's busy handler forever.
+    """
+    import threading
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "lock.db")
+    uri = f"Driver={SQLITE_ODBC};Database={db};"
+    kw = dict(driver=DRIVER, db_kwargs={"uri": uri, "adbc.odbc.delegate": "never"}, autocommit=False)
+    conn = dbapi.connect(**kw)
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE lk (i INTEGER)")
+    conn.commit()
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM lk")
+        assert cur.fetchone()[0] == 0
+    conn.close()  # transaction (the SELECT's read lock) still open here
+    conn2 = dbapi.connect(**kw)
+    done = threading.Event()
+    err = []
+
+    def writer():
+        try:
+            with conn2.cursor() as cur:
+                cur.execute("DROP TABLE lk")
+            conn2.commit()
+        except Exception as e:  # noqa: BLE001
+            err.append(e)
+        done.set()
+
+    threading.Thread(target=writer, daemon=True).start()
+    assert done.wait(10), "commit after a closed connection hung on the leaked lock"
+    assert not err, err
+    conn2.close()
+    print("RELEASE WITH OPEN TXN OK")
+
+
 if __name__ == "__main__":
     main()
 
@@ -614,3 +654,4 @@ def test_bound_params():
 
 if __name__ == "__main__":
     test_bound_params()
+    test_release_with_open_transaction_drops_locks()
