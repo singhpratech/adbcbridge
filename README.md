@@ -119,6 +119,10 @@ arrays, and `adbc.odbc.rows_per_insert` overrides the choice. 10,000 rows, rows/
 | MySQL 8.4 (50,000 rows) | 20,784 | **200,247** |
 | PostgreSQL 16 | 102,508 | **312,025** |
 | SQLite 3.45 (50,000 rows) | 634,417 | **866,080** |
+| StarRocks 4.1.4 | 10 | **4,783** |
+| Apache Doris 2.1.0 | 7 | **2,184** |
+| CrateDB 6.4 | 820 | **49,986** |
+| GreptimeDB 1.1.4 | 5,171 | **180,760** |
 
 
 #### Parallel ingest: trading atomicity for speed
@@ -153,8 +157,9 @@ parallelism converts CPU into wall time without making the work smaller. See
 [bench/BENCHMARKS.md](bench/BENCHMARKS.md) for the numbers and for what closing the gap
 would take.
 
-MariaDB keeps ODBC parameter arrays, which are faster there (103k vs 72k rows/s); Firebird
-gains nothing, because OdbcFb rejects multi-row `VALUES` at prepare time.
+MariaDB and Vertica keep ODBC parameter arrays, which are faster there. Firebird has no
+multi-row `VALUES` in its dialect and takes a `UNION ALL` of typed one-row `SELECT`s
+instead (5,974 → 7,924 rows/s).
 
 ### Rust
 
@@ -664,7 +669,8 @@ server with no multi-row `VALUES` at all is found the same way — by a two-row
 | Oracle | `VALUES (…),(…)` is `ORA-00933`, so the probe re-asks with `INSERT ALL INTO t VALUES (…) INTO t VALUES (…) SELECT 1 FROM dual` and uses that |
 | SQLite | 2000 parameters is over the limit of a 999-variable build; K halves until it prepares |
 | ClickHouse | clickhouse-odbc prepares 500 row-groups and then refuses to execute them; K halves to 125 |
-| Firebird (OdbcFb) | no multi-row `VALUES` and no parameters inside a `UNION ALL`, so the probe fails and ingest stays on one `INSERT` per row |
+| Firebird (OdbcFb) | no multi-row `VALUES` and no `INSERT ALL`; the probe re-asks a third time with `INSERT INTO t (cols) SELECT CAST(? AS <type>), … FROM RDB$DATABASE UNION ALL SELECT …` — a bare `?` in a select list has no type Firebird can infer, and the `CAST` names the type ingest would have *created* for that column, so it cannot narrow anything the plain form would not |
+| Cloud Spanner (PGAdapter) | 950 parameters per statement is a hard limit, and one that cannot be probed: a bigger statement prepares fine and drops the connection at execute, so it is declared and K is capped at 237 four-column rows |
 
 A failure part way through is unchanged by any of this: the whole ingest is one
 transaction, so it commits completely or leaves nothing behind.

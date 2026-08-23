@@ -1727,16 +1727,24 @@ def check_big(cur, cfg, sql):
 
 def check_ingest(cur, cfg, ing_name):
     """Bulk ingest, read back, then ingest big_rows rows and read those back."""
+    # Every column carries a NULL, and every NULL has a value after it: a driver that
+    # retypes a parameter when it binds a NULL and never re-derives it corrupts the
+    # *following* rows, which a NULL in the last row would hide.  (Firebird's OdbcFb did
+    # exactly that for SQL_BIGINT -- see NullParamCType in src/odbc_bind.c.  That is what
+    # the fourth row is for: `a` and `d` used to have their NULL last.)  Row 0 has no
+    # NULL at all, which OceanBase needs -- a NULL bound into the first execute of a
+    # prepared INSERT fixes that parameter's type as MYSQL_TYPE_NULL there, and every
+    # later row is then refused with "Object type error" (4001).
     tbl = ingest_payload(cfg, {
-        "a": pa.array([1, 2, None], pa.int64()),
-        "b": pa.array(["x", None, "zz"]),
-        "c": pa.array([1.5, None, 2.5]),
-        "d": pa.array([0, 19782, None], pa.date32()),
-        "e": pa.array([True, None, False], pa.bool_()),
+        "a": pa.array([1, 2, None, 4], pa.int64()),
+        "b": pa.array(["x", None, "zz", "w"]),
+        "c": pa.array([1.5, None, 2.5, 3.5]),
+        "d": pa.array([0, 19782, None, 1], pa.date32()),
+        "e": pa.array([True, None, False, True], pa.bool_()),
     })
     n1 = cur.adbc_ingest(ing_name, tbl, mode="create")
     n2 = cur.adbc_ingest(ing_name, tbl, mode="append")
-    assert (n1, n2) == (3, 3) or not cfg.get("rowcount", True), (n1, n2)
+    assert (n1, n2) == (4, 4) or not cfg.get("rowcount", True), (n1, n2)
     refresh(cur, cfg, ing_name)
     cur.execute("SELECT %s, %s, %s, %s FROM %s WHERE %s = 2"
                 % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "c"), qi(cfg, "d"),

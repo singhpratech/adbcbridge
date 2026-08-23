@@ -171,6 +171,21 @@
 // itself the cost: at the default group size it is a few tens of executes per slice.
 #define ADBC_ODBC_INGEST_SLICE_ROWS 16384
 
+/// The spelling of "one INSERT carrying K rows" a server takes.  Probed in that order:
+/// the standard form first, the two quirk forms only after it has been refused.
+enum OdbcMultiRowForm {
+  /// `INSERT INTO t (cols) VALUES (?, ?), (?, ?)` -- the standard, and what nearly
+  /// every server takes.
+  ODBC_MULTIROW_VALUES = 0,
+  /// `INSERT ALL INTO t (cols) VALUES (?, ?) INTO t (cols) VALUES (?, ?) SELECT 1 FROM dual`
+  /// -- Oracle, which has no multi-row VALUES (OdbcReaderOptions::multirow_insert_all).
+  ODBC_MULTIROW_INSERT_ALL = 1,
+  /// `INSERT INTO t (cols) SELECT CAST(? AS <type>), ... FROM <one-row table>
+  /// UNION ALL SELECT ...` -- Firebird, which has neither of the above
+  /// (OdbcReaderOptions::multirow_union_from).
+  ODBC_MULTIROW_UNION = 2,
+};
+
 /// A refcounted ODBC statement handle shared between an AdbcStatement and
 /// the ArrowArrayStream it produced.
 struct OdbcHandleRef {
@@ -390,6 +405,13 @@ struct OdbcReaderOptions {
   // Only consulted after the standard multi-row form has actually been refused, so it
   // costs a server that takes the standard form nothing.
   bool multirow_insert_all;
+  // Driver quirk: the server has neither of the two forms above, but does take
+  // `INSERT INTO t (cols) SELECT <typed>, ... FROM <this> UNION ALL SELECT ...` --
+  // where <this> is the one-row table named here (Firebird's `RDB$DATABASE`).  The
+  // select list has to give every parameter a type, so the form is only offered when
+  // every bound column has an exact SQL type name (see MultiRowCastTypes).  Only
+  // consulted after the two forms above have been refused.
+  const char* multirow_union_from;
   // Driver quirk: keep ODBC parameter arrays ahead of multi-row INSERT batching for bulk
   // ingest.  Multi-row INSERT is the default because it was faster on every server
   // measured (see ExecuteRows), including most of the ones whose arrays work.  Two
@@ -430,6 +452,14 @@ struct OdbcReaderOptions {
   const char* ddl_string_type_name;
   // SQL_MAX_STATEMENT_LEN, in bytes; 0 when the driver will not say.
   int64_t max_statement_len;
+  // Server quirk: a hard ceiling on the number of parameters one statement may carry.
+  // 0 (the default) means "not known", and multi-row INSERT batching then finds the
+  // ceiling by halving K until SQLPrepare stops refusing -- which is how every ODBC
+  // driver is asked, there being no SQL_MAX_PARAMETERS to read.  Set this only for a
+  // server whose ceiling that search cannot find: Cloud Spanner accepts the oversized
+  // statement at prepare and, at execute, *drops the connection* (SQLSTATE 08S01), so
+  // by the time the halving would run there is nothing left to halve on.
+  int64_t max_statement_params;
   // Rowsets kept in flight on a background fetch thread (0 = off, the default).  See
   // ADBC_ODBC_OPTION_PREFETCH and the prefetch section of src/odbc_reader.c.
   int64_t prefetch;
@@ -521,8 +551,8 @@ struct OdbcConnection {
   // ingest target: whether the server takes the form at all is a property of the server,
   // not of the table, so the verdict is cached here rather than paid per statement.
   bool multirow_probed;      // the form probe has run
-  bool multirow_unsupported; // ... and the server takes neither form: never try again
-  bool multirow_insert_all;  // ... and the form it takes is Oracle's INSERT ALL
+  bool multirow_unsupported; // ... and the server takes no form at all: never try again
+  int multirow_form;         // ... and this is the form it took (enum OdbcMultiRowForm)
   // Largest parameter count an INSERT on this connection was seen to prepare, discovered
   // by halving; 0 until something has actually been refused.
   int64_t multirow_max_params;

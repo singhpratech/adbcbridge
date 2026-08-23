@@ -719,6 +719,21 @@ Notes on this driver/server pair, all visible in the matrix entry:
 * OdbcFb sizes `SQL_C_WCHAR` buffers in 4-byte `wchar_t` while unixODBC passes UTF-16.
   adbcbridge detects the driver (`SQL_DRIVER_NAME` = `OdbcFb`) and stays on the narrow
   UTF-8 path — see `wchar_as_utf8` in `src/odbc_internal.h`.
+* Bulk ingest batches through a third `INSERT` form here. Firebird's dialect has no
+  multi-row `VALUES` (`-104 Token unknown` at the second row-group's comma) and no
+  Oracle-style `INSERT ALL`, so the probe falls through to
+  `INSERT INTO t (cols) SELECT CAST(? AS <type>), … FROM RDB$DATABASE UNION ALL SELECT …`
+  (`multirow_union_from`). A bare `?` alone in a select list has no type Firebird can
+  infer, hence the `CAST`; the type it names is the one bulk ingest would have *created*
+  for that column, so it holds the bound value exactly and the target column's own limits
+  are still enforced by the `INSERT` — a string too long for it raises `string right
+  truncation` here, as a one-row `INSERT` does. The engine allows 256 relation contexts
+  per statement, so K settles at ~250 row-groups.
+* A NULL bound with `SQL_C_DEFAULT` on a `SQL_BIGINT` parameter used to poison it: the
+  ODBC default C type for `SQL_BIGINT` is `SQL_C_CHAR`, OdbcFb retypes the parameter and
+  never re-derives it, so every 64-bit integer after the first NULL in that column was
+  written as NULL without a diagnostic. NULLs of that type now go as `SQL_C_SBIGINT`
+  (`NullParamCType` in `src/odbc_bind.c`).
 
 ## TimescaleDB (PostgreSQL 16 + timescaledb)
 

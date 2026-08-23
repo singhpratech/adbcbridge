@@ -1227,6 +1227,21 @@ cleanup:
   return status;
 }
 
+// The C type to bind a NULL parameter with.  SQL_C_DEFAULT -- "whatever C type this SQL
+// type defaults to" -- is what every driver we have met encodes a NULL correctly from,
+// and it needs no guess about the parameter.  The one exception is SQL_BIGINT, whose
+// default C type in the ODBC specification is not the matching SQL_C_SBIGINT but
+// SQL_C_CHAR: Firebird's OdbcFb takes that literally, retypes the parameter as character
+// and never re-derives it, so every later row's 64-bit integer on that parameter is
+// written as NULL -- silently, and only after the first NULL in the column.  Naming
+// SQL_C_SBIGINT is what a NULL of any other integer type already resolves to, so it
+// costs the drivers that were fine nothing.
+static SQLSMALLINT NullParamCType(SQLSMALLINT sql_type, const struct OdbcReaderOptions* opts) {
+  // bigint_param_as_string means the driver has no SQL_C_SBIGINT at all (Oracle).
+  if (sql_type == SQL_BIGINT && !opts->bigint_param_as_string) return SQL_C_SBIGINT;
+  return SQL_C_DEFAULT;
+}
+
 // Bind row `row` of `view` as the statement's parameters and execute once.
 // *out_result_cols receives the number of result columns the execution produced.
 static AdbcStatusCode BindAndExecuteRow(SQLHSTMT hstmt, bool prepared, const char* query,
@@ -1240,8 +1255,9 @@ static AdbcStatusCode BindAndExecuteRow(SQLHSTMT hstmt, bool prepared, const cha
     RAISE_ADBC(SlotFromArrow(p, &svs[i], view->children[i], row, opts, error));
     if (p->indicator == SQL_NULL_DATA) {
       // Bind NULLs with the driver's own idea of the parameter type when it can
-      // tell us (SQLDescribeParam), a NULL value pointer and SQL_C_DEFAULT -- the
-      // combination every driver we have met encodes correctly (pyodbc does the same).
+      // tell us (SQLDescribeParam), a NULL value pointer and the C type
+      // NullParamCType picks -- the combination every driver we have met encodes
+      // correctly (pyodbc does the same).
       SQLSMALLINT dtype = 0, ddigits = 0, dnullable = 0;
       SQLULEN dsize = 0;  // zeroed: a 32-bit-SQLLEN driver writes only the low half
       if (!opts->no_describe_param &&
@@ -1253,7 +1269,7 @@ static AdbcStatusCode BindAndExecuteRow(SQLHSTMT hstmt, bool prepared, const cha
         p->column_size = dsize ? dsize : 1;
         p->decimal_digits = ddigits;
       }
-      p->c_type = SQL_C_DEFAULT;
+      p->c_type = NullParamCType(p->sql_type, opts);
       p->data = NULL;
       p->buffer_length = 0;
     }
@@ -1324,6 +1340,12 @@ static AdbcStatusCode OdbcAutoTxnEnd(struct OdbcAutoTxn* txn, bool commit,
   return status;
 }
 
+// The column type bulk ingest would create for one bound Arrow type, in the driver's own
+// type names (see the bulk ingest section below).
+static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions* opts,
+                                    const struct ArrowSchemaView* sv, bool q, char* out,
+                                    size_t out_size, struct AdbcError* error);
+
 // ---------------------------------------------------------------------------
 // Multi-row INSERT batching (bulk ingest only)
 //
@@ -1356,7 +1378,11 @@ struct MultiRowInsert {
   bool enabled;  // the ingest path and the option allow the rewrite
   bool ready;    // the setup below has run
   bool active;   // ... and produced a usable prepared statement
-  bool insert_all;
+  int form;      // enum OdbcMultiRowForm
+  // ODBC_MULTIROW_UNION only: the SQL type each parameter is CAST to, one per column.
+  // Owned here; NULL for the other forms.
+  char** cast_types;
+  const struct ArrowSchemaView* svs;  // the bound schema, borrowed from ExecuteRows
   int64_t ncols;
   int64_t rows;               // K: row-groups in the `full` statement
   struct MultiRowGroup full;  // K row-groups; used for every whole group of a batch
@@ -1372,27 +1398,48 @@ struct MultiRowInsert {
   signed char* null_described;  // 0 unknown, 1 answered, -1 refused
 };
 
-// `INSERT INTO t (a, b) VALUES (?, ?), (?, ?)`, or Oracle's
-// `INSERT ALL INTO t (a, b) VALUES (?, ?) INTO t (a, b) VALUES (?, ?) SELECT 1 FROM dual`.
+// One of
+//   `INSERT INTO t (a, b) VALUES (?, ?), (?, ?)`
+//   `INSERT ALL INTO t (a, b) VALUES (?, ?) INTO t (a, b) VALUES (?, ?) SELECT 1 FROM dual`
+//   `INSERT INTO t (a, b) SELECT CAST(? AS T0), CAST(? AS T1) FROM d UNION ALL SELECT ...`
 // Returns a malloc'd string, or NULL on allocation failure.
-static char* MultiRowSql(const char* into, int64_t ncols, int64_t rows, bool insert_all) {
+static char* MultiRowSql(const char* into, int64_t ncols, int64_t rows, int form,
+                         char* const* cast_types, const char* union_from) {
   struct InternalAdbcStringBuilder sb;
   if (InternalAdbcStringBuilderInit(&sb, 256) != 0) return NULL;
-  if (insert_all) {
+  if (form == ODBC_MULTIROW_INSERT_ALL) {
     InternalAdbcStringBuilderAppend(&sb, "INSERT ALL");
+  } else if (form == ODBC_MULTIROW_UNION) {
+    InternalAdbcStringBuilderAppend(&sb, "INSERT INTO %s ", into);
   } else {
     InternalAdbcStringBuilderAppend(&sb, "INSERT INTO %s VALUES ", into);
   }
   for (int64_t r = 0; r < rows; r++) {
-    if (insert_all) {
+    if (form == ODBC_MULTIROW_INSERT_ALL) {
       InternalAdbcStringBuilderAppend(&sb, " INTO %s VALUES (", into);
+    } else if (form == ODBC_MULTIROW_UNION) {
+      InternalAdbcStringBuilderAppend(&sb, r ? " UNION ALL SELECT " : "SELECT ");
     } else {
       InternalAdbcStringBuilderAppend(&sb, r ? ", (" : "(");
     }
-    for (int64_t c = 0; c < ncols; c++) InternalAdbcStringBuilderAppend(&sb, c ? ", ?" : "?");
-    InternalAdbcStringBuilderAppend(&sb, ")");
+    for (int64_t c = 0; c < ncols; c++) {
+      if (form == ODBC_MULTIROW_UNION) {
+        // A parameter alone in a select list has no type the server can infer, so each
+        // one is CAST to the exact SQL type of the value being sent.  The cast never
+        // narrows (MultiRowCastTypes builds it from the bound Arrow type), so the
+        // target column's own width and range are still what the INSERT enforces.
+        InternalAdbcStringBuilderAppend(&sb, "%sCAST(? AS %s)", c ? ", " : "", cast_types[c]);
+      } else {
+        InternalAdbcStringBuilderAppend(&sb, c ? ", ?" : "?");
+      }
+    }
+    if (form == ODBC_MULTIROW_UNION) {
+      InternalAdbcStringBuilderAppend(&sb, " FROM %s", union_from);
+    } else {
+      InternalAdbcStringBuilderAppend(&sb, ")");
+    }
   }
-  if (insert_all) InternalAdbcStringBuilderAppend(&sb, " SELECT 1 FROM dual");
+  if (form == ODBC_MULTIROW_INSERT_ALL) InternalAdbcStringBuilderAppend(&sb, " SELECT 1 FROM dual");
   char* out = sb.buffer ? strdup(sb.buffer) : NULL;
   InternalAdbcStringBuilderReset(&sb);
   return out;
@@ -1401,9 +1448,10 @@ static char* MultiRowSql(const char* into, int64_t ncols, int64_t rows, bool ins
 // Allocate a statement handle and SQLPrepare the `rows`-group INSERT on it.  NULL when
 // the driver or the server refuses the statement -- which is the probe: too many
 // parameters, or a server with no multi-row VALUES at all.
-static SQLHSTMT MultiRowPrepare(struct OdbcConnection* conn, const char* into, int64_t ncols,
-                                int64_t rows, bool insert_all) {
-  char* sql = MultiRowSql(into, ncols, rows, insert_all);
+static SQLHSTMT MultiRowPrepareForm(struct OdbcConnection* conn, const char* into, int64_t ncols,
+                                    int64_t rows, int form, char* const* cast_types) {
+  char* sql =
+      MultiRowSql(into, ncols, rows, form, cast_types, conn->reader_opts.multirow_union_from);
   if (!sql) return NULL;
   SQLHSTMT hstmt = NULL;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt))) {
@@ -1418,9 +1466,74 @@ static SQLHSTMT MultiRowPrepare(struct OdbcConnection* conn, const char* into, i
   return hstmt;
 }
 
-static void MultiRowInit(struct MultiRowInsert* mr, struct OdbcStatement* stmt, int64_t ncols) {
+// The `rows`-group INSERT in the form and cast types this statement settled on.
+static SQLHSTMT MultiRowPrepare(struct MultiRowInsert* mr, int64_t rows) {
+  return MultiRowPrepareForm(mr->stmt->conn, mr->stmt->ingest_into, mr->ncols, rows, mr->form,
+                             mr->cast_types);
+}
+
+static void MultiRowFreeCastTypes(char** types, int64_t ncols) {
+  if (!types) return;
+  for (int64_t i = 0; i < ncols; i++) free(types[i]);
+  free(types);
+}
+
+// The SQL type each parameter of the UNION form is CAST to: the very type bulk ingest
+// would give that column if it were creating the table.  By construction it holds every
+// value of the bound Arrow type exactly, so the cast can neither round, truncate nor
+// overflow -- what the *target* column will and will not accept is then decided by the
+// INSERT's own assignment, exactly as it is for the VALUES form.  (On Firebird that
+// means a string too long for the column raises `string right truncation` here, just as
+// a one-row INSERT of it would.)
+//
+// Returns NULL -- and the form is then not on offer for this schema -- when any column
+// is of a type whose ingest spelling would not hold its own values exactly.
+static char** MultiRowCastTypes(struct OdbcStatement* stmt, const struct ArrowSchemaView* svs,
+                                int64_t ncols) {
+  if (!svs) return NULL;
+  struct OdbcConnection* conn = stmt->conn;
+  char** out = calloc((size_t)ncols, sizeof(*out));
+  if (!out) return NULL;
+  for (int64_t i = 0; i < ncols; i++) {
+    switch (svs[i].type) {
+      case NANOARROW_TYPE_BOOL:
+      case NANOARROW_TYPE_INT8: case NANOARROW_TYPE_INT16:
+      case NANOARROW_TYPE_INT32: case NANOARROW_TYPE_INT64:
+      case NANOARROW_TYPE_UINT8: case NANOARROW_TYPE_UINT16: case NANOARROW_TYPE_UINT32:
+      case NANOARROW_TYPE_HALF_FLOAT: case NANOARROW_TYPE_FLOAT: case NANOARROW_TYPE_DOUBLE:
+      case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING:
+      case NANOARROW_TYPE_STRING_VIEW:
+      case NANOARROW_TYPE_BINARY: case NANOARROW_TYPE_LARGE_BINARY:
+      case NANOARROW_TYPE_FIXED_SIZE_BINARY: case NANOARROW_TYPE_BINARY_VIEW:
+      case NANOARROW_TYPE_DATE32:
+      case NANOARROW_TYPE_TIME32: case NANOARROW_TYPE_TIME64:
+      case NANOARROW_TYPE_TIMESTAMP:
+      case NANOARROW_TYPE_DECIMAL128: case NANOARROW_TYPE_DECIMAL256:
+        break;
+      // NANOARROW_TYPE_UINT64 has no exact ingest type (its spelling is BIGINT, which is
+      // signed), NANOARROW_TYPE_NA has no value type to cast to at all, and a dictionary
+      // is bound decoded, so the cast would have to name the value type rather than the
+      // one the schema carries.  None of them get the form.
+      default:
+        MultiRowFreeCastTypes(out, ncols);
+        return NULL;
+    }
+    char tname[300];
+    if (ColumnTypeSql(conn->hdbc, &conn->reader_opts, &svs[i], stmt->reader_opts.sqllen_32bit,
+                      tname, sizeof(tname), NULL) != ADBC_STATUS_OK ||
+        !(out[i] = strdup(tname))) {
+      MultiRowFreeCastTypes(out, ncols);
+      return NULL;
+    }
+  }
+  return out;
+}
+
+static void MultiRowInit(struct MultiRowInsert* mr, struct OdbcStatement* stmt,
+                         const struct ArrowSchemaView* svs, int64_t ncols) {
   memset(mr, 0, sizeof(*mr));
   mr->stmt = stmt;
+  mr->svs = svs;
   mr->ncols = ncols;
   // Only bulk ingest, only with something to batch, and only when the option allows it.
   mr->enabled = stmt->ingest_into != NULL && ncols > 0 && stmt->rows_per_insert != 1 &&
@@ -1444,6 +1557,8 @@ static void MultiRowReset(struct MultiRowInsert* mr) {
   mr->null_size = NULL;
   mr->null_digits = NULL;
   mr->null_described = NULL;
+  MultiRowFreeCastTypes(mr->cast_types, mr->ncols);
+  mr->cast_types = NULL;
   mr->active = false;
 }
 
@@ -1459,26 +1574,50 @@ static void MultiRowSetup(struct MultiRowInsert* mr) {
   const int64_t ncols = mr->ncols;
   if (conn->multirow_unsupported) return;
 
+  // The UNION form has to name a SQL type for every parameter, and only this statement's
+  // bound schema can say what they are; a schema that has no exact type for one of its
+  // columns simply does not get the form (see MultiRowCastTypes).
+  const bool union_offered = opts->multirow_union_from && *opts->multirow_union_from;
+  char** cast_types = union_offered ? MultiRowCastTypes(stmt, mr->svs, ncols) : NULL;
+
   // Does this server take a multi-row INSERT at all?  Two row-groups is the cheapest
   // question that answers it, and it separates "the form is not supported" from "that
   // many parameters is too many", which the search below handles instead.
   if (!conn->multirow_probed) {
-    bool insert_all = false;
-    SQLHSTMT probe = MultiRowPrepare(conn, into, ncols, 2, false);
+    int form = ODBC_MULTIROW_VALUES;
+    SQLHSTMT probe = MultiRowPrepareForm(conn, into, ncols, 2, form, NULL);
     if (!probe && opts->multirow_insert_all) {
       // Oracle has no multi-row VALUES; INSERT ALL is its spelling.
-      probe = MultiRowPrepare(conn, into, ncols, 2, true);
-      insert_all = probe != NULL;
+      form = ODBC_MULTIROW_INSERT_ALL;
+      probe = MultiRowPrepareForm(conn, into, ncols, 2, form, NULL);
     }
-    conn->multirow_probed = true;
+    if (!probe && cast_types) {
+      // Firebird has neither; a UNION ALL of one-row SELECTs is what it takes.
+      form = ODBC_MULTIROW_UNION;
+      probe = MultiRowPrepareForm(conn, into, ncols, 2, form, cast_types);
+    }
     if (!probe) {
-      conn->multirow_unsupported = true;
+      // Remember the refusal on the connection only when every form this driver has was
+      // actually tried.  A schema with no cast types leaves the UNION form unasked, and
+      // the next statement's schema may well have them.
+      if (!union_offered || cast_types) {
+        conn->multirow_probed = true;
+        conn->multirow_unsupported = true;
+      }
+      MultiRowFreeCastTypes(cast_types, ncols);
       return;
     }
+    conn->multirow_probed = true;
     SQLFreeHandle(SQL_HANDLE_STMT, probe);
-    conn->multirow_insert_all = insert_all;
+    conn->multirow_form = form;
   }
-  mr->insert_all = conn->multirow_insert_all;
+  mr->form = conn->multirow_form;
+  if (mr->form == ODBC_MULTIROW_UNION) {
+    if (!cast_types) return;
+    mr->cast_types = cast_types;
+    cast_types = NULL;
+  }
+  MultiRowFreeCastTypes(cast_types, ncols);
 
   // A row count the caller asked for is taken at its word, subject only to what this
   // connection has actually been refused and to the hard budgets below; the default
@@ -1489,15 +1628,26 @@ static void MultiRowSetup(struct MultiRowInsert* mr) {
   if (conn->multirow_max_params > 0 && k > conn->multirow_max_params / ncols) {
     k = conn->multirow_max_params / ncols;
   }
+  // A ceiling the halving search below could not have found (see max_statement_params).
+  if (opts->max_statement_params > 0 && k > opts->max_statement_params / ncols) {
+    k = opts->max_statement_params / ncols;
+  }
   if (k > ADBC_ODBC_MULTIROW_MAX_ROWS) k = ADBC_ODBC_MULTIROW_MAX_ROWS;
-  // SQL text budget: `(?, ?, ?, ?), ` plus, for INSERT ALL, another `INTO <table> VALUES `.
+  // SQL text budget: `(?, ?, ?, ?), ` plus, for INSERT ALL, another `INTO <table> VALUES `,
+  // or for the UNION form ` UNION ALL SELECT CAST(? AS <type>), ... FROM <one-row table>`.
   {
     int64_t sql_max = (opts->max_statement_len > 0 &&
                        opts->max_statement_len < ADBC_ODBC_MULTIROW_MAX_SQL_BYTES)
                           ? opts->max_statement_len
                           : ADBC_ODBC_MULTIROW_MAX_SQL_BYTES;
     int64_t into_len = (int64_t)strlen(into);
-    int64_t per_group = ncols * 3 + 4 + (mr->insert_all ? into_len + 20 : 0);
+    int64_t per_group = ncols * 3 + 4;
+    if (mr->form == ODBC_MULTIROW_INSERT_ALL) {
+      per_group += into_len + 20;
+    } else if (mr->form == ODBC_MULTIROW_UNION) {
+      per_group = (int64_t)strlen(opts->multirow_union_from) + 24;
+      for (int64_t c = 0; c < ncols; c++) per_group += (int64_t)strlen(mr->cast_types[c]) + 14;
+    }
     int64_t budget = (sql_max - into_len - 64) / per_group;
     if (budget < k) k = budget;
   }
@@ -1514,7 +1664,7 @@ static void MultiRowSetup(struct MultiRowInsert* mr) {
   bool narrowed = false;
   SQLHSTMT hstmt = NULL;
   while (k >= 2) {
-    hstmt = MultiRowPrepare(conn, into, ncols, k, mr->insert_all);
+    hstmt = MultiRowPrepare(mr, k);
     if (hstmt) break;
     k /= 2;
     narrowed = true;
@@ -1558,8 +1708,7 @@ static SQLHSTMT MultiRowGroupFor(struct MultiRowInsert* mr, int64_t n) {
     mr->tail.hstmt = NULL;
     mr->tail.rows = 0;
   }
-  SQLHSTMT hstmt =
-      MultiRowPrepare(mr->stmt->conn, mr->stmt->ingest_into, mr->ncols, n, mr->insert_all);
+  SQLHSTMT hstmt = MultiRowPrepare(mr, n);
   if (!hstmt) return NULL;
   mr->tail.hstmt = hstmt;
   mr->tail.rows = n;
@@ -1574,7 +1723,7 @@ static bool MultiRowNarrow(struct MultiRowInsert* mr) {
   int64_t k = mr->rows / 2;
   SQLHSTMT hstmt = NULL;
   while (k >= 2) {
-    hstmt = MultiRowPrepare(conn, mr->stmt->ingest_into, mr->ncols, k, mr->insert_all);
+    hstmt = MultiRowPrepare(mr, k);
     if (hstmt) break;
     k /= 2;
   }
@@ -1616,7 +1765,7 @@ static void MultiRowNullType(struct MultiRowInsert* mr, SQLHSTMT hstmt, int64_t 
     p->column_size = mr->null_size[col];
     p->decimal_digits = mr->null_digits[col];
   }
-  p->c_type = SQL_C_DEFAULT;
+  p->c_type = NullParamCType(p->sql_type, opts);
   p->data = NULL;
   p->buffer_length = 0;
 }
@@ -1735,7 +1884,7 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
   // drivers whose parameter arrays are unusable, and is faster than arrays on the ones
   // where they work.
   struct MultiRowInsert mr;
-  MultiRowInit(&mr, stmt, ncols);
+  MultiRowInit(&mr, stmt, svs, ncols);
   // Ahead of parameter arrays, not behind them: on every server measured, one INSERT
   // carrying K row-groups beats the same rows submitted as an array (PostgreSQL 221k
   // rows/s against 97k, SQL Server 157k against 85k, Oracle 40k against 1.8k, MariaDB
@@ -2877,7 +3026,7 @@ static AdbcStatusCode IngestParallel(struct OdbcStatement* stmt, int64_t nconn,
     // is true of this one too; a worker still probes for its own K.
     w->conn.multirow_probed = conn->multirow_probed;
     w->conn.multirow_unsupported = conn->multirow_unsupported;
-    w->conn.multirow_insert_all = conn->multirow_insert_all;
+    w->conn.multirow_form = conn->multirow_form;
     w->conn.multirow_max_params = conn->multirow_max_params;
 
     w->stmt.conn = &w->conn;

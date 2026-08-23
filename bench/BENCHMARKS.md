@@ -864,7 +864,7 @@ whether the server has the form at all. Three answers:
 | Oracle | `VALUES (…),(…)` is `ORA-00933`; the probe re-asks with `INSERT ALL INTO t VALUES (…) INTO t VALUES (…) SELECT 1 FROM dual` (a keyed quirk on `sqora`, consulted only after the standard form has actually been refused) and uses that |
 | SQLite | 2000 parameters is over a 999-variable build's limit; K halves until it prepares |
 | ClickHouse | clickhouse-odbc prepares 500 row-groups and refuses to execute them; K halves to 125 |
-| Firebird 5 (OdbcFb) | no multi-row `VALUES`, and a `UNION ALL` of `SELECT ? … FROM RDB$DATABASE` will not prepare either (the placeholders need an explicit `CAST`, which would change truncation semantics on append). The probe fails, the connection remembers, and ingest carries on one row at a time |
+| Firebird 5 (OdbcFb) | no multi-row `VALUES` (`-104 Token unknown` at the second row-group's comma) and no `INSERT ALL`; the probe re-asks a third time with `INSERT INTO t (cols) SELECT CAST(? AS <type>), … FROM RDB$DATABASE UNION ALL SELECT …` (a keyed quirk, `multirow_union_from`, again consulted only after the standard form has been refused) and uses that. Firebird's limit of 256 relation contexts caps it at ~250 row-groups, which the same halving search finds |
 
 The whole ingest is still one transaction, so a row the server refuses part way through
 rolls the lot back and leaves no half table.
@@ -885,7 +885,7 @@ interleaved so that host load hits both equally. Rows per second:
 | MonetDB 11.55 | 12,190 | **138,902** | 11,010 | **206,382** |
 | Oracle 23ai | 475 | **23,628** | 514 | **44,008** |
 | IBM Db2 12.1 | 670 | 1,010 | — | — |
-| Firebird 5 | 4,420 | 4,477 | — | — |
+| Firebird 5 | 5,974 | 7,924 | — | — |
 | ClickHouse 26 (300 rows) | 16 | **911** | — | — |
 | CockroachDB 26 | 1,205 | 14,259 | — | — |
 
@@ -893,14 +893,133 @@ The biggest wins are exactly the drivers the change was for: DuckDB 14x, MonetDB
 ClickHouse 57x, MySQL 10x at 50,000 rows, Oracle 50–86x (Oracle's parameter arrays are
 accepted and then abandoned part way through a batch, so it had been paying close to
 one execute per row). PostgreSQL and SQL Server gain 2–4x by preferring the multi-row
-form over their working parameter arrays; MariaDB keeps its arrays and is unchanged;
-Firebird has no multi-row form to use and is unchanged. Db2's clidriver is not
-round-trip bound on this workload, so it gains little.
+form over their working parameter arrays; MariaDB keeps its arrays and is unchanged.
+Db2's clidriver is not round-trip bound on this workload, so it gains little.
+Firebird's 1.3x is the smallest real win here — see *Firebird: the third form*
+below for why it is small and why it is nevertheless the honest number.
 
 At 10,000 rows the fixed cost of the `CREATE TABLE` and the first prepare is a visible
 share of the total, which is why SQL Server and MySQL look flatter there than at 50,000.
 These were taken while the same host was serving other containers; treat them as
 ratios, not as three significant figures.
+
+### Firebird: the third form
+
+Firebird was the one entry the batching could not reach. Its dialect has no multi-row
+`VALUES` — the second row-group's comma is `-104 Token unknown` — and no Oracle-style
+`INSERT ALL`. What it does have is a `UNION ALL` of one-row `SELECT`s over
+`RDB$DATABASE`, the system table with exactly one row:
+
+```sql
+INSERT INTO t ("a", "b")
+SELECT CAST(? AS BIGINT), CAST(? AS BLOB SUB_TYPE TEXT) FROM RDB$DATABASE
+UNION ALL SELECT CAST(? AS BIGINT), CAST(? AS BLOB SUB_TYPE TEXT) FROM RDB$DATABASE
+```
+
+The `CAST`s are not decoration: a bare `?` alone in a select list has no type Firebird
+can infer and the statement will not prepare. And that is what had stopped this before —
+a `CAST` to the *target column's* type would silently truncate a string too long for it,
+where a plain `INSERT` of the same value raises. A faster ingest that quietly shortens a
+value is not a faster ingest.
+
+The way out is to cast to the type of the **value being sent**, not of the column
+receiving it. Bulk ingest already computes exactly that type for every Arrow type, in the
+driver's own type names, because it is the type it would put in a `CREATE TABLE`
+(`ColumnTypeSql`): `int64` → `BIGINT`, `string` → `BLOB SUB_TYPE TEXT` (a blob, so no
+length at all), `binary` → `BLOB SUB_TYPE BINARY`, `decimal128(p,s)` → `NUMERIC(p,s)`,
+`date32` → `DATE`, `bool` → `BOOLEAN`. A cast to that type cannot round, truncate or
+overflow, because the type was chosen to hold that Arrow type exactly. Whatever the
+target column will or will not accept is then decided by the `INSERT`'s own assignment,
+which is where it belongs — a 40-character string into `VARCHAR(10)` comes back as
+
+```
+-802 arithmetic exception, numeric overflow, or string truncation
+-string right truncation
+-expected length 10, actual 40
+```
+
+exactly as a one-row `INSERT` of it does. (Better than the row-at-a-time path, in fact,
+which on this driver truncates that value to ten characters without a word.) A column
+whose Arrow type has no such exact spelling — `uint64`, whose ingest type `BIGINT` is
+signed, or a null-typed or dictionary column — does not get the form at all; the
+statement falls back to what it did before rather than guessing.
+
+Firebird's engine allows 256 relation contexts in one statement, so the union caps out
+at ~250 row-groups; the existing halving search finds that from the 500 the parameter
+budget asks for. The win is real but modest — 5,974 → 7,924 rows/s, 1.3x — because
+OdbcFb over a local socket was never round-trip bound the way clickhouse-odbc is, and
+Firebird pays real planning cost for a 250-branch union.
+
+**A NULL bug found on the way.** Verifying the round trip turned up something worse than
+slow ingest: on Firebird, *every 64-bit integer after the first NULL in a column was
+written as NULL*, silently, on the row-at-a-time path that had been the only path. A NULL
+parameter is bound with `SQL_C_DEFAULT`, and `SQL_BIGINT` is the one SQL type whose
+default C type in the ODBC specification is not the matching `SQL_C_SBIGINT` but
+`SQL_C_CHAR`. OdbcFb takes that literally, retypes the parameter as character, and never
+re-derives it on the next `SQLBindParameter`:
+
+```
+ingested [0, 1000000007, 2000000014, 3000000021, 4000000028, None, 6000000042, …]
+read back [0, 1000000007, 2000000014, 3000000021, 4000000028, None, None, None, …]
+```
+
+NULLs of `SQL_BIGINT` are now bound `SQL_C_SBIGINT` (`NullParamCType`), which is what a
+NULL of every other integer type already resolved to. `tests/compat/test_matrix.py`'s
+ingest payload now puts a value after every NULL rather than a NULL in the last row,
+which is what would have caught this.
+
+### The entries added after the batching landed
+
+A dozen databases joined the matrix from branches that predated multi-row batching, so
+their recorded ingest rates were the one-`INSERT`-per-row numbers. Re-measured on current
+main, `--rows 10000 --fetch-rows 100000` (Spanner at `--rows 300`, the size that entry is
+benchmarked at), *before* = `adbc.odbc.rows_per_insert=1`, *after* = the default —
+Firebird included, since its form is new here:
+
+| Database | before | after | multi-row |
+|---|---:|---:|---|
+| StarRocks 4.1.4 | 10 | **4,783** | fires, 478x |
+| Apache Doris 2.1.0 | 7 | **2,184** | fires, 312x |
+| YDB 23.4 | 55 | **1,759** | fires, 32x |
+| Google Spanner (300 rows) | 215 | **7,286** | fires **after a fix**, 34x |
+| CrateDB 6.4 | 820 | **49,986** | fires, 61x |
+| Apache Cloudberry 2.1.0 | 813 | 9,690 | fires, 12x |
+| RisingWave 3.0 | 1,711 | 31,910 | fires, 19x |
+| Materialize 26.38 | 3,006 | 23,647 | fires, 8x |
+| MatrixOne 4.2 | 4,422 | 97,492 | fires, 22x |
+| GreptimeDB 1.1.4 | 5,171 | 180,760 | fires, 35x |
+| openGauss 6.0 | 10,174 | 220,465 | fires, 22x |
+| OceanBase CE 4.4.2 | 12,199 | 104,853 | fires, 9x |
+| Firebird 5 | 5,974 | 7,924 | fires **after a fix**, 1.3x |
+
+Two of them needed work, and two are worth explaining.
+
+**Spanner: a ceiling that cannot be probed.** The form fired, and then the ingest died
+with `08S01 SQLExecute unable due to the connection lost`. Cloud Spanner allows 950
+parameters in one statement; PGAdapter prepares a statement carrying more without a word
+of complaint and only closes the connection at execute. That defeats the halving search
+outright — by the time it would halve K there is no connection left to halve on, and the
+fallback to the row-at-a-time path fails too. Measured exactly: 948 parameters go
+through, 952 drop the connection. It is the one ceiling that has to be declared rather
+than found, so it is declared (`max_statement_params = 950`, on the same PGAdapter-only key
+as Spanner's other two quirks), which leaves 237 four-column rows per `INSERT`.
+
+**StarRocks and Doris really are that slow per statement.** Both are MPP warehouses whose
+supported bulk path is Stream Load over HTTP; a SQL `INSERT` is a load transaction on the
+backend whatever it carries, so one row per `INSERT` costs ~100 ms *per row* (StarRocks:
+exactly 10 rows/s; Doris: 7). Multi-row batching does not make an `INSERT` cheap, it makes
+there be 20 of them instead of 10,000 — which is worth 478x and 312x respectively, and is
+as far as the ODBC path goes. Past K = 500 both flatten (Doris: 2,250 rows/s at both 500
+and 1,000 row-groups), so the remaining cost is the server's per-row work, not round
+trips. Anyone loading these at volume should use Stream Load; adbcbridge cannot, and this
+is the ceiling of what it can do through a MySQL wire.
+
+**YDB is capped by its own SQL text.** YDB's PostgreSQL wire cannot bind a NULL — a Bind
+message with length -1 is read as a zero-length value — so that entry runs psqlodbc with
+`UseServerSidePrepare=0`, which inlines every value into the statement text. A 500-row
+group is a ~50 KB statement for YDB to parse and plan on every execute, and the rate
+plateaus at ~1,900 rows/s (K=100 gives 1,511, K=500 gives 1,896). Still 32x the 55 rows/s
+one `INSERT` per row manages.
 
 ## Beating the native driver: partitioned reads
 
