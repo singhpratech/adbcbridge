@@ -24,18 +24,21 @@
 // ---------------------------------------------------------------------------
 // Small helpers
 
-static char* GetStrCol(SQLHSTMT hstmt, SQLUSMALLINT col) {
+static char* GetStrCol(const struct OdbcConnection* conn, SQLHSTMT hstmt, SQLUSMALLINT col) {
   char buf[2048];
   SQLLEN ind = 0;
-  SQLRETURN ret = SQLGetData(hstmt, col, SQL_C_CHAR, buf, sizeof(buf), &ind);
+  SQLRETURN ret = OdbcGetData(hstmt, col, SQL_C_CHAR, buf, sizeof(buf), &ind,
+                              conn->reader_opts.sqllen_32bit);
   if (!SQL_SUCCEEDED(ret) || ind == SQL_NULL_DATA) return NULL;
   return strdup(buf);
 }
 
-static bool GetIntCol(SQLHSTMT hstmt, SQLUSMALLINT col, int64_t* out) {
+static bool GetIntCol(const struct OdbcConnection* conn, SQLHSTMT hstmt, SQLUSMALLINT col,
+                      int64_t* out) {
   SQLBIGINT v = 0;
   SQLLEN ind = 0;
-  SQLRETURN ret = SQLGetData(hstmt, col, SQL_C_SBIGINT, &v, sizeof(v), &ind);
+  SQLRETURN ret = OdbcGetData(hstmt, col, SQL_C_SBIGINT, &v, sizeof(v), &ind,
+                              conn->reader_opts.sqllen_32bit);
   if (!SQL_SUCCEEDED(ret) || ind == SQL_NULL_DATA) return false;
   *out = (int64_t)v;
   return true;
@@ -92,36 +95,36 @@ static AdbcStatusCode AppendColumns(struct OdbcConnection* conn, struct ArrowArr
     return s;
   }
   while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-    char* name = GetStrCol(hstmt, 4);
+    char* name = GetStrCol(conn, hstmt, 4);
     int64_t v;
     CHECK_NA(INTERNAL, AppendStrOrNull(c->children[0], name ? name : ""), error);
     free(name);
     // ordinal_position
-    if (GetIntCol(hstmt, 17, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[1], v), error);
+    if (GetIntCol(conn, hstmt, 17, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[1], v), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[1], 1), error);
-    char* s = GetStrCol(hstmt, 12);  // remarks
+    char* s = GetStrCol(conn, hstmt, 12);  // remarks
     CHECK_NA(INTERNAL, AppendStrOrNull(c->children[2], s), error); free(s);
-    if (GetIntCol(hstmt, 5, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[3], v), error);
+    if (GetIntCol(conn, hstmt, 5, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[3], v), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[3], 1), error);
-    s = GetStrCol(hstmt, 6);  // type name
+    s = GetStrCol(conn, hstmt, 6);  // type name
     CHECK_NA(INTERNAL, AppendStrOrNull(c->children[4], s), error); free(s);
-    if (GetIntCol(hstmt, 7, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[5], v), error);
+    if (GetIntCol(conn, hstmt, 7, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[5], v), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[5], 1), error);
-    if (GetIntCol(hstmt, 9, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[6], v), error);
+    if (GetIntCol(conn, hstmt, 9, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[6], v), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[6], 1), error);
-    if (GetIntCol(hstmt, 10, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[7], v), error);
+    if (GetIntCol(conn, hstmt, 10, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[7], v), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[7], 1), error);
-    if (GetIntCol(hstmt, 11, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[8], v), error);
+    if (GetIntCol(conn, hstmt, 11, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[8], v), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[8], 1), error);
-    s = GetStrCol(hstmt, 13);  // column_def
+    s = GetStrCol(conn, hstmt, 13);  // column_def
     CHECK_NA(INTERNAL, AppendStrOrNull(c->children[9], s), error); free(s);
-    if (GetIntCol(hstmt, 14, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[10], v), error);
+    if (GetIntCol(conn, hstmt, 14, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[10], v), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[10], 1), error);
-    if (GetIntCol(hstmt, 15, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[11], v), error);
+    if (GetIntCol(conn, hstmt, 15, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[11], v), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[11], 1), error);
-    if (GetIntCol(hstmt, 16, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[12], v), error);
+    if (GetIntCol(conn, hstmt, 16, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[12], v), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[12], 1), error);
-    s = GetStrCol(hstmt, 18);  // is_nullable
+    s = GetStrCol(conn, hstmt, 18);  // is_nullable
     CHECK_NA(INTERNAL, AppendStrOrNull(c->children[13], s), error); free(s);
     // scope catalog/schema/table, autoincrement, generated: unknown via SQLColumns
     for (int k = 14; k <= 18; k++) CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[k], 1), error);
@@ -148,8 +151,8 @@ static AdbcStatusCode AppendConstraints(struct OdbcConnection* conn, struct Arro
     int n = 0;
     char* pk_name = NULL;
     while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-      char* col = GetStrCol(hstmt, 4);
-      if (!pk_name) pk_name = GetStrCol(hstmt, 6);
+      char* col = GetStrCol(conn, hstmt, 4);
+      if (!pk_name) pk_name = GetStrCol(conn, hstmt, 6);
       CHECK_NA(INTERNAL, AppendStrOrNull(names->children[0], col ? col : ""), error);
       free(col);
       n++;
@@ -173,9 +176,9 @@ static AdbcStatusCode AppendConstraints(struct OdbcConnection* conn, struct Arro
     bool open = false;
     int64_t seq_prev = 0;
     while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-      char* fk_name = GetStrCol(hstmt, 12);
+      char* fk_name = GetStrCol(conn, hstmt, 12);
       int64_t seq = 0;
-      GetIntCol(hstmt, 9, &seq);
+      GetIntCol(conn, hstmt, 9, &seq);
       bool new_group = !open || StrCmpNull(fk_name, cur_name) != 0 || seq <= seq_prev;
       if (new_group) {
         if (open) {
@@ -190,15 +193,15 @@ static AdbcStatusCode AppendConstraints(struct OdbcConnection* conn, struct Arro
         open = true;
       }
       seq_prev = seq;
-      char* fkcol = GetStrCol(hstmt, 8);
+      char* fkcol = GetStrCol(conn, hstmt, 8);
       CHECK_NA(INTERNAL, AppendStrOrNull(names->children[0], fkcol ? fkcol : ""), error);
       free(fkcol);
       struct ArrowArray* u = usage->children[0];
       char* s;
-      s = GetStrCol(hstmt, 1); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[0], s), error); free(s);
-      s = GetStrCol(hstmt, 2); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[1], s), error); free(s);
-      s = GetStrCol(hstmt, 3); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[2], s ? s : ""), error); free(s);
-      s = GetStrCol(hstmt, 4); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[3], s ? s : ""), error); free(s);
+      s = GetStrCol(conn, hstmt, 1); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[0], s), error); free(s);
+      s = GetStrCol(conn, hstmt, 2); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[1], s), error); free(s);
+      s = GetStrCol(conn, hstmt, 3); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[2], s ? s : ""), error); free(s);
+      s = GetStrCol(conn, hstmt, 4); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[3], s ? s : ""), error); free(s);
       CHECK_NA(INTERNAL, ArrowArrayFinishElement(u), error);
       free(fk_name);
     }
@@ -263,10 +266,10 @@ static AdbcStatusCode CollectTables(struct OdbcConnection* conn, int depth, cons
       cap = cap ? cap * 2 : 64;
       rows = realloc(rows, cap * sizeof(*rows));
     }
-    rows[n].catalog = GetStrCol(hstmt, 1);
-    rows[n].schema = GetStrCol(hstmt, 2);
-    rows[n].table = GetStrCol(hstmt, 3);
-    rows[n].type = GetStrCol(hstmt, 4);
+    rows[n].catalog = GetStrCol(conn, hstmt, 1);
+    rows[n].schema = GetStrCol(conn, hstmt, 2);
+    rows[n].table = GetStrCol(conn, hstmt, 3);
+    rows[n].type = GetStrCol(conn, hstmt, 4);
     n++;
   }
   SQLFreeHandle(SQL_HANDLE_STMT, hstmt);

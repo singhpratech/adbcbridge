@@ -13,6 +13,76 @@ ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so python tests/compat/test_matr
 The connection string of an entry can be overridden with `<NAME>_CONN`
 (e.g. `MYSQL_CONN=...`).
 
+## IBM Db2 12.1
+
+Server (Db2 Community Edition):
+
+```sh
+docker run -d --name adbcbridge-db2 --privileged -p 127.0.0.1:50000:50000 \
+  -e LICENSE=accept -e DB2INST1_PASSWORD=Adbc2026 -e DBNAME=adbc \
+  icr.io/db2_community/db2
+```
+
+Driver — IBM's freely downloadable ODBC/CLI driver package (no account needed for the
+"clidriver" tarball; unpack it anywhere):
+
+```sh
+mkdir -p /tmp/dbs/db2 && cd /tmp/dbs/db2
+# linuxx64_odbc_cli.tar.gz from IBM's Db2 client packages download page
+tar xzf linuxx64_odbc_cli.tar.gz
+# -> clidriver/lib/libdb2.so
+```
+
+Run the entry (`clidriver/lib` must be on `LD_LIBRARY_PATH`; the driver loads siblings
+such as `libdb2clixml4c.so` from there):
+
+```sh
+export DB2_ODBC_DRIVER=/tmp/dbs/db2/clidriver/lib/libdb2.so
+LD_LIBRARY_PATH=/tmp/dbs/db2/clidriver/lib:$LD_LIBRARY_PATH \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+python tests/compat/test_matrix.py db2
+# db2       PASS  (DB2/LINUXX8664 12.01.0500)
+```
+
+Entry notes: Db2 folds unquoted identifiers to upper case (`ident=str.upper`) and supports
+`BOOLEAN`, `VARBINARY(n)`, `TIMESTAMP(6)` and `DECIMAL(10,3)` directly, so no tolerance
+flags are needed.
+
+### Driver quirk: 32-bit `SQLLEN`
+
+The `clidriver` package's `libdb2.so` is built with **32-bit `SQLLEN`/`SQLULEN` even on
+64-bit Linux** (IBM's 64-bit-`SQLLEN` build is the separate `libdb2o.so`, shipped only in
+the full server / data-server-driver packages). unixODBC, pyodbc and this driver all use an
+8-byte `SQLLEN`, so every `SQLLEN`/`SQLULEN` the driver *writes* is half as wide as the
+caller's storage:
+
+- indicator/length arrays bound with `SQLBindCol` come back as `int32[]` with **stride 4**,
+  so NULLs go undetected and string lengths are garbage past the first row (the classic
+  symptom is row 2's string being row 1's text followed by NUL bytes, and NULL doubles
+  reading as `0.0` or a stale value);
+- scalar out-parameters — `SQLRowCount`, `SQLDescribeCol`'s column size, `SQLColAttribute`'s
+  numeric attribute, `SQLGetData`'s `StrLen_or_Ind`, `SQL_ATTR_ROWS_FETCHED_PTR`,
+  `SQL_ATTR_PARAMS_PROCESSED_PTR` — get only their low four bytes, so negative sentinels
+  (`SQL_NULL_DATA` = -1, `SQL_NO_TOTAL` = -4) surface as `4294967295` / `4294967292`.
+
+Reading a single column with `batch_size=1` mostly looks correct, which is why simple
+probes pass and the damage only shows up with several columns or several rows per fetch.
+
+adbcbridge detects this from `SQL_DRIVER_NAME` (Db2's CLI driver reports `libdb2.a`;
+`libdb2o.a` is excluded) and sets the `sqllen_32bit` reader option, which makes every
+driver-written `SQLLEN`/`SQLULEN` be read back through `OdbcReadLen()` / `OdbcReadULen()` /
+`OdbcIndicatorGet()` in `src/odbc_internal.h` — as a sign-extended `int32`, and as
+`int32[]` with stride 4 for indicator arrays. All such out-variables are zero-initialised
+before the call. The fast path is unchanged when the quirk is off.
+
+Force it either way with the `adbc.odbc.sqllen_32bit` option (`true`/`false`, settable on
+the database, connection or statement) — useful for any other ODBC driver built with a
+32-bit `SQLLEN`, or to confirm the quirk is what is fixing a result set:
+
+```python
+conn = dbapi.connect(driver=..., db_kwargs={"uri": ..., "adbc.odbc.sqllen_32bit": "false"})
+```
+
 ## MySQL 8
 
 Server (or use the `mysql` service in `docker-compose.yml`):

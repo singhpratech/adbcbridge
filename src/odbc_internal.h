@@ -19,6 +19,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <sql.h>
 #include <sqlext.h>
@@ -61,6 +62,9 @@
 /// Bind Arrow batches as ODBC parameter arrays (one execute per batch) when the
 /// driver supports it.  "true"/"false"; default true.
 #define ADBC_ODBC_OPTION_ARRAY_BINDING "adbc.odbc.array_binding"
+/// Force the 32-bit-SQLLEN driver quirk on or off ("true"/"false").  Unset means
+/// autodetect from SQL_DRIVER_NAME; see OdbcReaderOptions::sqllen_32bit.
+#define ADBC_ODBC_OPTION_SQLLEN_32BIT "adbc.odbc.sqllen_32bit"
 
 #define ADBC_ODBC_DEFAULT_BATCH_SIZE 1024
 #define ADBC_ODBC_DEFAULT_MAX_BIND_BYTES 32768
@@ -106,7 +110,68 @@ struct OdbcReaderOptions {
   bool null_param_as_varchar;
   // Driver quirk: DDL type wrapper for nullable columns, e.g. "Nullable(%s)" (ClickHouse).
   const char* nullable_type_format;
+  // Driver quirk: the ODBC driver was compiled with a 32-bit SQLLEN/SQLULEN while the
+  // driver manager and this driver use 64-bit ones.  IBM's freely downloadable Db2
+  // "clidriver" ships exactly such a libdb2.so on 64-bit Linux (the 64-bit-SQLLEN build
+  // is the separate libdb2o.so).  Every SQLLEN/SQLULEN the driver *writes* is then four
+  // bytes wide: indicator arrays are int32 with stride 4, and scalar out-parameters
+  // (SQLRowCount, SQLDescribeCol's column size, SQLColAttribute's numeric attribute,
+  // SQLGetData's StrLen_or_Ind, the rows-fetched / params-processed pointers) get only
+  // their low four bytes.  See OdbcReadLen()/OdbcReadULen()/OdbcIndicator*() below.
+  bool sqllen_32bit;
+  // True once a user option pinned sqllen_32bit; suppresses autodetection.
+  bool sqllen_32bit_forced;
 };
+
+// --- 32-bit-SQLLEN driver quirk accessors -----------------------------------
+// All of these are exact no-ops (a plain load/store) when the quirk is off, so the
+// normal path costs nothing beyond a predictable branch.
+
+/// Read a scalar SQLLEN out-parameter the driver wrote.  The driver writes four bytes
+/// at the variable's address regardless of endianness, so the low half is at offset 0.
+/// The caller must zero the variable before the ODBC call.
+static inline SQLLEN OdbcReadLen(const SQLLEN* p, bool sqllen_32bit) {
+  if (!sqllen_32bit) return *p;
+  int32_t v;
+  memcpy(&v, p, sizeof(v));
+  return (SQLLEN)v;  // sign-extends SQL_NULL_DATA (-1), SQL_NO_TOTAL (-4), ...
+}
+
+/// Read a scalar SQLULEN out-parameter the driver wrote (column size, rows fetched,
+/// parameter sets processed).  The caller must zero the variable before the ODBC call.
+static inline SQLULEN OdbcReadULen(const SQLULEN* p, bool sqllen_32bit) {
+  if (!sqllen_32bit) return *p;
+  uint32_t v;
+  memcpy(&v, p, sizeof(v));
+  return (SQLULEN)v;
+}
+
+/// Read element `row` of an indicator/length array the driver wrote through SQLBindCol.
+/// A 32-bit-SQLLEN driver fills it as int32[] with stride 4.
+static inline SQLLEN OdbcIndicatorGet(const SQLLEN* base, size_t row, bool sqllen_32bit) {
+  if (!sqllen_32bit) return base[row];
+  int32_t v;
+  memcpy((char*)&v, (const char*)base + row * sizeof(int32_t), sizeof(v));
+  return (SQLLEN)v;
+}
+
+/// Write element `row` of an indicator/length array the driver will read through
+/// SQLBindParameter with SQL_ATTR_PARAMSET_SIZE > 1 (same stride rule).
+static inline void OdbcIndicatorSet(SQLLEN* base, size_t row, SQLLEN value, bool sqllen_32bit) {
+  if (!sqllen_32bit) {
+    base[row] = value;
+    return;
+  }
+  int32_t v = (int32_t)value;
+  memcpy((char*)base + row * sizeof(int32_t), &v, sizeof(v));
+}
+
+/// SQLRowCount, honouring the quirk; -1 when the driver cannot answer.
+SQLLEN OdbcRowCount(SQLHSTMT hstmt, bool sqllen_32bit);
+
+/// SQLGetData with a quirk-aware StrLen_or_Ind out-parameter.
+SQLRETURN OdbcGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT c_type, SQLPOINTER buf,
+                      SQLLEN buf_len, SQLLEN* indicator, bool sqllen_32bit);
 
 struct OdbcDatabase;
 

@@ -25,3 +25,10 @@ services:
     image: cockroachdb/cockroach:latest
     command: start-single-node --insecure --cache=128MiB --max-sql-memory=128MiB
     ports: ["127.0.0.1:16257:26257", "127.0.0.1:18080:8080"]
+  # Db2 Community Edition needs a privileged container and a few minutes to
+  # initialise the "adbc" database on first start.
+  db2:
+    image: icr.io/db2_community/db2
+    privileged: true
+    environment: { LICENSE: accept, DB2INST1_PASSWORD: Adbc2026, DBNAME: adbc }
+    ports: ["127.0.0.1:50000:50000"]

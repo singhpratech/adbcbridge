@@ -53,6 +53,22 @@ static AdbcStatusCode SetString(char** dst, const char* value) {
   return ADBC_STATUS_OK;
 }
 
+// Parse a "true"/"false" option that pins a quirk otherwise chosen by autodetection.
+static AdbcStatusCode OdbcParseBoolOption(const char* key, const char* value, bool* out,
+                                          bool* forced, struct AdbcError* error) {
+  if (value && (strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0 || strcmp(value, "1") == 0)) {
+    *out = true;
+  } else if (value && (strcmp(value, ADBC_OPTION_VALUE_DISABLED) == 0 || strcmp(value, "0") == 0)) {
+    *out = false;
+  } else {
+    InternalAdbcSetError(error, "Invalid value \"%s\" for %s (expected true/false)",
+                         value ? value : "(null)", key);
+    return ADBC_STATUS_INVALID_ARGUMENT;
+  }
+  if (forced) *forced = true;
+  return ADBC_STATUS_OK;
+}
+
 static AdbcStatusCode OdbcDatabaseNew(struct AdbcDatabase* database, struct AdbcError* error) {
   struct OdbcDatabase* db = calloc(1, sizeof(struct OdbcDatabase));
   if (!db) {
@@ -101,6 +117,9 @@ static AdbcStatusCode OdbcDatabaseSetOption(struct AdbcDatabase* database, const
   } else if (strcmp(key, ADBC_ODBC_OPTION_DECIMAL_AS_STRING) == 0) {
     db->reader_opts.decimal_as_string = (strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0);
     return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
+    return OdbcParseBoolOption(key, value, &db->reader_opts.sqllen_32bit,
+                               &db->reader_opts.sqllen_32bit_forced, error);
   }
   InternalAdbcSetError(error, "Unknown database option %s", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
@@ -179,6 +198,7 @@ static AdbcStatusCode OdbcDatabaseGetOptionInt(struct AdbcDatabase* database, co
   struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) { *value = db->reader_opts.batch_size; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_MAX_BIND_BYTES) == 0) { *value = db->reader_opts.max_bind_bytes; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = db->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }
   InternalAdbcSetError(error, "Unknown database option %s", key);
   return ADBC_STATUS_NOT_FOUND;
 }
@@ -231,6 +251,9 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
     if (v <= 0) return ADBC_STATUS_INVALID_ARGUMENT;
     conn->reader_opts.batch_size = v;
     return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
+    return OdbcParseBoolOption(key, value, &conn->reader_opts.sqllen_32bit,
+                               &conn->reader_opts.sqllen_32bit_forced, error);
   } else if (strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0) {
     if (!conn->connected) return ADBC_STATUS_INVALID_STATE;
     ODBC_CHECK(SQLSetConnectAttr(conn->hdbc, SQL_ATTR_CURRENT_CATALOG, (SQLPOINTER)value, SQL_NTS),
@@ -264,6 +287,15 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;
+  }
+  if (!conn->reader_opts.sqllen_32bit_forced) {
+    // IBM Db2's freely downloadable CLI driver package ("linuxx64_odbc_cli.tar.gz")
+    // ships a libdb2.so built with 32-bit SQLLEN/SQLULEN even on 64-bit Linux; it
+    // reports SQL_DRIVER_NAME "libdb2.a".  The 64-bit-SQLLEN build is the separate
+    // libdb2o.so ("libdb2o.a"), which needs no quirk.
+    const char* n = (const char*)name;
+    conn->reader_opts.sqllen_32bit = strstr(n, "db2") != NULL && strstr(n, "libdb2o") == NULL &&
+                                     strstr(n, "db2o.") == NULL;
   }
 }
 
@@ -443,10 +475,12 @@ static AdbcStatusCode OdbcConnectionGetTableTypes(struct AdbcConnection* connect
   CHECK_NA(INTERNAL, ArrowArrayInitFromSchema(&array, &schema, NULL), error);
   CHECK_NA(INTERNAL, ArrowArrayStartAppending(&array), error);
   SQLCHAR buf[256];
-  SQLLEN ind;
+  SQLLEN ind = 0;
   int64_t n = 0;
   while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-    if (SQL_SUCCEEDED(SQLGetData(hstmt, 4, SQL_C_CHAR, buf, sizeof(buf), &ind)) && ind != SQL_NULL_DATA) {
+    if (SQL_SUCCEEDED(OdbcGetData(hstmt, 4, SQL_C_CHAR, buf, sizeof(buf), &ind,
+                                  conn->reader_opts.sqllen_32bit)) &&
+        ind != SQL_NULL_DATA) {
       CHECK_NA(INTERNAL, ArrowArrayAppendString(array.children[0], ArrowCharView((const char*)buf)), error);
       n++;
     }
@@ -515,6 +549,8 @@ static AdbcStatusCode OdbcConnectionGetOption(struct AdbcConnection* connection,
     v = ADBC_ODBC_DELEGATED_TO_ODBC;
   } else if (strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
     v = conn->autocommit ? ADBC_OPTION_VALUE_ENABLED : ADBC_OPTION_VALUE_DISABLED;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
+    v = conn->reader_opts.sqllen_32bit ? ADBC_OPTION_VALUE_ENABLED : ADBC_OPTION_VALUE_DISABLED;
   } else if (strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0 && conn->connected) {
     ODBC_CHECK(SQLGetConnectAttr(conn->hdbc, SQL_ATTR_CURRENT_CATALOG, buf, sizeof(buf), &outlen),
                SQL_HANDLE_DBC, conn->hdbc, "SQLGetConnectAttr(SQL_ATTR_CURRENT_CATALOG)", error);
@@ -596,6 +632,9 @@ static AdbcStatusCode OdbcStatementSetOption(struct AdbcStatement* statement, co
     if (v <= 0) return ADBC_STATUS_INVALID_ARGUMENT;
     stmt->reader_opts.batch_size = v;
     return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
+    return OdbcParseBoolOption(key, value, &stmt->reader_opts.sqllen_32bit,
+                               &stmt->reader_opts.sqllen_32bit_forced, error);
   } else if (strcmp(key, ADBC_INGEST_OPTION_TARGET_TABLE) == 0) {
     free(stmt->ingest_table); stmt->ingest_table = value ? strdup(value) : NULL;
     return ADBC_STATUS_OK;
@@ -742,9 +781,9 @@ static AdbcStatusCode OdbcStatementExecuteQuery(struct AdbcStatement* statement,
   SQLNumResultCols(hstmt, &ncols);
   if (ncols == 0) {
     // Not a result-producing statement.
-    SQLLEN count = -1;
-    SQLRowCount(hstmt, &count);
-    if (rows_affected) *rows_affected = (int64_t)count;
+    if (rows_affected) {
+      *rows_affected = (int64_t)OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
+    }
     if (out) {
       // Produce an empty stream with an empty schema.
       struct ArrowSchema schema;
@@ -755,9 +794,9 @@ static AdbcStatusCode OdbcStatementExecuteQuery(struct AdbcStatement* statement,
     return ADBC_STATUS_OK;
   }
   if (!out) {
-    SQLLEN count = -1;
-    SQLRowCount(hstmt, &count);
-    if (rows_affected) *rows_affected = (int64_t)count;
+    if (rows_affected) {
+      *rows_affected = (int64_t)OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
+    }
     SQLCloseCursor(hstmt);
     return ADBC_STATUS_OK;
   }
@@ -787,6 +826,7 @@ static AdbcStatusCode OdbcStatementGetOptionInt(struct AdbcStatement* statement,
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) { *value = stmt->reader_opts.batch_size; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) { *value = stmt->array_binding ? 1 : 0; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = stmt->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }
   InternalAdbcSetError(error, "Unknown statement option %s", key);
   return ADBC_STATUS_NOT_FOUND;
 }
