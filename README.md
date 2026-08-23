@@ -443,10 +443,12 @@ Console.WriteLine($"{insert.ExecuteUpdate().AffectedRows} rows inserted");
 ```
 
 See `tests/csharp/` for a runnable example.
+
 ## Use from R
 
 ```r
 install.packages(c("adbcdrivermanager", "nanoarrow"))
+```
 
 ```r
 library(adbcdrivermanager)
@@ -470,6 +472,7 @@ write_adbc(df, con, "my_copy")
 
 adbc_connection_release(con)
 adbc_database_release(db)
+```
 
 `read_adbc()` and `execute_adbc()` accept the database object directly if you
 do not need an explicit connection. Results are nanoarrow array streams, so a
@@ -477,6 +480,51 @@ large one can be pulled a batch at a time — `s <- read_adbc(con, "SELECT ...")
 then `s$get_next()` until it returns `NULL` — instead of materialised with
 `as.data.frame()`. See `tests/r/` for a runnable example and the docker command
 that runs it.
+
+## Use from Java
+
+```xml
+<!-- pom.xml -->
+<dependency>
+  <groupId>org.apache.arrow.adbc</groupId>
+  <artifactId>adbc-driver-jni</artifactId>   <!-- ADBC >= 0.21 -->
+  <version>0.24.0</version>
+</dependency>
+<dependency>
+  <groupId>org.apache.arrow</groupId>
+  <artifactId>arrow-memory-netty</artifactId> <!-- must match ADBC's Arrow -->
+  <version>19.0.0</version>
+  <scope>runtime</scope>
+</dependency>
+
+`adbc-driver-jni` bundles the native ADBC driver manager, so Java loads the
+`.so` the same way every other binding does:
+
+```java
+Map<String, Object> parameters = new HashMap<>();
+JniDriver.PARAM_DRIVER.set(parameters, "/path/to/libadbc_driver_odbc.so");
+AdbcDriver.PARAM_URI.set(
+    parameters, "Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so;Database=my.db;");
+
+try (BufferAllocator allocator = new RootAllocator();
+    AdbcDatabase database = new JniDriver(allocator).open(parameters);
+    AdbcConnection connection = database.connect();
+    AdbcStatement statement = connection.createStatement()) {
+  statement.setSqlQuery("SELECT * FROM my_table");
+  try (AdbcStatement.QueryResult result = statement.executeQuery()) {
+    ArrowReader reader = result.getReader();
+    while (reader.loadNextBatch()) {
+      VectorSchemaRoot root = reader.getVectorSchemaRoot();
+      System.out.println(root.getRowCount() + " rows");
+    }
+  }
+
+`PARAM_DRIVER` also accepts a bare library name or a driver-manifest name
+(`"odbc"`, see above). Parameters are bound as a `VectorSchemaRoot`, one column
+per `?` and one row per execution: `statement.prepare(); statement.bind(root);`
+then `executeQuery()` or `executeUpdate()`. Run the JVM with
+`--add-opens=java.base/java.nio=ALL-UNNAMED`, which Arrow's off-heap allocator
+needs on JDK 17+. See `tests/java/` for a runnable example.
 
 ## Test
 
@@ -520,13 +568,22 @@ docker one-liner, which needs no .NET SDK on the host):
 ```sh
 cd tests/csharp && SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so dotnet test
 ```
+
 And from R, in docker (see [`tests/r/README.md`](tests/r/README.md)):
 
+```sh
 docker build -t adbcbridge-r tests/r
 docker run --rm -v "$PWD:/repo:ro" -v /path/to/odbc/drivers:/odbc:ro \
   -e ADBC_ODBC_DRIVER=/repo/build/libadbc_driver_odbc.so \
   -e SQLITE_ODBC_DRIVER=/odbc/libsqlite3odbc.so \
   adbcbridge-r Rscript /repo/tests/r/smoke.R
+```
+
+And from Java, in a container (see `tests/java/README.md` for the full command):
+
+  -w /work/tests/java -e ADBC_ODBC_DRIVER=/work/build/libadbc_driver_odbc.so \
+  -e SQLITE_ODBC_DRIVER=/odbc/libsqlite3odbc.so maven:3-eclipse-temurin-21 \
+  bash -c 'apt-get update -qq && apt-get install -y -qq unixodbc && mvn -B test'
 
 ## Contributing
 

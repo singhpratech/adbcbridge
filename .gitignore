@@ -9,3 +9,4 @@ tests/validation-upstream/
 dist/
 private/
 *.egg-info/
+tests/java/target/
