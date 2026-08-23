@@ -44,8 +44,11 @@ reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
 | PostgreSQL 16 | psqlodbc 16 | PASS |
 | MariaDB 11 / MySQL | MariaDB Connector/ODBC 3.1 | PASS |
 | SQL Server 2022 | msodbcsql 18 | PASS (incl. `NVARCHAR(MAX)` via chunked `SQLGetData`) |
+| MySQL 8.4 | MySQL Connector/ODBC 9.4 (and MariaDB Connector/ODBC 3.1) | PASS |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
+Per-database driver setup and the exact commands are in
+[`tests/compat/README.md`](tests/compat/README.md).
 
 ## Build
 

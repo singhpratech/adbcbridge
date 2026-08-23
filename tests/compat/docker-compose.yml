@@ -13,3 +13,7 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment: { ACCEPT_EULA: "Y", MSSQL_SA_PASSWORD: "Adbc!Bridge2026" }
     ports: ["127.0.0.1:14331:1433"]
+  mysql:
+    image: mysql:8
+    environment: { MYSQL_ROOT_PASSWORD: adbc, MYSQL_DATABASE: adbc, MYSQL_USER: adbc, MYSQL_PASSWORD: adbc }
+    ports: ["127.0.0.1:13307:3306"]
