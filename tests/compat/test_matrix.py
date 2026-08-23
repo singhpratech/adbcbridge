@@ -17,6 +17,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 DRIVER = os.environ.get("ADBC_ODBC_DRIVER", str(HERE.parent.parent / "build" / "libadbc_driver_odbc.so"))
 TMP = tempfile.mkdtemp()
 
+SUFFIX = os.environ.get("ADBC_MATRIX_SUFFIX", "")  # set to isolate concurrent runs on a shared server
 DBS = {
     "sqlite": dict(
         env="SQLITE_ODBC_DRIVER", conn="Driver={drv};Database=" + os.path.join(TMP, "m.db") + ";",
@@ -26,7 +27,7 @@ DBS = {
         env="DUCKDB_ODBC_DRIVER", conn="Driver={drv};Database=:memory:;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)"),
     "postgres": dict(
-        env="PSQL_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15432;Database=adbc;Uid=adbc;Pwd=adbc;",
+        env="POSTGRES_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15432;Database=adbc;Uid=adbc;Pwd=adbc;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"),
     "mariadb": dict(
         env="MARIADB_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=13306;Database=adbc;User=adbc;Password=adbc;",
@@ -87,21 +88,22 @@ def run(name, cfg):
     conn = dbapi.connect(driver=DRIVER, db_kwargs={"uri": uri}, autocommit=True)
     info = conn.adbc_get_info()
     ident = cfg.get("ident", lambda x: x)  # how the server stores unquoted names
-    T, ING = ident("adbc_t"), ident("adbc_ing")
+    t_name, ing_name = "adbc_t" + SUFFIX, "adbc_ing" + SUFFIX
+    T, ING = ident(t_name), ident(ing_name)
     with conn.cursor() as cur:
         for sql in cfg.get("setup", []):
             cur.execute(sql)
-        for t in ("adbc_t", "adbc_ing", '"adbc_ing"'):  # ingest quotes names (exact case)
+        for t in (t_name, ing_name, '"%s"' % ing_name):  # ingest quotes names (exact case)
             try:
                 cur.execute("DROP TABLE " + t)
             except Exception:
                 pass
-        cur.execute(cfg["ddl"])
+        cur.execute(cfg["ddl"].replace("adbc_t", t_name))
         rows = [ROW1, ROW2] if cfg.get("null_params", True) else [ROW1]
-        cur.executemany("INSERT INTO adbc_t VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        cur.executemany("INSERT INTO %s VALUES (?, ?, ?, ?, ?, ?, ?, ?)" % t_name, rows)
         if not cfg.get("null_params", True):
-            cur.execute("INSERT INTO adbc_t VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)")
-        cur.execute("SELECT * FROM adbc_t ORDER BY i")
+            cur.execute("INSERT INTO %s VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)" % t_name)
+        cur.execute("SELECT * FROM %s ORDER BY i" % t_name)
         t = cur.fetch_arrow_table()
         r1, r2 = t.to_pylist()
         r1 = {k.lower(): v for k, v in r1.items()}; r2 = {k.lower(): v for k, v in r2.items()}
@@ -120,7 +122,7 @@ def run(name, cfg):
         assert r1["bo"] in (True, 1), r1["bo"]
         assert all(v is None for k, v in r2.items() if k != "i"), r2
         # parameterised query
-        cur.execute("SELECT s FROM adbc_t WHERE i = ?", (1,))
+        cur.execute("SELECT s FROM %s WHERE i = ?" % t_name, (1,))
         assert cur.fetchone()[0].startswith("héllo")
         # bulk ingest + read back
         tbl = pa.table({
@@ -130,18 +132,18 @@ def run(name, cfg):
             "d": pa.array([0, 19782, None], pa.date32()),
             "e": pa.array([True, None, False], pa.bool_()),
         })
-        n1 = cur.adbc_ingest("adbc_ing", tbl, mode="create")
-        n2 = cur.adbc_ingest("adbc_ing", tbl, mode="append")
+        n1 = cur.adbc_ingest(ing_name, tbl, mode="create")
+        n2 = cur.adbc_ingest(ing_name, tbl, mode="append")
         assert (n1, n2) == (3, 3) or not cfg.get("rowcount", True), (n1, n2)
-        cur.execute('SELECT "a", "b", "c", "d" FROM "adbc_ing" WHERE "a" = 2')
+        cur.execute('SELECT "a", "b", "c", "d" FROM "%s" WHERE "a" = 2' % ing_name)
         got = cur.fetch_arrow_table().to_pylist()
         assert len(got) == 2 and got[0]["b"] is None and got[0]["c"] is None and got[0]["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), got
         # bigger result to cross batch boundaries
         N = cfg.get("big_rows", 5000)
-        cur.adbc_ingest("adbc_ing", pa.table({"a": pa.array(range(N), pa.int64()), "b": pa.array(["r%d" % i for i in range(N)]),
+        cur.adbc_ingest(ing_name, pa.table({"a": pa.array(range(N), pa.int64()), "b": pa.array(["r%d" % i for i in range(N)]),
                                              "c": pa.array([float(i) for i in range(N)]), "d": pa.array([i for i in range(N)], pa.date32()),
                                              "e": pa.array([i % 2 == 0 for i in range(N)])}), mode="replace")
-        cur.execute('SELECT "a", "b" FROM "adbc_ing" ORDER BY "a"')
+        cur.execute('SELECT "a", "b" FROM "%s" ORDER BY "a"' % ing_name)
         big = cur.fetch_arrow_table()
         assert big.column("a").to_pylist() == list(range(N))
         assert big.column("b").to_pylist()[-1] == "r%d" % (N - 1)
