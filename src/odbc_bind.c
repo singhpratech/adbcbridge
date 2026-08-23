@@ -623,6 +623,12 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       p->c_type = SQL_C_TYPE_DATE; p->sql_type = SQL_TYPE_DATE;
       p->elem_size = sizeof(DATE_STRUCT); p->needs_buffer = true; break;
     case NANOARROW_TYPE_TIMESTAMP:
+      if (opts->no_timestamp_param_arrays) {
+        // The driver's inlined form of a timestamp parameter is one this server has no
+        // type for (Spanner: '...'::timestamp); this batch goes row-at-a-time instead.
+        *supported = false;
+        return;
+      }
       p->c_type = SQL_C_TYPE_TIMESTAMP; p->sql_type = SQL_TYPE_TIMESTAMP;
       p->elem_size = sizeof(TIMESTAMP_STRUCT);
       TimestampParamSize(sv->time_unit, &p->column_size, &p->decimal_digits);
@@ -1982,6 +1988,12 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
       } else {
         InternalAdbcStringBuilderAppend(&sb, "%s%s%s%s %s", i ? ", " : "", q, name, q, tname);
       }
+    }
+    // A server that refuses a table without a primary key (Cloud Spanner) needs the
+    // generated table to declare one; ingest_key_column is the surrogate key column
+    // definition to add for it.
+    if (conn->reader_opts.ingest_key_column && schema.n_children > 0) {
+      InternalAdbcStringBuilderAppend(&sb, ", %s", conn->reader_opts.ingest_key_column);
     }
     InternalAdbcStringBuilderAppend(&sb, ")");
     if (status == ADBC_STATUS_OK) {

@@ -269,3 +269,29 @@ services:
     environment: { SQLFLITE_PASSWORD: adbc, TLS_ENABLED: "0", PRINT_QUERIES: "0" }
     mem_limit: 2g
     ports: ["127.0.0.1:31337:31337"]
+  # Google Cloud Spanner: the emulator plus PGAdapter, the PostgreSQL-wire proxy Google
+  # ships for Spanner -- two containers, both free images and neither needing credentials
+  # or a GCP project.  `spanner` is the emulator (Spanner's own gRPC API on 9010, its REST
+  # API on 9020, neither published); `spanner-pg` is PGAdapter, which reaches it through
+  # SPANNER_EMULATOR_HOST and serves the PostgreSQL wire protocol on 5432, published as
+  # 15442 for the matrix entry.  Both are in the "extra" profile, so a plain `up -d`
+  # leaves them alone; start them with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d spanner-pg
+  # (which brings the emulator up too).  autoConfigEmulator=true is what makes this a
+  # one-command server: PGAdapter creates the instance and the database named by -i/-d on
+  # the emulator at start-up, so nothing has to be provisioned first.  -x lets PGAdapter
+  # accept a connection that does not come from localhost as seen inside the container;
+  # publishing on 127.0.0.1 only is what keeps it private.
+  spanner:
+    profiles: ["extra"]
+    image: gcr.io/cloud-spanner-emulator/emulator
+    mem_limit: 2g
+  spanner-pg:
+    profiles: ["extra"]
+    image: gcr.io/cloud-spanner-pg-adapter/pgadapter
+    depends_on: [spanner]
+    environment: { SPANNER_EMULATOR_HOST: "spanner:9010" }
+    command: ["-p", "test-project", "-i", "test-instance", "-d", "test-database",
+              "-x", "-r", "autoConfigEmulator=true"]
+    mem_limit: 2g
+    ports: ["127.0.0.1:15442:5432"]

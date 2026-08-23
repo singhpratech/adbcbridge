@@ -2583,3 +2583,260 @@ For binary the entry declares `BYTE`, Informix's byte-string type (there is no
 does not configure). The clidriver describes it with IBM's own `SQL_BLOB` type code
 `-98`, which the reader now treats as a binary column — left unrecognised it fell through
 to the text default, where the driver hands the bytes back hex-encoded (`"0102"`).
+
+## Google Cloud Spanner (emulator + PGAdapter 0.55.2)
+
+Cloud Spanner has no ODBC driver and no PostgreSQL wire protocol of its own. What it has
+is **PGAdapter**, the proxy Google ships for it: a PostgreSQL-wire front end that
+translates to Spanner's gRPC API, which is how `psql`, JDBC and — here — `psqlodbc` reach
+a PostgreSQL-dialect Spanner database. So the `spanner` entry uses the same `psqlodbc`
+build as the `postgres` entry, with two containers behind it: the **Cloud Spanner
+emulator** (Spanner itself, in memory, no GCP project and no credentials) and PGAdapter
+in front of it.
+
+Only the wire protocol is PostgreSQL's. Behind it is Spanner's schema and type system: no
+32-bit integer, no `TIMESTAMP WITHOUT TIME ZONE`, no type modifier on `NUMERIC`, and a
+mandatory primary key on every table.
+
+### Get the ODBC driver without root
+
+The same `psqlodbc` as the `postgres` entry; if you already exported
+`POSTGRES_ODBC_DRIVER`, just point the Spanner variable at it:
+
+```sh
+export SPANNER_ODBC_DRIVER=$POSTGRES_ODBC_DRIVER
+```
+
+Otherwise unpack it first (no root needed):
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export SPANNER_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Start the servers
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d spanner-pg
+```
+
+or standalone — two containers on one user-defined network, so PGAdapter can resolve the
+emulator by name:
+
+```sh
+docker network create adbcbridge-spanner-net
+docker run -d --name adbcbridge-spanner --network adbcbridge-spanner-net --memory=2g \
+  gcr.io/cloud-spanner-emulator/emulator
+docker run -d --name adbcbridge-spanner-pg --network adbcbridge-spanner-net --memory=2g \
+  -p 127.0.0.1:15442:5432 -e SPANNER_EMULATOR_HOST=adbcbridge-spanner:9010 \
+  gcr.io/cloud-spanner-pg-adapter/pgadapter \
+  -p test-project -i test-instance -d test-database -x -r autoConfigEmulator=true
+```
+
+Both images are public and free. The emulator serves Spanner's gRPC API on 9010 and a
+REST gateway on 9020; neither needs publishing, since only PGAdapter talks to it.
+PGAdapter's flags are what make this a two-command server:
+
+* `-p/-i/-d` name the project, instance and database. They do not have to exist:
+  `-r autoConfigEmulator=true` (a JDBC connection property, passed through with `-r`)
+  makes PGAdapter create the instance and the database on the emulator at start-up, and
+  puts the connection in the "emulator" mode that skips credentials entirely. Without it
+  you would have to create both first, which the emulator's REST gateway can do with no
+  auth and no `gcloud` (publish it with `-p 127.0.0.1:19020:9020` first):
+
+  ```sh
+  curl -s -X POST http://127.0.0.1:19020/v1/projects/test-project/instances \
+    -d '{"instanceId":"test-instance","instance":{"config":"projects/test-project/instanceConfigs/emulator-config","displayName":"test","nodeCount":1}}'
+  curl -s -X POST http://127.0.0.1:19020/v1/projects/test-project/instances/test-instance/databases \
+    -d '{"createStatement":"CREATE DATABASE \"test-database\"","databaseDialect":"POSTGRESQL"}'
+  ```
+* `-x` lets PGAdapter accept connections that do not appear to come from localhost —
+  inside a container the Docker host does not. Publishing on `127.0.0.1:15442` only is
+  what keeps the server private.
+
+They are ready when PGAdapter has logged its port (about ten seconds, most of it JVM
+start-up):
+
+```sh
+until docker logs adbcbridge-spanner-pg 2>&1 | grep -q 'Server started on port'; do sleep 1; done
+```
+
+Together they settle at about 800 MB resident (the emulator ~340 MB, the JVM ~460 MB).
+
+### Run the entry
+
+```sh
+SPANNER_ODBC_DRIVER=$POSTGRES_ODBC_DRIVER \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py spanner
+# spanner   PASS  (PostgreSQL (via ODBC) 14.0.1)
+```
+
+`GetInfo` reports `PostgreSQL 14.0.1` and `SELECT version()` answers `PostgreSQL 14.1`,
+because that is the wire version PGAdapter claims (and `-v` can make it claim anything
+else) — nothing in either says "Spanner". That matters for the driver quirk below.
+
+### The entry's DDL is Spanner's, not PostgreSQL's
+
+```sql
+CREATE TABLE adbc_t (i bigint PRIMARY KEY, f double precision, s varchar(50),
+                     b bytea, d date, ts timestamptz, n numeric, bo bool)
+```
+
+* **`PRIMARY KEY` is mandatory.** Any table without one is refused outright: `Primary key
+  must be defined for table "adbc_t"`.
+* **`timestamptz`, never `timestamp`.** Spanner has one timestamp type, UTC-based;
+  `ts timestamp` fails with `Type <timestamp> is not supported`.
+* **`numeric` takes no modifier.** `NUMERIC(10,3)` fails with `Type modifier is not
+  supported for type <numeric>`; Spanner's `numeric` is a single fixed type.
+* **no 32-bit integer.** `int4` fails with `Type <int4> is not supported; use bigint or
+  int8 instead`. (`integer` is accepted as a spelling and silently widened to `bigint`.)
+
+`bytea`, `date`, `varchar(n)`, `bool` and `double precision` are all Spanner types and
+behave as on PostgreSQL, astral-plane Unicode included.
+
+### Driver quirks
+
+Both are keyed on the server, not on `psqlodbc` — the same driver library drives real
+PostgreSQL. Since `version()` is PGAdapter's own claim, the driver asks for a setting
+only PGAdapter has:
+
+```sql
+SELECT current_setting('spanner.ddl_transaction_mode', true)
+```
+
+On a real PostgreSQL the second argument (`missing_ok`) makes that answer `NULL` instead
+of raising, so the probe costs one scalar query and never an error.
+
+**1. A parameter array carrying a timestamp fails the whole batch
+(`reader_opts.no_timestamp_param_arrays`).** psqlodbc executes a parameter array by
+inlining the values into one statement, and it writes a bound `SQL_TYPE_TIMESTAMP` as a
+*cast* literal:
+
+```sql
+INSERT INTO t VALUES (2, '2024-02-29 13:45:10.123456'::timestamp, '2024-02-29'::date, '1.5')
+```
+
+(that is one parameter set of a two-row array, as PGAdapter logged it with
+`-log_grpc_messages`; `::date` is fine, Spanner has that type)
+
+`::timestamp` is the type Spanner does not have, so the batch fails with `The Postgres
+Type is not supported: timestamp without time zone`. Sent one row at a time the same
+value goes as a typed parameter (`TIMESTAMP` over gRPC, which is what Spanner stores), so
+the quirk turns off parameter arrays *only for a batch that binds a timestamp* — every
+other batch, a bulk ingest of ordinary columns included, keeps its array. The narrower
+flag is worth having: bulk ingest through the array path runs about 20% faster here than
+row-at-a-time, and the workload's timestamps are two rows.
+
+**2. Generated ingest DDL has to declare a primary key
+(`reader_opts.ingest_key_column`).** `adbc_ingest(mode="create")` builds its own
+`CREATE TABLE` from the Arrow schema, and on Spanner a table without a key is refused. No
+ingested column can be the key — an ingest payload may repeat a value or hold NULL in any
+column, and the matrix's own payload does both — so the flag appends a surrogate key
+Spanner fills in itself:
+
+```sql
+CREATE TABLE "adbc_ing" ("a" int8, "b" text, "c" float8, "d" date, "e" bool,
+                         "adbc_ingest_key" bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY)
+```
+
+The generated `INSERT` names the ingested columns explicitly, so the extra column is never
+written to and every ingest mode (`create`, `append`, `replace`) works unchanged. It is
+spelled without a leading underscore on purpose: Spanner rejects `_adbc_key` with `Column
+name not valid`.
+
+Nothing else needed a quirk. `bytea`, `date`, `numeric`, `timestamptz`, `float8` and
+`text` — psqlodbc's own `SQLGetTypeInfo` names — are all names Spanner accepts, so
+`ansi_ddl_type_names` (which QuestDB needs) would make ingest DDL *worse* here: its
+portable fallbacks are `BLOB`, `TIMESTAMP` and `DECIMAL(p,s)`, none of which Spanner has.
+
+### Tolerances in the entry (the server, not the driver)
+
+* `ingest_types={pa.int32(): pa.int64()}` — Spanner has no 32-bit integer, so an int32
+  column is ingested as int64, which is what Spanner would store anyway.
+* `decimal_type="decimal128(28, 3)"` — Spanner does not report a `numeric` column's
+  precision over the wire, so psqlodbc falls back to its own maximum (28) with the scale
+  of the values in the result set.
+* The `ts` column reads back as a *time-zone-aware* `timestamp[us, tz=UTC]`, because
+  Spanner's only timestamp type carries a zone. psqlodbc renders it in the session's zone
+  — the wall clock that was stored — so `test_matrix.py` compares the naive value.
+
+### What the entry checks beyond the standard workload
+
+The plain workload would look much like `postgres`, so the `extra` steps exercise the
+reason to run Spanner: an **interleaved** table, where child rows are stored physically
+inside the parent's key range instead of in a table of their own.
+
+```sql
+CREATE TABLE "adbc_child" (..., PRIMARY KEY ("a", "b"))
+  INTERLEAVE IN PARENT "adbc_parent" ON DELETE CASCADE
+```
+
+The steps bulk-ingest through ADBC into the parent, then into the child, and read back
+across a join. The child ingest passes only if the parent ingest really landed: Spanner
+refuses an interleaved row whose parent row does not exist.
+
+### Benchmark
+
+Spanner writes are the slow part, so this entry is benchmarked at the small size:
+
+```sh
+ADBC_MATRIX_SUFFIX=_spanner SPANNER_ODBC_DRIVER=$POSTGRES_ODBC_DRIVER \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python bench/matrix_bench.py --rows 300 --fetch-rows 2000 spanner
+# ingest 233 rows/s, 287 rows/s with array binding (pyodbc 222 rows/s)
+# fetch  36.0k rows/s (pyodbc 35.9k rows/s)
+```
+
+Ingest gets *slower* the bigger the batch — 190 rows/s for 1000 rows, 168 for 2000, 128
+for 5000 — because every row is its own DML statement inside one Spanner read-write
+transaction, and the transaction's buffered mutations grow with it. `--rows 10000
+--fetch-rows 100000`, the size the other entries are benchmarked at, does not finish in
+any reasonable time against the emulator: the 100,000-row load was still running after
+half an hour. This is the emulator's single-process implementation as much as Spanner's
+design, so treat these numbers as a floor rather than a measure of Cloud Spanner itself.
+
+Reads are ordinary: the ODBC path is as fast as pyodbc against the same server, and about
+3x faster than delegating to the native `adbc_driver_postgresql` (12.2k rows/s), which
+also connects to PGAdapter happily.
+
+### DDL cannot run inside a transaction
+
+Spanner has no transactional DDL, and PGAdapter's default `spanner.ddl_transaction_mode`
+is `Batch`, which refuses DDL in an explicit transaction:
+
+```
+25000 ERROR: DDL statements are not allowed in mixed batches or transactions.
+```
+
+Nothing in the matrix or the benchmark trips over that — both ingest on an autocommit
+connection, where adbcbridge opens its own transaction *after* the `CREATE TABLE` — but
+`adbc_ingest(mode="create")` on a connection with `autocommit=False` does. One session
+setting lifts it, and is worth knowing about rather than working around in the driver:
+
+```sql
+SET spanner.ddl_transaction_mode = 'AutocommitExplicitTransaction'
+```
+
+(PGAdapter then commits the open transaction when it meets a DDL statement.)
+
+### One schema change at a time
+
+Spanner serialises DDL: a second `CREATE`/`DROP` issued while another is still running is
+rejected outright with `Schema change operation rejected because a concurrent schema
+change operation or read-write transaction is already in progress`. That is worth knowing
+if you run the entry and `bench/matrix_bench.py` against the same database at once (or two
+matrix runs with different `ADBC_MATRIX_SUFFIX` values) — the isolated table names are not
+enough here, the DDL itself has to be serialised.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down spanner-pg spanner
+# or, if started standalone:
+docker rm -f adbcbridge-spanner-pg adbcbridge-spanner
+docker network rm adbcbridge-spanner-net
+```
