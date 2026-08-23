@@ -44,8 +44,10 @@ reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
 | PostgreSQL 16 | psqlodbc 16 | PASS |
 | MariaDB 11 / MySQL | MariaDB Connector/ODBC 3.1 | PASS |
 | SQL Server 2022 | msodbcsql 18 | PASS (incl. `NVARCHAR(MAX)` via chunked `SQLGetData`) |
+| Firebird 5 | Firebird ODBC 3.5.0-rc1 | PASS (driver quirk handled: `SQL_C_WCHAR` sized in 4-byte `wchar_t`) |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
+Per-database driver setup (root-free) and run commands: [`tests/compat/README.md`](tests/compat/README.md).
 
 ## Build
 

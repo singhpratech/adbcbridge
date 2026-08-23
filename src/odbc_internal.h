@@ -106,6 +106,12 @@ struct OdbcReaderOptions {
   bool null_param_as_varchar;
   // Driver quirk: DDL type wrapper for nullable columns, e.g. "Nullable(%s)" (ClickHouse).
   const char* nullable_type_format;
+  // Driver quirk: the driver's SQLWCHAR is wchar_t (4 bytes on Linux) while unixODBC
+  // passes UTF-16 (Firebird OdbcFb): a bound SQL_C_WCHAR parameter is truncated to
+  // byte_length/4 characters ("héllo 🚀" stores as "héll") and fetched wide columns come
+  // back as UTF-32. Use the narrow SQL_C_CHAR path instead, which is UTF-8 when the
+  // connection is opened with CHARSET=UTF8.
+  bool wchar_as_utf8;
 };
 
 struct OdbcDatabase;

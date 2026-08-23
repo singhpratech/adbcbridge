@@ -228,6 +228,12 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     conn->reader_opts.null_param_as_varchar = true;
     conn->reader_opts.nullable_type_format = "Nullable(%s)";
   }
+  if (strstr((const char*)name, "odbcfb")) {
+    // Firebird's OdbcFb sizes SQL_C_WCHAR buffers in wchar_t (4 bytes) while unixODBC
+    // hands it UTF-16: bound strings lose three quarters of their characters and fetched
+    // SQL_WVARCHAR columns come back as UTF-32. Stay on the narrow (UTF-8) path.
+    conn->reader_opts.wchar_as_utf8 = true;
+  }
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;

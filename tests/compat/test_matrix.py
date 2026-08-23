@@ -43,6 +43,15 @@ DBS = {
     "mssql": dict(
         env="MSSQL_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1,14331;Database=master;Uid=sa;Pwd=Adbc!Bridge2026;TrustServerCertificate=yes;",
         ddl="CREATE TABLE adbc_t (i INT, f FLOAT, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME2(6), n DECIMAL(10,3), bo BIT)"),
+    "firebird": dict(
+        env="FIREBIRD_ODBC_DRIVER",
+        conn="Driver={drv};DBNAME=inet://127.0.0.1:13050//var/lib/firebird/data/adbc.fdb;UID=adbc;PWD=adbc;CHARSET=UTF8;",
+        # VARBINARY is CHAR CHARACTER SET OCTETS in Firebird and OdbcFb describes it as
+        # SQL_VARCHAR, so BLOB SUB_TYPE BINARY is the type that round-trips bytes.
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BLOB SUB_TYPE BINARY, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        # Firebird upper-cases unquoted identifiers; NUMERIC(10,3) is stored as a scaled
+        # BIGINT and OdbcFb reports the storage precision (18), not the declared one.
+        ident=str.upper, decimal_type="decimal128(18, 3)", ts_us=(123400,)),
 }
 
 # Typed values: ADBC clients send Arrow-typed parameters, so dates/timestamps go as
@@ -87,10 +96,13 @@ def run(name, cfg):
         assert r1["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), r1["d"]
         ts = r1["ts"]
         assert ts.replace(microsecond=0) == datetime.datetime(2024, 2, 29, 13, 45, 10), ts
-        assert ts.microsecond in (123456, 123000), ts
+        # ts_us: servers whose TIMESTAMP is coarser than a microsecond (Firebird: 1/10000 s)
+        assert ts.microsecond in cfg.get("ts_us", (123456, 123000)), ts
         n = r1["n"]
         fields = {f.name.lower(): str(f.type) for f in t.schema}
-        assert fields["n"] in ("decimal128(10, 3)", "string"), fields["n"]
+        # decimal_type: drivers that report a precision other than the declared one
+        assert fields["n"] in ("decimal128(10, 3)", "string",
+                               cfg.get("decimal_type", "decimal128(10, 3)")), fields["n"]
         assert n in (decimal.Decimal("12.345"), "12.345"), n
         assert fields["bo"] == cfg.get("bool_type", "bool"), fields["bo"]
         assert r1["bo"] in (True, 1), r1["bo"]

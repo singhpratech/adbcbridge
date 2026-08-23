@@ -192,6 +192,19 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
       break;
     case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING: {
       int64_t units = 0;
+      if (opts->wchar_as_utf8) {  // see OdbcReaderOptions::wchar_as_utf8
+        struct ArrowStringView s = {NULL, 0};
+        p->c_type = SQL_C_CHAR;
+        if (p->indicator != SQL_NULL_DATA) {
+          s = ArrowArrayViewGetStringUnsafe(av, row);
+          p->data = (void*)s.data;
+          p->buffer_length = s.size_bytes;
+          p->indicator = s.size_bytes;
+        }
+        p->sql_type = s.size_bytes > 4000 ? SQL_LONGVARCHAR : SQL_VARCHAR;
+        p->column_size = (SQLULEN)(s.size_bytes > 0 ? s.size_bytes : 1);
+        break;
+      }
       if (p->indicator != SQL_NULL_DATA) {
         struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(av, row);
         CHECK_NA(INTERNAL, Utf8ToUtf16(&p->wbuf, s.data, s.size_bytes, &units), error);
@@ -982,6 +995,16 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
   AdbcStatusCode status = ADBC_STATUS_OK;
 
   bool do_create = strcmp(mode, ADBC_INGEST_OPTION_MODE_APPEND) != 0;
+  if (do_create && stmt->ref) {
+    // Release this statement's own ODBC handle before the DDL below: Firebird refuses a
+    // metadata update while the connection still holds a cursor or prepared statement on
+    // the table (the replace-mode DROP fails with -607 "object in use" and the following
+    // CREATE then reports "table already exists"). The INSERT at the end allocates a
+    // fresh handle anyway.
+    OdbcHandleRefRelease(stmt->ref);
+    stmt->ref = NULL;
+    stmt->prepared = false;
+  }
   if (strcmp(mode, ADBC_INGEST_OPTION_MODE_REPLACE) == 0) {
     InternalAdbcStringBuilderAppend(&sb, "DROP TABLE ");
     AppendQualifiedName(&sb, q, stmt->ingest_catalog, stmt->ingest_schema, stmt->ingest_table);
