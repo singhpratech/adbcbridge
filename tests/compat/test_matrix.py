@@ -25,6 +25,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, GREPTIMEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, ARCADEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFLUXDB3_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, CLOUDBERRY_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -432,6 +433,43 @@ DBS = {
             ('SELECT "b", "c" FROM "adbc_dist{sfx}" WHERE "a" = 3', ("r", None)),
             # An aggregate is planned across the shards and merged on the coordinator.
             ('SELECT count(*), sum("a") FROM "adbc_dist{sfx}"', (4, 10)),
+        ]),
+    "cloudberry": dict(
+        # Apache Cloudberry is the Greenplum fork: an MPP cluster of PostgreSQL segments
+        # behind one coordinator (this image is a single node with two primary segments),
+        # so it speaks the PostgreSQL wire protocol, reports SQL_DBMS_NAME "PostgreSQL"
+        # 14.0.4, and psqlodbc drives it.  Apart from the port this is the `postgres`
+        # entry: INTEGER, DOUBLE PRECISION, VARCHAR, BYTEA, DATE, TIMESTAMP, NUMERIC and
+        # BOOLEAN all behave as they do on stock PostgreSQL.
+        env="CLOUDBERRY_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=15443;Database=adbc;Uid=gpadmin;Pwd=adbc;",
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        # The standard workload alone would be a duplicate of `postgres` -- it already
+        # runs on the MPP engine (the 5000 ingested rows hash-distribute across both
+        # primary segments), but nothing in it would fail on a single-node server.  The
+        # `extra` steps exercise the two things that make Cloudberry Cloudberry: a table
+        # whose rows live on segments, and append-optimized *column-oriented* storage,
+        # which is the Greenplum-family storage format stock PostgreSQL has no
+        # equivalent of.  adbc_t itself stays a plain heap table.
+        extra=[
+            ('DROP TABLE IF EXISTS "adbc_ao{sfx}"', None),
+            # Column names/types match EXTRA_ROWS: the ingest below appends into it.
+            # "a" is the distribution key, so the rows hash out across the segments.
+            ('CREATE TABLE "adbc_ao{sfx}" ("a" BIGINT, "b" VARCHAR(20), "c" DOUBLE PRECISION,'
+             ' "d" DATE, "e" BOOLEAN) WITH (appendonly=true, orientation=column)'
+             ' DISTRIBUTED BY ("a")', None),
+            # Cloudberry 2.x is PostgreSQL 14-based, so the storage format is a table
+            # access method -- `ao_column` -- not the `relstorage` column Greenplum 6
+            # and earlier carried on pg_class.
+            ("SELECT a.amname FROM pg_am a JOIN pg_class c ON c.relam = a.oid"
+             " WHERE c.relname = 'adbc_ao{sfx}'", ("ao_column",)),
+            (("adbc_ao{sfx}", EXTRA_ROWS), (4,)),   # bulk ingest into the columnar table
+            # The ingested rows really went through the distribution machinery rather
+            # than landing on one segment: they occupy more than one.
+            ('SELECT count(DISTINCT gp_segment_id) > 1 FROM "adbc_ao{sfx}"', (True,)),
+            ('SELECT "b", "c" FROM "adbc_ao{sfx}" WHERE "a" = 3', ("r", None)),
+            # An aggregate is planned across the segments and merged on the coordinator.
+            ('SELECT count(*), sum("a") FROM "adbc_ao{sfx}"', (4, 10)),
         ]),
     "materialize": dict(
         # Materialize is a streaming warehouse whose views are incrementally maintained.

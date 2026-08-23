@@ -326,3 +326,24 @@ services:
     command: ["influxdb3", "serve", "--node-id=n1", "--object-store=memory", "--without-auth"]
     mem_limit: 2g
     ports: ["127.0.0.1:18181:8181"]
+  # Apache Cloudberry: the Greenplum fork -- an MPP cluster of PostgreSQL 14 segments
+  # behind one coordinator, reachable over the PostgreSQL wire protocol (psqlodbc drives
+  # it).  In the "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d cloudberry
+  # There is no Apache-published server image (the apache/incubator-cloudberry tags are
+  # CI build/test toolchains, not a runnable server), so this is the community image
+  # from https://github.com/woblerr/docker-cloudberry, which packages Cloudberry
+  # 2.1.0-incubating.  CLOUDBERRY_DEPLOYMENT=singlenode (the image default) brings up a
+  # coordinator plus two primary segments in the one container, so tables really are
+  # distributed -- which is what the entry's `extra` steps check.
+  # First start runs gpinitsystem and takes ~2 minutes; the coordinator is on 5432
+  # inside, and 15443 keeps it clear of the other PostgreSQL-wire entries.
+  # shm_size is not optional: the segments talk over shared memory and gpinitsystem
+  # fails against Docker's 64 MB default.
+  cloudberry:
+    profiles: ["extra"]
+    image: woblerr/cloudberry:2.1.0-incubating
+    environment: { CLOUDBERRY_PASSWORD: adbc, CLOUDBERRY_DATABASE_NAME: adbc }
+    mem_limit: 3g
+    shm_size: 1g
+    ports: ["127.0.0.1:15443:5432"]

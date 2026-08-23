@@ -3122,3 +3122,137 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down influxdb3
 # or, if started standalone:
 docker rm -f adbcbridge-influxdb3
 ```
+
+## Apache Cloudberry 2.1.0-incubating (Greenplum fork)
+
+Apache Cloudberry is the Greenplum fork: a **massively parallel (MPP)** cluster of
+PostgreSQL segments behind a single coordinator. Each segment is a PostgreSQL 14
+backend, the coordinator plans a query across them and merges the result, and every
+table is hash-distributed (or replicated, or randomly distributed) across the segments.
+It speaks the PostgreSQL wire protocol, so the same `psqlodbc` build used for the
+`postgres` entry drives it — there is no Cloudberry ODBC driver.
+
+### Get the ODBC driver without root
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export CLOUDBERRY_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Which image
+
+There is **no Apache-published runnable server image**. The `apache/incubator-cloudberry`
+repository on Docker Hub holds only CI toolchain tags — `cbdb-build-*` (compiler and
+build dependencies) and `cbdb-test-*` (regression-test harnesses) — none of which start a
+database, and `apache/cloudberry-db` does not exist at all (`pull access denied`). The
+image used here is the community one from
+<https://github.com/woblerr/docker-cloudberry>, which packages the released Cloudberry
+2.1.0-incubating and initialises a cluster on first start.
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d cloudberry
+# or standalone:
+docker run -d --name adbcbridge-cloudberry \
+  -p 127.0.0.1:15443:5432 --memory=3g --shm-size=1g \
+  -e CLOUDBERRY_PASSWORD=adbc -e CLOUDBERRY_DATABASE_NAME=adbc \
+  woblerr/cloudberry:2.1.0-incubating
+```
+
+The port is `15443` so the entry can run alongside the other PostgreSQL-wire entries.
+`CLOUDBERRY_DEPLOYMENT` defaults to `singlenode`, which puts a coordinator **and two
+primary segments** in the one container — that is what makes the cluster a real MPP
+cluster rather than a single PostgreSQL server, and it is what the entry's `extra` steps
+check.
+
+`--shm-size=1g` is **not optional**: the segments communicate through POSIX shared
+memory, and `gpinitsystem` fails against Docker's 64 MB default.
+
+First start runs `gpinitsystem` (which builds the coordinator and both segments, then
+restarts the cluster) and takes roughly one to two minutes. The container logs tail the
+coordinator log, so it is ready when this succeeds:
+
+```sh
+docker exec -u gpadmin adbcbridge-cloudberry bash -lc \
+  'source /usr/local/cloudberry-db/cloudberry-env.sh; psql -d adbc -tAc "SELECT version()"'
+# PostgreSQL 14.4 (Apache Cloudberry 2.1.0-incubating build dev) on x86_64-pc-linux-gnu...
+```
+
+Note the `source` — the Cloudberry environment (`PATH`, `COORDINATOR_DATA_DIRECTORY`) is
+set from `cloudberry-env.sh`, so `psql` is not on the default `PATH` of a non-login
+shell.
+
+The matrix connects as the superuser `gpadmin` with the password given as
+`CLOUDBERRY_PASSWORD`; the image appends `host all all 0.0.0.0/0 md5` to `pg_hba.conf`
+during initialisation, so a remote login works without further configuration.
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py cloudberry
+# cloudberry PASS  (PostgreSQL (via ODBC) 14.0.4)
+```
+
+### Notes
+
+The entry needs **no tolerance flags and no driver quirk** — Cloudberry passes the whole
+workload through the unmodified PostgreSQL code path, and the DDL is the `postgres`
+entry's unchanged: `INTEGER` is 32-bit, `DOUBLE PRECISION`, `VARCHAR(50)`, `BYTEA`,
+`DATE`, `TIMESTAMP`, `NUMERIC(10,3)` and `BOOLEAN` all behave exactly as they do on stock
+PostgreSQL, and no `PRIMARY KEY` is needed (unlike CockroachDB, a table without one gets
+no synthesised extra column, so `SQLColumns` reports the eight declared columns).
+
+`GetInfo` reports `PostgreSQL 14.0.4` because Cloudberry advertises a PostgreSQL server
+version over the wire; `SELECT version()` is the only way to tell it apart, and
+`SQL_DRIVER_NAME` is `psqlodbcw.so` for both. That is exactly why **no quirk keyed on
+the driver name would be correct here** — it would also fire on real PostgreSQL,
+CockroachDB and every other entry sharing this driver.
+
+Because of that, the standard workload alone would be indistinguishable from `postgres`.
+It does already run on the MPP engine — the 5000 rows the ingest step writes really do
+hash-distribute across both segments:
+
+```sh
+docker exec -u gpadmin adbcbridge-cloudberry bash -lc \
+  'source /usr/local/cloudberry-db/cloudberry-env.sh;
+   psql -d adbc -c "SELECT gp_segment_id, count(*) FROM adbc_ing GROUP BY 1 ORDER BY 1"'
+#  gp_segment_id | count
+# ---------------+-------
+#              0 |  2454
+#              1 |  2546
+```
+
+— but nothing in it would *fail* on a single-node server. So the entry adds `extra`
+steps covering the two things that make Cloudberry Cloudberry:
+
+* a table declared `DISTRIBUTED BY ("a")`, bulk-ingested through `adbc_ingest` and then
+  checked to occupy more than one segment (`count(DISTINCT gp_segment_id) > 1`), with an
+  aggregate planned across the segments and merged on the coordinator;
+* **append-optimized, column-oriented storage** — `WITH (appendonly=true,
+  orientation=column)` — the Greenplum-family storage format stock PostgreSQL has no
+  equivalent of. The ingest, the point read and the aggregate all run against it.
+
+One version detail matters for that last check. Greenplum 6 and earlier recorded the
+storage format in a `relstorage` column on `pg_class`; Cloudberry 2.x is PostgreSQL
+14-based, where storage format is a **table access method**, so `relstorage` no longer
+exists and the format is read from `pg_am` instead:
+
+```sql
+SELECT a.amname FROM pg_am a JOIN pg_class c ON c.relam = a.oid
+ WHERE c.relname = 'adbc_ao';   -- ao_column
+```
+
+`adbc_t` itself stays a plain heap table, so the standard workload is unaffected.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down cloudberry
+# or, if started standalone:
+docker rm -f adbcbridge-cloudberry
+```

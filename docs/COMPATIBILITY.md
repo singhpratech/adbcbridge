@@ -51,6 +51,7 @@ from the second table to the first.
 | ArcadeDB 26.9 | psqlodbc (PG wire) | PASS (read) | multi-model engine behind the PG wire: no `CREATE TABLE` (a type plus one `CREATE PROPERTY` per column), so `adbc_ingest` cannot create its target and the entry runs the read side; `SQLColumns` and `SQLTables(SQL_ALL_TABLE_TYPES)` are queries its parser rejects, so `GetObjects` describes a zero-row SELECT and `GetTableTypes` falls back to the listing; `BoolsAsChar=0`, ISO-8601 `T` timestamp literals, `@rid`/`@type`/`@cat` in every `SELECT *`; also traverses a small graph (vertices, edges, `expand(out())`); fetch 332k rows/s |
 | Materialize 26.38 | psqlodbc (PG wire) | PASS | streaming warehouse; PostgreSQL SQL layer, so no driver quirks -- but no `SAVEPOINT`, so psqlodbc needs `Protocol=7.4-0` for an ingest big enough to split into a second batch; `NUMERIC` is 39 digits, past decimal128, so it reads back as an exact string; also ingests into and reads back an incrementally maintained `MATERIALIZED VIEW`; ingest 6.5k rows/s (array binding), fetch 248k rows/s |
 | MatrixOne 4.2 (MySQL 8.0.30 wire) | MySQL Connector/ODBC (MySQL wire) | PASS | `mysql_native_password` only, so the connector needs `PLUGIN_DIR`; a table without a PRIMARY KEY gets a hidden `__mo_fake_pk_col` that `SQLColumns` reports; a parameter bound into a `BIT` column aborts the server, so ingest sends booleans as `TINYINT`; describes a TEXT column as 5 characters (driver fix: bind a no-declared-length column at `long_bind_bytes`); ingest 4.4k rows/s, fetch 2.05M rows/s |
+| Apache Cloudberry 2.1.0-incubating (Greenplum fork) | psqlodbc (PG wire) | PASS | no driver quirks and no tolerance flags: an MPP cluster of PostgreSQL 14 segments behind one coordinator, driven by the `postgres` entry's types unchanged (and, unlike CockroachDB, needing no `PRIMARY KEY`); no Apache-published *server* image exists -- `apache/incubator-cloudberry` holds only `cbdb-build-*`/`cbdb-test-*` CI toolchains and `apache/cloudberry-db` does not exist -- so the community `woblerr/cloudberry` image is used, and it needs `--shm-size=1g` or `gpinitsystem` fails; `extra` steps cover what the standard workload cannot tell apart from `postgres`: a `DISTRIBUTED BY` table whose bulk-ingested rows occupy more than one segment plus an aggregate merged on the coordinator, and append-optimized **column-oriented** storage (read from `pg_am` as `ao_column` -- Greenplum 6's `relstorage` is gone in the PostgreSQL 14-based 2.x); ingest 9.9k rows/s (9.9k with array binding), fetch 1.69M rows/s |
 
 ## Driver available, free server available — queued for verification
 
@@ -66,7 +67,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Apache Doris | MySQL Connector/ODBC | `apache/doris` | queued (large) |
 | StarRocks | MySQL Connector/ODBC | `starrocks/allin1-ubuntu` | queued (large) |
 | Exasol | Exasol ODBC | `exasol/docker-db` | needs privileged container + 4 GB |
-| Greenplum / Cloudberry | psqlodbc | `cloudberrydb` | queued (large) |
 
 ## Driver available, no server you can run
 
