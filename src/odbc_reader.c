@@ -22,7 +22,9 @@
 #include <string.h>
 
 #if !defined(_WIN32)
+#include <dlfcn.h>
 #include <pthread.h>
+#include <unistd.h>
 #define ADBC_ODBC_HAVE_PREFETCH 1
 #endif
 
@@ -88,9 +90,10 @@ static AdbcStatusCode SqlStateToStatus(const char* s) {
 }
 
 // Case-insensitive substring search over a possibly non-NUL-terminated buffer.
-static bool HaystackContains(const char* hay, size_t hay_len, const char* needle) {
+// `needle` must already be lower case.  Returns SIZE_MAX when there is no match.
+static size_t HaystackFind(const char* hay, size_t hay_len, const char* needle) {
   size_t nlen = strlen(needle);
-  if (nlen == 0 || hay_len < nlen) return false;
+  if (nlen == 0 || hay_len < nlen) return SIZE_MAX;
   for (size_t i = 0; i + nlen <= hay_len; i++) {
     size_t j = 0;
     while (j < nlen) {
@@ -99,9 +102,65 @@ static bool HaystackContains(const char* hay, size_t hay_len, const char* needle
       if (a != b) break;
       j++;
     }
-    if (j == nlen) return true;
+    if (j == nlen) return i;
   }
-  return false;
+  return SIZE_MAX;
+}
+
+static bool HaystackContains(const char* hay, size_t hay_len, const char* needle) {
+  return HaystackFind(hay, hay_len, needle) != SIZE_MAX;
+}
+
+// The one diagnostic unixODBC has for a driver library that would not load.
+static const char kCantOpenLib[] = "can't open lib '";
+
+// unixODBC loads a driver library through libltdl, which tries a list of
+// candidate names and, when none of them opens, reports "file not found" -- the
+// dlerror() that says *why* the loader refused the file is thrown away before
+// the driver manager ever sees it.  So a driver that is on disk and readable is
+// reported as missing, which sends people looking for the wrong problem.
+//
+// Only reached once a connect attempt has already failed with that message.
+// Open the same file here and say what the dynamic loader actually said.
+static void OdbcExplainLoadFailure(struct InternalAdbcStringBuilder* sb, const char* path) {
+#if defined(_WIN32)
+  // The Windows driver manager surfaces the real LoadLibrary error itself, and
+  // the static-TLS exhaustion below is a glibc/ELF condition.
+  (void)sb;
+  (void)path;
+#else
+  if (access(path, R_OK) != 0) {
+    // The file really is missing or unreadable: say which, and stop.
+    InternalAdbcStringBuilderAppend(sb, "\n  [adbcbridge] %s: %s", path, strerror(errno));
+    return;
+  }
+  // libltdl opens with RTLD_LAZY; match it so the outcome is comparable.
+  void* handle = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+  if (handle) {
+    dlclose(handle);
+    InternalAdbcStringBuilderAppend(
+        sb,
+        "\n  [adbcbridge] that file exists and dlopen()s here, so the driver manager refused "
+        "it for another reason (it calls every load failure \"file not found\"): check its "
+        "word size, and that odbcinst.ini names the library itself");
+    return;
+  }
+  const char* err = dlerror();
+  if (!err) err = "(no reason given)";
+  InternalAdbcStringBuilderAppend(
+      sb,
+      "\n  [adbcbridge] the file is there and readable -- the driver manager says \"file not "
+      "found\" for any load failure.  dlopen(): %s",
+      err);
+  if (strstr(err, "static TLS")) {
+    InternalAdbcStringBuilderAppend(
+        sb,
+        "\n  [adbcbridge] that library was pinned to dynamic TLS before this driver loaded -- "
+        "importing pyarrow does that to libstdc++ -- and glibc cannot move it to static TLS "
+        "afterwards.  Load the ODBC driver before pyarrow, or LD_PRELOAD it.  Raising "
+        "glibc.rtld.optional_static_tls does not help.  See docs/TROUBLESHOOTING.md");
+  }
+#endif
 }
 
 AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const char* context,
@@ -118,6 +177,7 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
   SQLSMALLINT rec = 1;
   bool first = true;
   bool says_already_exists = false;
+  char* unloadable = NULL;  // path from "Can't open lib '<path>'", if any
   while (SQL_SUCCEEDED(SQLGetDiagRec(handle_type, handle, rec, sqlstate, &native, msg,
                                      sizeof(msg), &msg_len))) {
     // SQLGetDiagRec fills at most sizeof(msg)-1 bytes plus a NUL, but reports
@@ -147,6 +207,21 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
     if (HaystackContains(text, text_len, "already exists")) {
       says_already_exists = true;
     }
+    if (!unloadable) {
+      size_t at = HaystackFind(text, text_len, kCantOpenLib);
+      if (at != SIZE_MAX) {
+        size_t start = at + sizeof(kCantOpenLib) - 1;
+        size_t end = start;
+        while (end < text_len && text[end] != '\'') end++;
+        if (end > start && end < text_len) {
+          unloadable = malloc(end - start + 1);
+          if (unloadable) {
+            memcpy(unloadable, text + start, end - start);
+            unloadable[end - start] = '\0';
+          }
+        }
+      }
+    }
     if (first) {
       status = SqlStateToStatus((const char*)sqlstate);
       if (error) {
@@ -168,6 +243,10 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
   // a vendor message through unmapped.  Fall back to the message text when the
   // SQLSTATE carried no usable meaning.
   if (status == ADBC_STATUS_UNKNOWN && says_already_exists) status = ADBC_STATUS_ALREADY_EXISTS;
+  if (unloadable) {
+    OdbcExplainLoadFailure(&sb, unloadable);
+    free(unloadable);
+  }
   if (error) InternalAdbcSetError(error, "%s", sb.buffer ? sb.buffer : "[ODBC] unknown error");
   InternalAdbcStringBuilderReset(&sb);
   return status;

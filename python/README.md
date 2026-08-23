@@ -31,7 +31,19 @@ adbcbridge.connect(uri=None, dsn=None, username=None, password=None,
 adbcbridge.driver_path() -> str            # path of libadbc_driver_odbc.so
 adbcbridge.odbc_drivers() -> list[OdbcDriver]   # from odbcinst.ini
 adbcbridge.odbcinst_ini() -> pathlib.Path | None
+adbcbridge.odbc_driver_library(driver=None, *, uri=None, dsn=None) -> str | None
+adbcbridge.preload_odbc_driver(driver=None, *, uri=None, dsn=None,
+                               strict=False) -> str | None
 ```
+
+`import adbcbridge` does not import pyarrow: `adbc_driver_manager.dbapi` is
+imported inside `connect()`, after the ODBC driver named in the connection
+string has been opened. A few ODBC drivers — MySQL Connector/ODBC is the one in
+the wild — can only be loaded while libstdc++ has not yet been pinned to dynamic
+thread-local storage, which importing pyarrow does. `preload_odbc_driver()` is
+that step on its own, for programs that drive `adbc_driver_manager` or pyodbc
+themselves; `ADBCBRIDGE_PRELOAD=0` disables the automatic one in `connect()`.
+See [`docs/TROUBLESHOOTING.md`](../docs/TROUBLESHOOTING.md).
 
 Extra `**options` become database options: a bare name is prefixed with
 `adbc.odbc.` (`batch_size=4096` → `adbc.odbc.batch_size`), a dotted name is

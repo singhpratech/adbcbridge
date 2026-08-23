@@ -41,7 +41,40 @@ Servers are expected as in docker-compose.yml (override with *_CONN env vars); t
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
 """
-import os, sys, shutil, tempfile, pathlib, datetime, decimal
+import os, sys, shutil, tempfile, pathlib, datetime, decimal, ctypes
+
+
+def _preload_odbc_drivers():
+    """Open the ODBC driver libraries before pyarrow is imported.
+
+    A driver that reaches libstdc++'s thread-locals through the initial-exec TLS
+    model -- MySQL Connector/ODBC is the one in this matrix that does -- can only
+    be loaded while libstdc++ has not yet been pinned to dynamic thread-local
+    storage, and importing pyarrow pins it for the life of the process.  Opening
+    the drivers first settles it the other way.  Best effort: a library that will
+    not open here fails again, with its real reason, when its entry runs.
+    See docs/TROUBLESHOOTING.md.
+    """
+    if not hasattr(os, "RTLD_LAZY"):  # not an ELF platform
+        return
+    try:
+        libc = ctypes.CDLL(None)
+        libc.dlopen.restype = ctypes.c_void_p
+        libc.dlopen.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    except (OSError, AttributeError):
+        return
+    wanted = {arg.lower() for arg in sys.argv[1:] if not arg.startswith("-")}
+    for name, value in os.environ.items():
+        if not name.endswith("_ODBC_DRIVER") or name == "ADBC_ODBC_DRIVER":
+            continue
+        if wanted and name[: -len("_ODBC_DRIVER")].lower() not in wanted:
+            continue
+        if os.path.isfile(value):
+            libc.dlopen(os.fsencode(value), os.RTLD_LAZY | os.RTLD_LOCAL)
+
+
+_preload_odbc_drivers()
+
 import pyarrow as pa
 import adbc_driver_manager.dbapi as dbapi
 

@@ -558,6 +558,15 @@ hidden. Extra keyword options become database options: a bare name is prefixed
 with `adbc.odbc.` (`batch_size=4096` → `adbc.odbc.batch_size`), a dotted name is
 passed through as given, and `True`/`False` become `"true"`/`"false"`.
 
+`import adbcbridge` does not import pyarrow — `adbc_driver_manager.dbapi` is
+imported when you call `connect()`, after the ODBC driver named in the
+connection string has been opened. That order matters for the handful of ODBC
+drivers that need libstdc++'s thread-locals in static thread-local storage,
+which importing pyarrow first makes impossible; see
+[Troubleshooting](#troubleshooting). `adbcbridge.preload_odbc_driver(name_or_path)`
+does the same thing on its own, for programs that use `adbc_driver_manager` or
+pyodbc directly, and `ADBCBRIDGE_PRELOAD=0` switches the automatic one off.
+
 `adbcbridge.driver_path()` returns the path of `libadbc_driver_odbc.so`, looked
 up in this order: the `ADBC_ODBC_DRIVER` environment variable, a copy bundled
 inside the package, the driver manifest named `odbc` (see above), then common
@@ -999,6 +1008,34 @@ And from Java, in a container (see `tests/java/README.md` for the full command):
   -w /work/tests/java -e ADBC_ODBC_DRIVER=/work/build/libadbc_driver_odbc.so \
   -e SQLITE_ODBC_DRIVER=/odbc/libsqlite3odbc.so maven:3-eclipse-temurin-21 \
   bash -c 'apt-get update -qq && apt-get install -y -qq unixodbc && mvn -B test'
+
+## Troubleshooting
+
+[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) covers the failures whose
+symptom points somewhere other than their cause. Two worth knowing about here:
+
+**`Can't open lib '<path>' : file not found`, for a file that is there.**
+unixODBC loads driver libraries through libltdl, which reports every failure to
+load one as `file not found` — the `dlerror()` explaining why is thrown away
+before the driver manager sees it. adbcbridge opens the same path itself when a
+connection fails that way and puts the real reason into the ADBC error, so the
+message says `Permission denied`, or a missing dependency, or the one below,
+instead of pointing at a file that is plainly present. A driver that genuinely
+is not there still reports `No such file or directory`.
+
+**`cannot allocate memory in static TLS block`, after importing pyarrow.**
+MySQL Connector/ODBC — alone among the 18 driver libraries in the compatibility
+matrix — needs libstdc++'s thread-locals in static TLS, and importing pyarrow
+(directly, or through pandas or `adbc_driver_manager.dbapi`) permanently pins
+libstdc++ to dynamic TLS instead. The driver then cannot be loaded in that
+process at all; it reproduces with plain pyodbc, with no ADBC in sight. Loading
+the ODBC driver *before* that import settles it, which is what the adbcbridge
+Python package does: `import adbcbridge` does not import pyarrow, and
+`adbcbridge.connect()` opens the driver named in the connection string first.
+Where the import order is not yours to choose, `LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6`
+works. Raising `glibc.rtld.optional_static_tls` does not: static TLS surplus was
+never what ran out. The full account, the per-driver table and the
+`readelf`-based check for a driver not listed there are in the doc.
 
 ## Contributing
 
