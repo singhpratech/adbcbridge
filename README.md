@@ -121,6 +121,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | MySQL 8.4 | MySQL Connector/ODBC 9.4 (and MariaDB Connector/ODBC 3.1) | PASS |
 | CockroachDB 26.3 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; declare a PRIMARY KEY or the synthesised hidden `rowid` shows up in `GetObjects`) |
 | YugabyteDB 2026.1 (YSQL) | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; YSQL is PostgreSQL 15, and its internal row id is a system column so `GetObjects` is unaffected) |
+| TiDB 7.5 | MySQL Connector/ODBC 9.4 (MySQL wire protocol) | PASS (no quirks; run from the tarball it needs `PLUGIN_DIR=` for the `mysql_native_password` client plugin TiDB's root account uses) |
 | MonetDB 11.55 (Dec2025-SP3) | MonetDBODBClib 11.55 | PASS (driver quirk handled: no usable parameter arrays — executes only the first set) |
 | TimescaleDB 2.29 (PostgreSQL 16) | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; also ingests into and reads back a `create_hypertable()` hypertable) |
 | IBM Db2 12.1 | Db2 CLI driver (clidriver `libdb2.so`) | PASS (driver quirk handled: 32-bit `SQLLEN` — see `adbc.odbc.sqllen_32bit`) |
