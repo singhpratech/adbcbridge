@@ -1,4 +1,19 @@
+// Copyright 2026 the adbcbridge authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
 // SPDX-License-Identifier: Apache-2.0
+
 // Parameter binding (Arrow -> SQLBindParameter) and bulk ingest.
 
 #include <stdio.h>
@@ -83,6 +98,11 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
     p->buffer_length = 0;
   } else {
     p->indicator = 0;
+  }
+  if (p->indicator == SQL_NULL_DATA && opts->null_param_as_varchar) {
+    p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = 1;
+    p->decimal_digits = 0; p->data = p->fixed.text; p->buffer_length = 0;
+    return ADBC_STATUS_OK;
   }
   switch (sv->type) {
     case NANOARROW_TYPE_NA:

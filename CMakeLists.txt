@@ -1,5 +1,27 @@
+# Copyright 2026 the adbcbridge authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 cmake_minimum_required(VERSION 3.16)
-project(adbc_driver_odbc C)
+project(adbcbridge
+        VERSION 0.1.0
+        DESCRIPTION "adbcbridge: an ADBC driver for any ODBC data source"
+        HOMEPAGE_URL "https://adbcbridge.org"
+        LANGUAGES C)
+
+include(GNUInstallDirs)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -18,6 +40,10 @@ if(ADBC_ODBC_ASAN)
   add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
   add_link_options(-fsanitize=address,undefined)
 endif()
+option(ADBCBRIDGE_BUILD_SHARED "Build shared library" ON)
+option(ADBCBRIDGE_INSTALL_MANIFEST "Install an ADBC driver manifest (odbc.toml)" ON)
+set(ADBCBRIDGE_MANIFEST_DIR "etc/adbc/drivers"
+    CACHE STRING "Install directory for the ADBC driver manifest, relative to the install prefix")
 
 # --- ODBC driver manager (unixODBC / iODBC / Windows) ---
 find_package(ODBC QUIET)
@@ -55,7 +81,100 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(adbc_driver_odbc PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()
 
-install(TARGETS adbc_driver_odbc LIBRARY DESTINATION lib)
+install(TARGETS adbc_driver_odbc
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+
+# --- ADBC driver manifest -------------------------------------------------
+# The ADBC driver manager can discover a driver by name if it finds a TOML
+# manifest named <name>.toml in one of its search directories.  We install the
+# manifest as "odbc.toml" so that applications can simply pass driver="odbc".
+# See https://arrow.apache.org/adbc/current/format/driver_manifests.html
+if(ADBCBRIDGE_INSTALL_MANIFEST)
+  # Platform tuple used as the key under [Driver.shared], per the ADBC spec.
+  if(WIN32)
+    set(ADBCBRIDGE_MANIFEST_OS "windows")
+  elseif(APPLE)
+    set(ADBCBRIDGE_MANIFEST_OS "macos")
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(ADBCBRIDGE_MANIFEST_OS "freebsd")
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
+    set(ADBCBRIDGE_MANIFEST_OS "openbsd")
+  else()
+    set(ADBCBRIDGE_MANIFEST_OS "linux")
+  endif()
+
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    set(ADBCBRIDGE_MANIFEST_ARCH "amd64")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(i386|i486|i586|i686|x86|X86)$")
+    set(ADBCBRIDGE_MANIFEST_ARCH "x86")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|AARCH64|ARM64|armv8b|armv8l)$")
+    set(ADBCBRIDGE_MANIFEST_ARCH "arm64")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|armhf|armv7l)$")
+    set(ADBCBRIDGE_MANIFEST_ARCH "arm")
+  elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "ppc64le")
+    set(ADBCBRIDGE_MANIFEST_ARCH "powerpc64le")
+  elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "ppc64")
+    set(ADBCBRIDGE_MANIFEST_ARCH "powerpc64")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(ppc|powerpc)$")
+    set(ADBCBRIDGE_MANIFEST_ARCH "powerpc")
+  elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "riscv64")
+    set(ADBCBRIDGE_MANIFEST_ARCH "riscv64")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(s390|s390x)$")
+    set(ADBCBRIDGE_MANIFEST_ARCH "s390x")
+  else()
+    message(WARNING "adbcbridge: unrecognized architecture "
+                    "'${CMAKE_SYSTEM_PROCESSOR}'; using it verbatim in the "
+                    "driver manifest platform tuple")
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" ADBCBRIDGE_MANIFEST_ARCH)
+  endif()
+
+  set(ADBCBRIDGE_MANIFEST_PLATFORM
+      "${ADBCBRIDGE_MANIFEST_OS}_${ADBCBRIDGE_MANIFEST_ARCH}")
+
+  # Where the shared library will live once installed, relative to the install
+  # prefix.  On Windows the DLL goes to the runtime (bin) directory, elsewhere
+  # to the library directory.
+  if(WIN32)
+    set(ADBCBRIDGE_MANIFEST_LIBDIR "${CMAKE_INSTALL_BINDIR}")
+  else()
+    set(ADBCBRIDGE_MANIFEST_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
+  endif()
+
+  # The manifest has to spell out an absolute path to the library, so it can
+  # only be written once the install prefix is known -- and the prefix is not
+  # known until `cmake --install` runs, because `cmake --install --prefix DIR`
+  # overrides the configure-time CMAKE_INSTALL_PREFIX.  Generating the manifest
+  # at configure time would bake in the wrong path for every relocated install
+  # (the driver manager would then fail to dlopen it, or worse, fall back to
+  # some other library that happens to be called "odbc").  So the template is
+  # expanded during installation instead, into a staging file that the
+  # following install(FILES) copies into place (which also gets DESTDIR and
+  # install_manifest.txt handling for free).
+  set(ADBCBRIDGE_MANIFEST_STAGE
+      "${CMAKE_CURRENT_BINARY_DIR}/manifest/odbc.toml")
+
+  # The target sets PREFIX "lib" on every platform (so the DLL is
+  # libadbc_driver_odbc.dll, not adbc_driver_odbc.dll), hence the literal "lib"
+  # instead of CMAKE_SHARED_LIBRARY_PREFIX.
+  install(CODE "
+set(PROJECT_VERSION \"${PROJECT_VERSION}\")
+set(ADBCBRIDGE_MANIFEST_PLATFORM \"${ADBCBRIDGE_MANIFEST_PLATFORM}\")
+set(_adbcbridge_libdir \"${ADBCBRIDGE_MANIFEST_LIBDIR}\")
+if(NOT IS_ABSOLUTE \"\${_adbcbridge_libdir}\")
+  set(_adbcbridge_libdir \"\${CMAKE_INSTALL_PREFIX}/\${_adbcbridge_libdir}\")
+endif()
+set(ADBCBRIDGE_MANIFEST_DRIVER_PATH
+    \"\${_adbcbridge_libdir}/libadbc_driver_odbc${CMAKE_SHARED_LIBRARY_SUFFIX}\")
+configure_file(\"${CMAKE_CURRENT_SOURCE_DIR}/adbc_driver_odbc.toml.in\"
+               \"${ADBCBRIDGE_MANIFEST_STAGE}\" @ONLY)
+message(STATUS
+        \"adbcbridge: driver manifest points at \${ADBCBRIDGE_MANIFEST_DRIVER_PATH}\")
+")
+  install(FILES "${ADBCBRIDGE_MANIFEST_STAGE}"
+          DESTINATION "${ADBCBRIDGE_MANIFEST_DIR}")
+endif()
 
 # --- Tests ---
 # The C smoke test is POSIX-only: it uses dlopen()/dlsym() and mkdtemp() to

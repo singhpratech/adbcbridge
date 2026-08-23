@@ -6,3 +6,4 @@ __pycache__/
 *.db
 .claude/
 tests/validation-upstream/
+dist/

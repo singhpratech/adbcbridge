@@ -67,7 +67,7 @@ def run(name, cfg):
     with conn.cursor() as cur:
         for sql in cfg.get("setup", []):
             cur.execute(sql)
-        for t in ("adbc_t", "adbc_ing"):
+        for t in ("adbc_t", "adbc_ing", '"adbc_ing"'):  # ingest quotes names (exact case)
             try:
                 cur.execute("DROP TABLE " + t)
             except Exception:
