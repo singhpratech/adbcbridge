@@ -58,6 +58,13 @@
 #define ADBC_ODBC_OPTION_CONNECTION_STRING "adbc.odbc.connection_string"
 #define ADBC_ODBC_OPTION_BATCH_SIZE "adbc.odbc.batch_size"
 #define ADBC_ODBC_OPTION_MAX_BIND_BYTES "adbc.odbc.max_bind_bytes"
+/// Width, in bytes, at which a column whose declared width is past
+/// `adbc.odbc.max_bind_bytes` is bound anyway.  See OdbcReaderOptions::long_bind_bytes.
+#define ADBC_ODBC_OPTION_LONG_BIND_BYTES "adbc.odbc.long_bind_bytes"
+/// Total bytes of bound rowset buffers a reader may allocate.  The rowset holds
+/// `adbc.odbc.batch_size` rows unless that would exceed this budget, in which case it
+/// holds as many rows as fit (at least one).  See OdbcReaderOptions::rowset_bytes.
+#define ADBC_ODBC_OPTION_ROWSET_BYTES "adbc.odbc.rowset_bytes"
 #define ADBC_ODBC_OPTION_DECIMAL_AS_STRING "adbc.odbc.decimal_as_string"
 /// Bind Arrow batches as ODBC parameter arrays (one execute per batch) when the
 /// driver supports it.  "true"/"false"; default true.
@@ -75,6 +82,13 @@
 
 #define ADBC_ODBC_DEFAULT_BATCH_SIZE 1024
 #define ADBC_ODBC_DEFAULT_MAX_BIND_BYTES 32768
+// 2 KiB per cell holds any ordinary text value while keeping a 1024-row rowset inside a
+// few megabytes -- and, on a driver that null-fills a bound buffer (sqliteodbc does), it
+// is 2 KiB written per row instead of the 256 KiB its declared width would ask for.
+// Reading 100,000 rows of (int, double, text, date) out of SQLite takes 0.061 s at 2 KiB,
+// 0.069 s at 4 KiB, 0.101 s at 16 KiB and 0.59 s at the declared 256 KiB.
+#define ADBC_ODBC_DEFAULT_LONG_BIND_BYTES 2048
+#define ADBC_ODBC_DEFAULT_ROWSET_BYTES (8 * 1024 * 1024)
 
 /// A refcounted ODBC statement handle shared between an AdbcStatement and
 /// the ArrowArrayStream it produced.
@@ -102,6 +116,20 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
 struct OdbcReaderOptions {
   int64_t batch_size;
   int64_t max_bind_bytes;
+  // Width to bind a column whose declared width is past max_bind_bytes at, rather than
+  // leaving it unbound.  Drivers describe a text or binary column by what its type could
+  // hold -- sqliteodbc says 65,536 characters for every TEXT column, MySQL 16,777,215,
+  // SQL Server 2,147,483,647 for NVARCHAR(MAX) -- so honouring those widths would mean
+  // either a gigabyte of rowset or, as before, no binding at all and a one-row rowset for
+  // the whole result set.  Binding narrow and re-reading the values that overflow costs
+  // nothing on the values that do not.  Only used when a clipped value can be recovered;
+  // see TruncationRepairable().
+  int64_t long_bind_bytes;
+  // Ceiling on the bound rowset buffers of one reader, in bytes.  A wide text column
+  // makes a row expensive (sqliteodbc describes a TEXT column as 65,536 characters), so
+  // sizing the rowset in rows alone would allocate hundreds of megabytes; the reader
+  // fetches min(batch_size, rowset_bytes / row_width) rows at a time instead.
+  int64_t rowset_bytes;
   bool decimal_as_string;
   // Driver quirk: some drivers (DuckDB) write a whole internal chunk into bound
   // buffers regardless of SQL_ATTR_ROW_ARRAY_SIZE; allocate at least this many rows.
@@ -112,6 +140,17 @@ struct OdbcReaderOptions {
   // the values that come back truncated, instead of refusing to bind it at all and
   // collapsing the whole result set to a one-row rowset.
   bool getdata_repair;
+  // Driver capability: SQLGetData can re-read a column that is bound (SQL_GD_BOUND).
+  // Enough on its own when the cursor holds a single row, which is what makes both
+  // getdata_repair and refetch_repair work.
+  bool getdata_bound;
+  // Driver capability: SQLFetchScroll(SQL_FETCH_ABSOLUTE) re-reads an earlier row of
+  // this cursor and a plain SQLFetch then resumes after it.  That makes a truncated
+  // bound value recoverable without SQLGetData on a block cursor: the reader re-reads
+  // the whole rowset one row at a time (where SQLGetData is always legal) and carries
+  // on.  It is what lets a "long" column be bound at all on a driver that cannot
+  // SQLGetData from a block cursor.
+  bool refetch_repair;
   // Driver quirk: bind boolean parameters as integers (DuckDB rejects SQL_BIT params).
   bool bool_param_as_int;
   // Driver quirk: no SQL_C_SBIGINT parameter support (Oracle); send 64-bit ints as numeric text.

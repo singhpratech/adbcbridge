@@ -235,7 +235,9 @@ Options (set on the database):
 | `dsn` | DSN name from `odbc.ini` (appended as `DSN=...`) |
 | `username`, `password` | appended as `UID=`/`PWD=` |
 | `adbc.odbc.batch_size` | rows per Arrow batch (default 1024) |
-| `adbc.odbc.max_bind_bytes` | max bound buffer per value before falling back to `SQLGetData` (default 32768) |
+| `adbc.odbc.max_bind_bytes` | widest value bound at the width the driver declares for it, in bytes (default 32768). Wider ones are bound at `long_bind_bytes` instead, or read with `SQLGetData` where that is not possible |
+| `adbc.odbc.long_bind_bytes` | width, in bytes, to bind a column whose declared width is past `max_bind_bytes` — a `TEXT`/`NVARCHAR(MAX)`/`LONGTEXT` column, which drivers describe by what the *type* could hold (default 2048). Values longer than this are read again in full, so this trades nothing but speed |
+| `adbc.odbc.rowset_bytes` | ceiling on a reader's bound rowset buffers, in bytes (default 8388608). The rowset holds `batch_size` rows unless that would cost more than this, in which case it holds as many as fit |
 | `adbc.odbc.decimal_as_string` | `true` to return DECIMAL/NUMERIC as strings |
 | `adbc.odbc.delegate` | `auto` (default) / `never` / `always` — see [Native delegation](#native-delegation) |
 | `adbc.odbc.delegate.driver` | force a specific native driver: a bare name (`postgresql`) or manifest name; a path only with `allow_paths` |

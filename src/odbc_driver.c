@@ -81,6 +81,8 @@ static AdbcStatusCode OdbcDatabaseNew(struct AdbcDatabase* database, struct Adbc
   }
   db->reader_opts.batch_size = ADBC_ODBC_DEFAULT_BATCH_SIZE;
   db->reader_opts.max_bind_bytes = ADBC_ODBC_DEFAULT_MAX_BIND_BYTES;
+  db->reader_opts.long_bind_bytes = ADBC_ODBC_DEFAULT_LONG_BIND_BYTES;
+  db->reader_opts.rowset_bytes = ADBC_ODBC_DEFAULT_ROWSET_BYTES;
   OdbcDelegateOptionsInit(&db->delegate);
   database->private_data = db;
   return ADBC_STATUS_OK;
@@ -120,6 +122,22 @@ static AdbcStatusCode OdbcDatabaseSetOption(struct AdbcDatabase* database, const
       return ADBC_STATUS_INVALID_ARGUMENT;
     }
     db->reader_opts.max_bind_bytes = v;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_LONG_BIND_BYTES) == 0) {
+    long v = strtol(value, NULL, 10);
+    if (v <= 0) {
+      InternalAdbcSetError(error, "%s must be a positive integer", key);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    db->reader_opts.long_bind_bytes = v;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_ROWSET_BYTES) == 0) {
+    long v = strtol(value, NULL, 10);
+    if (v <= 0) {
+      InternalAdbcSetError(error, "%s must be a positive integer", key);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    db->reader_opts.rowset_bytes = v;
     return ADBC_STATUS_OK;
   } else if (strcmp(key, ADBC_ODBC_OPTION_DECIMAL_AS_STRING) == 0) {
     db->reader_opts.decimal_as_string = (strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0);
@@ -231,6 +249,8 @@ static AdbcStatusCode OdbcDatabaseGetOptionInt(struct AdbcDatabase* database, co
   if (db->proxy) return OdbcProxyDatabaseGetOptionInt(db->proxy, key, value, error);
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) { *value = db->reader_opts.batch_size; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_MAX_BIND_BYTES) == 0) { *value = db->reader_opts.max_bind_bytes; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_LONG_BIND_BYTES) == 0) { *value = db->reader_opts.long_bind_bytes; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_ROWSET_BYTES) == 0) { *value = db->reader_opts.rowset_bytes; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = db->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }
   InternalAdbcSetError(error, "Unknown database option %s", key);
   return ADBC_STATUS_NOT_FOUND;
@@ -443,6 +463,17 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_GETDATA_EXTENSIONS, &gd, sizeof(gd), NULL))) {
     const SQLUINTEGER need = SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER;
     conn->reader_opts.getdata_repair = (gd & need) == need;
+    conn->reader_opts.getdata_bound = (gd & SQL_GD_BOUND) != 0;
+  }
+
+  // Can an earlier row of this cursor be read again?  SQL_CA1_ABSOLUTE on the
+  // forward-only cursor -- the cursor type the reader uses -- says SQLFetchScroll can
+  // reposition without asking for a scrollable (and, on a client/server driver, far
+  // more expensive) cursor type.
+  SQLUINTEGER ca1 = 0;
+  if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1, &ca1,
+                               sizeof(ca1), NULL))) {
+    conn->reader_opts.refetch_repair = (ca1 & SQL_CA1_ABSOLUTE) != 0;
   }
 
   if (!SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DRIVER_NAME, name, sizeof(name), &len))) {
@@ -462,6 +493,12 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // SQL_ATTR_ROW_ARRAY_SIZE (heap overflow otherwise) and misaligns rows when the
     // array size is not a multiple of 2048.
     conn->reader_opts.min_buffer_rows = 2048;
+    // DuckDB reports SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER but rejects
+    // SQLSetPos(SQL_POSITION) outright, so SQLGetData cannot re-read a row of a block
+    // cursor: it answers for whichever row its chunk cursor sits on and SQL_NO_DATA for
+    // the rest.  A clipped value is not recoverable here, so wide columns stay unbound.
+    conn->reader_opts.getdata_repair = false;
+    conn->reader_opts.getdata_bound = false;
     conn->reader_opts.bool_param_as_int = true;
     conn->reader_opts.decimal_param_as_varchar = true;
     // SQLDescribeParam throws an uncaught duckdb::BinderException -- which aborts the
@@ -472,6 +509,16 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // with a column-wise parameter array: NULL parameter sets land as zeros and the
     // values of the sets around them are dropped.  Row-at-a-time only.
     conn->reader_opts.no_param_arrays = true;
+  }
+  if (strstr((const char*)name, "sqlite3odbc")) {
+    // SQLiteODBC leaves SQL_CA1_ABSOLUTE out of SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1 and
+    // claims it only for the static cursor, but its result set is materialised in memory
+    // and SQLFetchScroll(SQL_FETCH_ABSOLUTE) re-reads any row of a forward-only cursor
+    // correctly, with a plain SQLFetch resuming after it.  Saying so lets the reader bind
+    // the 65,536-character width it reports for every TEXT column: without a way back to
+    // a truncated row a long column cannot be bound at all, and one unbound column costs
+    // the whole result set its block cursor.
+    conn->reader_opts.refetch_repair = true;
   }
   if (strstr((const char*)name, "clickhouse")) {
     conn->reader_opts.null_param_as_varchar = true;
@@ -486,6 +533,12 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     conn->reader_opts.fractional_time_max_digits = 9;
   }
   if (strstr((const char*)name, "maodbc")) {
+    // MariaDB Connector/ODBC reports SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER but
+    // ignores SQLSetPos(SQL_POSITION): SQLGetData answers for the first row of the rowset
+    // and returns SQL_NO_DATA for every other row, so re-reading a clipped value where it
+    // sits would blank it.  It does support SQLFetchScroll(SQL_FETCH_ABSOLUTE), which is
+    // how the reader repairs such a rowset instead.
+    conn->reader_opts.getdata_repair = false;
     // MariaDB Connector/ODBC reports TIME for SQL_TYPE_TIME with no CREATE_PARAMS, and a
     // bare TIME column is TIME(0): fractional seconds are silently truncated on insert.
     // MariaDB's maximum TIME scale is 6.

@@ -262,6 +262,54 @@ static bool IsTimestampWithTimezone(SQLHSTMT hstmt, SQLUSMALLINT col) {
          ContainsFold((const char*)name, "timestampoffset");
 }
 
+// Can a value that comes back longer than its bound buffer still be read in full?
+// Either SQLGetData can re-read it where it sits (getdata_repair) or the rowset it
+// belongs to can be fetched again one row at a time (refetch_repair).  When neither
+// holds, a column whose declared width is a type maximum rather than a real bound has
+// to stay unbound, because a bound buffer would silently clip it.
+static inline bool TruncationRepairable(const struct OdbcReaderOptions* opts) {
+  // Both routes end in SQLGetData on a bound column, which needs SQL_GD_BOUND.
+  return opts->getdata_bound && (opts->getdata_repair || opts->refetch_repair);
+}
+
+// Settle how a variable-length column is read, given the width `ClassifyColumn` derived
+// from what the driver said about it.
+//
+// Drivers routinely describe a text or binary column by what its *type* could hold
+// rather than by anything the table holds: sqliteodbc says 65,536 characters for every
+// TEXT column, MySQL says 16,777,215, SQL Server says 2,147,483,647 for NVARCHAR(MAX).
+// Binding that literally is out of the question -- the rowset alone would be hundreds of
+// megabytes, and a driver that null-fills a bound buffer writes every byte of it on every
+// row (sqliteodbc reads a 100,000-row table 4x slower bound at 256 KiB than at 4 KiB) --
+// so such a column is bound at `long_bind_bytes` instead and the few values that overflow
+// that are re-read in full.  Re-reading needs a driver that can go back to a row (see
+// TruncationRepairable); without one the column stays unbound, which costs the whole
+// result set its block cursor because SQLGetData needs a one-row rowset.
+static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions* opts) {
+  if (c->column_size == 0) {  // no width to bind against
+    c->bound = false;
+    return;
+  }
+  // SQL_LONGVARCHAR / SQL_WLONGVARCHAR / SQL_LONGVARBINARY name a type with no length at
+  // all -- whatever width the driver reports for one is a guess, so binding it is only
+  // safe where a value that outgrows the buffer can be read again.
+  const bool no_declared_length = c->sql_type == SQL_LONGVARCHAR ||
+                                  c->sql_type == SQL_WLONGVARCHAR ||
+                                  c->sql_type == SQL_LONGVARBINARY;
+  const bool repairable = TruncationRepairable(opts) && opts->long_bind_bytes > 0;
+  if (no_declared_length && !repairable) {
+    c->bound = false;
+    return;
+  }
+  if (c->elem_size > opts->max_bind_bytes) {
+    if (!repairable) {
+      c->bound = false;
+      return;
+    }
+    c->elem_size = opts->long_bind_bytes;
+  }
+}
+
 // Fetch a column as SQL_C_CHAR, with a buffer big enough for `column_size`
 // characters but never smaller than `minimum` (drivers report column_size 0 for
 // types whose length they don't track).  Falls back to SQLGetData if that would
@@ -436,10 +484,7 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_LONGVARBINARY:
       c->kind = FETCH_BINARY; c->c_type = SQL_C_BINARY;
       c->elem_size = (SQLLEN)c->column_size;
-      if (c->column_size == 0 || c->elem_size > opts->max_bind_bytes ||
-          (c->sql_type == SQL_LONGVARBINARY && !opts->getdata_repair)) {
-        c->bound = false;
-      }
+      ApplyBindWidth(c, opts);
       break;
     case SQL_WCHAR:
     case SQL_WVARCHAR:
@@ -447,18 +492,14 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       if (opts->wchar_as_utf8) {  // see OdbcReaderOptions::wchar_as_utf8
         c->kind = FETCH_CHAR; c->c_type = SQL_C_CHAR;
         c->elem_size = (SQLLEN)c->column_size * 4 + 1;
-        if (c->column_size == 0 || c->elem_size > opts->max_bind_bytes ||
-            c->sql_type == SQL_WLONGVARCHAR) {
-          c->bound = false;
-        }
+        ApplyBindWidth(c, opts);
         break;
       }
       c->kind = FETCH_WCHAR; c->c_type = SQL_C_WCHAR;
       c->elem_size = ((SQLLEN)c->column_size + 1) * (SQLLEN)sizeof(SQLWCHAR);
-      if (c->column_size == 0 || c->elem_size > opts->max_bind_bytes ||
-          (c->sql_type == SQL_WLONGVARCHAR && !opts->getdata_repair)) {
-        c->bound = false;
-      }
+      ApplyBindWidth(c, opts);
+      // A capped SQL_C_WCHAR buffer still has to be a whole number of UTF-16 code units.
+      c->elem_size -= c->elem_size % (SQLLEN)sizeof(SQLWCHAR);
       break;
     case SQL_CHAR:
     case SQL_VARCHAR:
@@ -468,10 +509,7 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       c->kind = FETCH_CHAR; c->c_type = SQL_C_CHAR;
       // column_size is in characters; UTF-8 may need up to 4 bytes each.
       c->elem_size = (SQLLEN)c->column_size * 4 + 1;
-      if (c->column_size == 0 || c->elem_size > opts->max_bind_bytes ||
-          (c->sql_type == SQL_LONGVARCHAR && !opts->getdata_repair)) {
-        c->bound = false;
-      }
+      ApplyBindWidth(c, opts);
       break;
   }
 }
@@ -890,6 +928,17 @@ struct OdbcReader {
   struct ArrowSchema schema;
   SQLULEN rows_per_fetch;
   SQLULEN rows_fetched;
+  // Rows SQLFetch has produced so far, so a rowset can name its rows to
+  // SQLFetchScroll(SQL_FETCH_ABSOLUTE), which counts from 1.  A rowset that reported a
+  // skipped or failed row breaks that correspondence, and gives up the repair path.
+  int64_t rows_seen;
+  bool rows_seen_exact;
+  // Rowsets read, and how many of those had to be re-read because a value overflowed its
+  // bound buffer.  When most of them do, the table's values are simply wider than
+  // long_bind_bytes and repairing rowset after rowset costs more than never binding a
+  // block cursor in the first place: see ReaderNextBatch().
+  int64_t rowsets_read;
+  int64_t rowsets_repaired;
   // Set when the driver rejected SQL_ATTR_ROWS_FETCHED_PTR and therefore never reports
   // how many rows SQLFetch produced; then each successful SQLFetch means exactly one row.
   bool no_rows_fetched_ptr;
@@ -911,6 +960,22 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
   r->all_bound = all_bound;
   r->rows_per_fetch = all_bound ? (SQLULEN)r->opts.batch_size : 1;
   if (r->rows_per_fetch < 1) r->rows_per_fetch = 1;
+  // Size the rowset by bytes as well as by rows.  A column the driver describes as
+  // 65,536 characters wide costs 262,145 bytes per row all by itself, so batch_size rows
+  // of it would be a quarter-gigabyte allocation that no cache holds; batch_size stays
+  // the Arrow batch size and the rowset becomes however many rows fit in the budget.
+  if (r->opts.rowset_bytes > 0 && r->rows_per_fetch > 1) {
+    uint64_t row_bytes = 0;
+    for (SQLSMALLINT i = 0; i < r->ncols; i++) {
+      if (!r->cols[i].bound) continue;
+      row_bytes += (uint64_t)r->cols[i].elem_size + sizeof(SQLLEN);
+    }
+    if (row_bytes > 0) {
+      uint64_t fit = (uint64_t)r->opts.rowset_bytes / row_bytes;
+      if (fit < 1) fit = 1;
+      if (fit < (uint64_t)r->rows_per_fetch) r->rows_per_fetch = (SQLULEN)fit;
+    }
+  }
   if (r->opts.min_buffer_rows > 0 && all_bound) {
     // Round up to a multiple of the driver's internal chunk so rows stay aligned.
     SQLULEN m = (SQLULEN)r->opts.min_buffer_rows;
@@ -997,8 +1062,8 @@ static AdbcStatusCode PositionOnRow(struct OdbcReader* r, SQLULEN row,
 
 // Fetch one unbound column value for the current row via SQLGetData into scratch.
 // Returns status; sets *is_null; data is in r->scratch (size_bytes).
-static AdbcStatusCode GetDataLong(struct OdbcReader* r, SQLSMALLINT i, bool* is_null,
-                                  struct AdbcError* error) {
+static AdbcStatusCode GetDataLong(struct OdbcReader* r, SQLSMALLINT i, SQLULEN row,
+                                  bool* is_null, struct AdbcError* error) {
   SQLHSTMT hstmt = r->ref->hstmt;
   struct OdbcColumn* c = &r->cols[i];
   r->scratch.size_bytes = 0;
@@ -1008,13 +1073,31 @@ static AdbcStatusCode GetDataLong(struct OdbcReader* r, SQLSMALLINT i, bool* is_
   if (c->c_type == SQL_C_CHAR) term = 1;
   else if (c->c_type == SQL_C_WCHAR) term = sizeof(SQLWCHAR);
 
-  for (;;) {
+  for (bool first = true;; first = false) {
     CHECK_NA(INTERNAL, ArrowBufferReserve(&r->scratch, (int64_t)chunk), error);
     uint8_t* dst = r->scratch.data + r->scratch.size_bytes;
     SQLLEN ind = 0;
     SQLRETURN ret = OdbcGetData(hstmt, (SQLUSMALLINT)(i + 1), c->c_type, dst, (SQLLEN)chunk, &ind,
                                 r->opts.sqllen_32bit);
-    if (ret == SQL_NO_DATA) break;
+    if (ret == SQL_NO_DATA) {
+      // SQL_NO_DATA on the *first* call means the driver has no value to give for the
+      // row that was asked for.  On a one-row cursor that is a driver answering a
+      // zero-length value, which the loop below treats as the empty string.  On a block
+      // cursor it means SQLSetPos(SQL_POSITION) did not move the cursor even though the
+      // driver claimed SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER, and returning an
+      // empty value would quietly replace real data.
+      if (first && r->rows_per_fetch > 1) {
+        InternalAdbcSetError(error,
+                             "[ODBC] SQLGetData returned no data for column %s after "
+                             "SQLSetPos positioned on row %llu of a rowset: this driver's "
+                             "SQL_GETDATA_EXTENSIONS overstates what it supports. Set "
+                             "adbc.odbc.long_bind_bytes higher, or adbc.odbc.batch_size=1 "
+                             "to read one row per fetch.",
+                             c->name, (unsigned long long)(row + 1));
+        return ADBC_STATUS_IO;
+      }
+      break;
+    }
     if (!SQL_SUCCEEDED(ret)) {
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLGetData", error);
     }
@@ -1055,11 +1138,14 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
     is_null = (ind == SQL_NULL_DATA);
     data = (const uint8_t*)c->buffer + (size_t)row * (size_t)c->elem_size;
     if (BoundValueTruncated(c, ind)) {
-      if (r->opts.getdata_repair) {
+      // SQLGetData can re-read a bound column where it sits when the driver says so, and
+      // always when the cursor holds a single row (RepairRowset() re-reads a rowset that
+      // way).  Otherwise the value is clipped to what the buffer held.
+      if (r->opts.getdata_repair || (r->rows_per_fetch <= 1 && r->opts.getdata_bound)) {
         // The driver had more data than the bound buffer could hold.  Re-read the
         // whole value with SQLGetData rather than silently returning a prefix.
         RAISE_ADBC(PositionOnRow(r, row, error));
-        RAISE_ADBC(GetDataLong(r, i, &is_null, error));
+        RAISE_ADBC(GetDataLong(r, i, row, &is_null, error));
         data = r->scratch.data;
         len = (size_t)r->scratch.size_bytes;
       } else {
@@ -1071,7 +1157,7 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
       len = (size_t)ind;
     }
   } else {
-    RAISE_ADBC(GetDataLong(r, i, &is_null, error));
+    RAISE_ADBC(GetDataLong(r, i, row, &is_null, error));
     data = r->scratch.data;
     len = (size_t)r->scratch.size_bytes;
   }
@@ -1423,6 +1509,56 @@ static AdbcStatusCode BulkAppendColumn(struct OdbcReader* r, SQLSMALLINT i, SQLU
   return ADBC_STATUS_OK;
 }
 
+// Did any bound value in this rowset come back longer than its buffer?
+static bool RowsetTruncated(const struct OdbcReader* r, SQLULEN fetched) {
+  for (SQLSMALLINT i = 0; i < r->ncols; i++) {
+    const struct OdbcColumn* c = &r->cols[i];
+    if (!c->bound) continue;
+    if (c->c_type != SQL_C_CHAR && c->c_type != SQL_C_WCHAR && c->c_type != SQL_C_BINARY) {
+      continue;
+    }
+    for (SQLULEN row = 0; row < fetched; row++) {
+      SQLLEN ind = OdbcIndicatorGet(c->indicators, (size_t)row, r->opts.sqllen_32bit);
+      if (BoundValueTruncated(c, ind)) return true;
+    }
+  }
+  return false;
+}
+
+// Re-read a rowset that clipped a value, one row at a time, and append every row.
+//
+// `first` is the 1-based position of the rowset's first row in the result set.  With
+// SQL_ATTR_ROW_ARRAY_SIZE at 1 the cursor holds a single row, so SQLGetData is legal
+// again and AppendValue() re-reads each clipped value in full.  The last
+// SQLFetchScroll leaves the cursor on the rowset's last row, which is where a plain
+// SQLFetch has to resume from.
+static AdbcStatusCode RepairRowset(struct OdbcReader* r, int64_t first, SQLULEN fetched,
+                                   struct ArrowArray* batch, struct AdbcError* error) {
+  SQLHSTMT hstmt = r->ref->hstmt;
+  const SQLULEN block = r->rows_per_fetch;
+  AdbcStatusCode status = ADBC_STATUS_OK;
+  ODBC_CHECK(SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)1, 0), SQL_HANDLE_STMT,
+             hstmt, "SQLSetStmtAttr(SQL_ATTR_ROW_ARRAY_SIZE=1)", error);
+  r->rows_per_fetch = 1;
+  for (SQLULEN k = 0; k < fetched && status == ADBC_STATUS_OK; k++) {
+    r->rows_fetched = 0;
+    SQLRETURN ret = SQLFetchScroll(hstmt, SQL_FETCH_ABSOLUTE, (SQLLEN)(first + (int64_t)k));
+    if (!SQL_SUCCEEDED(ret)) {
+      status = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLFetchScroll(SQL_FETCH_ABSOLUTE)", error);
+      break;
+    }
+    for (SQLSMALLINT i = 0; i < r->ncols && status == ADBC_STATUS_OK; i++) {
+      status = AppendValue(r, i, 0, batch->children[i], error);
+    }
+  }
+  r->rows_per_fetch = block;
+  SQLRETURN back = SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)block, 0);
+  if (status == ADBC_STATUS_OK && !SQL_SUCCEEDED(back)) {
+    return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLSetStmtAttr(SQL_ATTR_ROW_ARRAY_SIZE)", error);
+  }
+  return status;
+}
+
 // Reserve each column's fixed-size buffers for a whole batch, so no column has
 // to walk a realloc chain while it fills.  A failed reserve has to be propagated
 // rather than ignored: ArrowBufferReserve() zeroes the buffer's size on ENOMEM,
@@ -1456,7 +1592,9 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
 
   int64_t total = 0;
   AdbcStatusCode status = ADBC_STATUS_OK;
-  while (total < r->opts.batch_size && !r->done) {
+  // Stop before a rowset would take the batch past batch_size -- unless it is the first
+  // one, since a batch always holds at least one rowset however wide the rowset is.
+  while ((total == 0 || total + (int64_t)r->rows_per_fetch <= r->opts.batch_size) && !r->done) {
     r->rows_fetched = 0;
     SQLRETURN ret = SQLFetch(hstmt);
     if (ret == SQL_NO_DATA) {
@@ -1478,6 +1616,29 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
     for (SQLULEN row = 0; bulk && row < fetched; row++) {
       SQLUSMALLINT st = r->row_status[row];
       if (st == SQL_ROW_NOROW || st == SQL_ROW_ERROR) bulk = false;
+    }
+    const int64_t first_row = r->rows_seen + 1;
+    r->rows_seen += (int64_t)fetched;
+    if (!bulk) r->rows_seen_exact = false;
+    // A value longer than its bound buffer is only a prefix.  When the driver cannot
+    // re-read it in place, re-read the whole rowset one row at a time -- which this
+    // reader only ever bound a "long" column for because that is possible.
+    r->rowsets_read++;
+    if (bulk && r->rows_seen_exact && r->rows_per_fetch > 1 && !r->opts.getdata_repair &&
+        r->opts.refetch_repair && RowsetTruncated(r, fetched)) {
+      status = RepairRowset(r, first_row, fetched, &batch, error);
+      if (status != ADBC_STATUS_OK) break;
+      total += (int64_t)fetched;
+      r->rowsets_repaired++;
+      // Repairing means reading the rowset twice.  Once that is the rule rather than the
+      // exception, read one row per SQLFetch instead: every value is then read where it
+      // sits, which is what an unbound column would have cost from the start.
+      if (r->rowsets_repaired >= 4 && r->rowsets_repaired * 4 >= r->rowsets_read * 3) {
+        if (SQL_SUCCEEDED(SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)1, 0))) {
+          r->rows_per_fetch = 1;
+        }
+      }
+      continue;
     }
     if (bulk) {
       // Bound columns: one pass per column over the whole rowset.
@@ -1604,8 +1765,12 @@ AdbcStatusCode OdbcReaderInit(struct OdbcHandleRef* ref, const struct OdbcReader
   }
   r->ref = ref;
   ref->refcount++;
+  r->rows_seen_exact = true;
   r->opts = *opts;
   if (r->opts.batch_size <= 0) r->opts.batch_size = ADBC_ODBC_DEFAULT_BATCH_SIZE;
+  if (r->opts.max_bind_bytes <= 0) r->opts.max_bind_bytes = ADBC_ODBC_DEFAULT_MAX_BIND_BYTES;
+  if (r->opts.long_bind_bytes <= 0) r->opts.long_bind_bytes = ADBC_ODBC_DEFAULT_LONG_BIND_BYTES;
+  if (r->opts.rowset_bytes <= 0) r->opts.rowset_bytes = ADBC_ODBC_DEFAULT_ROWSET_BYTES;
   ArrowBufferInit(&r->scratch);
 
   AdbcStatusCode status = DescribeColumns(ref->hstmt, &r->opts, &r->cols, &r->ncols, error);

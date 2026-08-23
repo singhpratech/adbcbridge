@@ -375,9 +375,9 @@ static void TestLargeStrings(struct Fixture* fx) {
 
   // Open a second database/connection with a tiny bind budget so that every
   // variable-length column is read with the chunked SQLGetData path instead of
-  // a bound buffer. (On the default connection this driver clamps values that
-  // are longer than the bound buffer - see AppendValue() in odbc_reader.c -
-  // so long values must go through SQLGetData to come back intact.)
+  // a bound buffer.  TestRepairedLargeStrings() covers the same data on the
+  // default connection, where the column is bound and the long values are
+  // recovered by re-reading their rowset.
   struct AdbcDatabase database;
   struct AdbcConnection connection;
   memset(&database, 0, sizeof(database));
@@ -434,6 +434,71 @@ static void TestLargeStrings(struct Fixture* fx) {
   ADBC_MUST(fx->driver.StatementRelease(&statement, &error), &error);
   ADBC_MUST(fx->driver.ConnectionRelease(&connection, &error), &error);
   ADBC_MUST(fx->driver.DatabaseRelease(&database, &error), &error);
+  ReleaseError(&error);
+}
+
+// The same long values on the default connection, where the column is bound.
+//
+// A bound buffer only ever holds `adbc.odbc.long_bind_bytes` (or the column's declared
+// width, whichever is smaller), so every value past that comes back clipped and has to be
+// re-read.  `bigmix` spreads its long values over several rowsets, so the reader also has
+// to resume the block cursor in the right place after repairing one.
+static void TestRepairedLargeStrings(struct Fixture* fx) {
+  Section("large strings on a bound column (rowset repair)");
+  struct AdbcError error = ADBC_ERROR_INIT;
+
+  static const struct {
+    const char* sql;
+    int64_t rows;
+  } kQueries[] = {
+      {"SELECT h, n FROM bigtext ORDER BY n", 3},
+      {"SELECT h, n FROM bigmix ORDER BY x", 2500},
+  };
+  for (size_t q = 0; q < sizeof(kQueries) / sizeof(kQueries[0]); q++) {
+    struct AdbcStatement statement;
+    memset(&statement, 0, sizeof(statement));
+    struct ArrowArrayStream stream;
+    memset(&stream, 0, sizeof(stream));
+    ADBC_MUST(fx->driver.StatementNew(&fx->connection, &statement, &error), &error);
+    ADBC_MUST(fx->driver.StatementSetSqlQuery(&statement, kQueries[q].sql, &error), &error);
+    ADBC_MUST(fx->driver.StatementExecuteQuery(&statement, &stream, NULL, &error), &error);
+
+    struct ArrowSchema schema;
+    memset(&schema, 0, sizeof(schema));
+    CHECK_EQ_INT(stream.get_schema(&stream, &schema), 0);
+    CHECK_EQ_INT(schema.n_children, 2);
+    if (schema.n_children != 2) Fatal("unexpected result schema");
+    struct ArrowArrayView view;
+    struct ArrowError na_error;
+    NA_MUST(ArrowArrayViewInitFromSchema(&view, &schema, &na_error));
+
+    int64_t rows = 0;
+    while (1) {
+      struct ArrowArray array;
+      memset(&array, 0, sizeof(array));
+      CHECK_EQ_INT(stream.get_next(&stream, &array), 0);
+      if (array.release == NULL) break;
+      NA_MUST(ArrowArrayViewSetArray(&view, &array, &na_error));
+      for (int64_t i = 0; i < view.length; i++, rows++) {
+        struct ArrowStringView sv = ArrowArrayViewGetStringUnsafe(view.children[0], i);
+        int64_t expected = ArrowArrayViewGetIntUnsafe(view.children[1], i);
+        CHECK_EQ_INT(sv.size_bytes, expected);
+        int64_t hex_digits = 0;
+        for (int64_t b = 0; b < sv.size_bytes; b++) {
+          char c = sv.data[b];
+          if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) hex_digits++;
+        }
+        CHECK_EQ_INT(hex_digits, sv.size_bytes);
+      }
+      ArrowArrayRelease(&array);
+    }
+    CHECK_EQ_INT(rows, kQueries[q].rows);
+
+    ArrowArrayViewReset(&view);
+    ArrowSchemaRelease(&schema);
+    stream.release(&stream);
+    ADBC_MUST(fx->driver.StatementRelease(&statement, &error), &error);
+  }
   ReleaseError(&error);
 }
 
@@ -842,10 +907,18 @@ int main(int argc, char** argv) {
             "SELECT hex(randomblob(7)) AS h, 14 AS n UNION ALL "
             "SELECT hex(randomblob(2000)), 4000 UNION ALL "
             "SELECT hex(randomblob(100000)), 200000");
+  // Short values with an occasional long one, so several rowsets are read normally,
+  // some have to be repaired, and the cursor has to resume correctly after each.
+  RunUpdate(&fx,
+            "CREATE TABLE bigmix AS WITH RECURSIVE c(x) AS "
+            "(SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 2500) "
+            "SELECT x, hex(randomblob(CASE WHEN x % 97 = 0 THEN 9000 ELSE 5 END)) AS h, "
+            "CASE WHEN x % 97 = 0 THEN 18000 ELSE 10 END AS n FROM c");
 
   TestStatementLifecycle(&fx);
   TestSelectValues(&fx);
   TestLargeStrings(&fx);
+  TestRepairedLargeStrings(&fx);
   TestBatching(&fx);
   TestExecuteSchema(&fx);
   TestErrorPropagation(&fx);
