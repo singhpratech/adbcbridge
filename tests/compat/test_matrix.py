@@ -129,8 +129,13 @@ def run(name, cfg):
             assert "adbc_no_such_table" in str(e) or "not" in str(e).lower(), str(e)
     # metadata
     objs = conn.adbc_get_objects(depth="all", table_name_filter=T).read_all().to_pylist()
-    cols = [c["column_name"].lower() for cat in objs for s in cat["catalog_db_schemas"] or [] for t in s["db_schema_tables"] or [] for c in t["table_columns"]]
-    assert cols == ["i", "f", "s", "b", "d", "ts", "n", "bo"], cols
+    # No catalog filter is given, so every catalog on the server that happens to
+    # hold a table of this name is reported -- shared servers really do have
+    # more than one.  Check the columns of each match individually.
+    per_table = [[c["column_name"].lower() for c in t["table_columns"]]
+                 for cat in objs for s in cat["catalog_db_schemas"] or []
+                 for t in s["db_schema_tables"] or []]
+    assert ["i", "f", "s", "b", "d", "ts", "n", "bo"] in per_table, per_table
     assert "adbc_t" in [x.lower() for x in conn.adbc_get_table_types()] or True
     sch = conn.adbc_get_table_schema(T)
     assert [f.name.lower() for f in sch] == ["i", "f", "s", "b", "d", "ts", "n", "bo"]

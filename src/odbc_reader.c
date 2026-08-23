@@ -99,7 +99,31 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
   bool says_already_exists = false;
   while (SQL_SUCCEEDED(SQLGetDiagRec(handle_type, handle, rec, sqlstate, &native, msg,
                                      sizeof(msg), &msg_len))) {
-    if (HaystackContains((const char*)msg, (size_t)(msg_len > 0 ? msg_len : 0), "already exists")) {
+    // SQLGetDiagRec fills at most sizeof(msg)-1 bytes plus a NUL, but reports
+    // the *untruncated* message length in msg_len.  Using that length against
+    // `msg` reads past the end of the buffer, so a longer diagnostic (an MSSQL
+    // RAISERROR, an Oracle error stack) is re-fetched into a buffer that fits.
+    const char* text = (const char*)msg;
+    size_t text_len = msg_len > 0 ? (size_t)msg_len : 0;
+    char* heap = NULL;
+    if (text_len > sizeof(msg) - 1) {
+      if (text_len > 32000) text_len = 32000;  // SQLSMALLINT buffer length
+      heap = calloc(text_len + 1, 1);
+      SQLSMALLINT full_len = 0;
+      if (heap && SQL_SUCCEEDED(SQLGetDiagRec(handle_type, handle, rec, sqlstate, &native,
+                                              (SQLCHAR*)heap, (SQLSMALLINT)(text_len + 1),
+                                              &full_len))) {
+        text = heap;
+        if (full_len > 0 && (size_t)full_len < text_len) text_len = (size_t)full_len;
+      } else {
+        // No second buffer: report only the bytes the first call really wrote.
+        free(heap);
+        heap = NULL;
+        const char* nul = memchr(msg, '\0', sizeof(msg));
+        text_len = nul ? (size_t)(nul - (const char*)msg) : sizeof(msg) - 1;
+      }
+    }
+    if (HaystackContains(text, text_len, "already exists")) {
       says_already_exists = true;
     }
     if (first) {
@@ -111,10 +135,11 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
       first = false;
     }
     InternalAdbcStringBuilderAppend(&sb, "\n  [%s] (%d) %.*s", (const char*)sqlstate,
-                                    (int)native, (int)msg_len, (const char*)msg);
+                                    (int)native, (int)text_len, text);
     if (error) {
       InternalAdbcAppendErrorDetail(error, "odbc.sqlstate", (const uint8_t*)sqlstate, 5);
     }
+    free(heap);
     rec++;
   }
   // Not every backend reports "object already exists" with SQLSTATE 42S01:

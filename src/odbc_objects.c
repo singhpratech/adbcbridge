@@ -160,37 +160,51 @@ static AdbcStatusCode AppendColumns(struct OdbcConnection* conn, struct ArrowArr
     return s;
   }
   while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-    char* name = GetStrCol(hstmt, 4);
-    int64_t v;
+    // Read the whole row first, in ascending column order: SQLGetData may only
+    // revisit an earlier column when the driver advertises SQL_GD_ANY_ORDER,
+    // and msodbcsql18 does not.  `has[i]` records whether column i was non-NULL.
+    char* name = GetStrCol(hstmt, 4);              // COLUMN_NAME
+    int64_t num[19] = {0};
+    bool has[19] = {false};
+    has[5] = GetIntCol(hstmt, 5, &num[5]);         // DATA_TYPE
+    char* type_name = GetStrCol(hstmt, 6);         // TYPE_NAME
+    has[7] = GetIntCol(hstmt, 7, &num[7]);         // COLUMN_SIZE
+    has[9] = GetIntCol(hstmt, 9, &num[9]);         // DECIMAL_DIGITS
+    has[10] = GetIntCol(hstmt, 10, &num[10]);      // NUM_PREC_RADIX
+    has[11] = GetIntCol(hstmt, 11, &num[11]);      // NULLABLE
+    char* remarks = GetStrCol(hstmt, 12);          // REMARKS
+    char* column_def = GetStrCol(hstmt, 13);       // COLUMN_DEF
+    has[14] = GetIntCol(hstmt, 14, &num[14]);      // SQL_DATA_TYPE
+    has[15] = GetIntCol(hstmt, 15, &num[15]);      // SQL_DATETIME_SUB
+    has[16] = GetIntCol(hstmt, 16, &num[16]);      // CHAR_OCTET_LENGTH
+    has[17] = GetIntCol(hstmt, 17, &num[17]);      // ORDINAL_POSITION
+    char* is_nullable = GetStrCol(hstmt, 18);      // IS_NULLABLE
+
     CHECK_NA(INTERNAL, AppendStrOrNull(c->children[0], name ? name : ""), error);
     free(name);
     // ordinal_position
-    if (GetIntCol(hstmt, 17, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[1], v), error);
+    if (has[17]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[1], num[17]), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[1], 1), error);
-    char* s = GetStrCol(hstmt, 12);  // remarks
-    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[2], s), error); free(s);
-    if (GetIntCol(hstmt, 5, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[3], v), error);
+    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[2], remarks), error); free(remarks);
+    if (has[5]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[3], num[5]), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[3], 1), error);
-    s = GetStrCol(hstmt, 6);  // type name
-    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[4], s), error); free(s);
-    if (GetIntCol(hstmt, 7, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[5], v), error);
+    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[4], type_name), error); free(type_name);
+    if (has[7]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[5], num[7]), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[5], 1), error);
-    if (GetIntCol(hstmt, 9, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[6], v), error);
+    if (has[9]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[6], num[9]), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[6], 1), error);
-    if (GetIntCol(hstmt, 10, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[7], v), error);
+    if (has[10]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[7], num[10]), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[7], 1), error);
-    if (GetIntCol(hstmt, 11, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[8], v), error);
+    if (has[11]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[8], num[11]), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[8], 1), error);
-    s = GetStrCol(hstmt, 13);  // column_def
-    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[9], s), error); free(s);
-    if (GetIntCol(hstmt, 14, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[10], v), error);
+    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[9], column_def), error); free(column_def);
+    if (has[14]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[10], num[14]), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[10], 1), error);
-    if (GetIntCol(hstmt, 15, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[11], v), error);
+    if (has[15]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[11], num[15]), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[11], 1), error);
-    if (GetIntCol(hstmt, 16, &v)) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[12], v), error);
+    if (has[16]) CHECK_NA(INTERNAL, ArrowArrayAppendInt(c->children[12], num[16]), error);
     else CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[12], 1), error);
-    s = GetStrCol(hstmt, 18);  // is_nullable
-    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[13], s), error); free(s);
+    CHECK_NA(INTERNAL, AppendStrOrNull(c->children[13], is_nullable), error); free(is_nullable);
     // scope catalog/schema/table, autoincrement, generated: unknown via SQLColumns
     for (int k = 14; k <= 18; k++) CHECK_NA(INTERNAL, ArrowArrayAppendNull(c->children[k], 1), error);
     CHECK_NA(INTERNAL, ArrowArrayFinishElement(c), error);
@@ -244,9 +258,20 @@ static AdbcStatusCode AppendConstraints(struct OdbcConnection* conn, struct Arro
     bool open = false;
     int64_t seq_prev = 0;
     while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-      char* fk_name = GetStrCol(hstmt, 12);
+      // Read every column of the row up front, in ascending order: SQLGetData
+      // may only jump around when the driver advertises SQL_GD_ANY_ORDER, and
+      // msodbcsql18 does not.
+      // PKTABLE_CAT / PKTABLE_SCHEM come back as "" from drivers whose backend
+      // has no catalogs or schemas; ADBC wants NULL there, as for
+      // TABLE_CAT/TABLE_SCHEM.
+      char* pk_cat = GetStrCol(hstmt, 1);
+      char* pk_sch = GetStrCol(hstmt, 2);
+      char* pk_tbl = GetStrCol(hstmt, 3);
+      char* pk_col = GetStrCol(hstmt, 4);
+      char* fkcol = GetStrCol(hstmt, 8);
       int64_t seq = 0;
       GetIntCol(hstmt, 9, &seq);
+      char* fk_name = GetStrCol(hstmt, 12);
       bool new_group = !open || StrCmpNull(fk_name, cur_name) != 0 || seq <= seq_prev;
       if (new_group) {
         if (open) {
@@ -261,18 +286,15 @@ static AdbcStatusCode AppendConstraints(struct OdbcConnection* conn, struct Arro
         open = true;
       }
       seq_prev = seq;
-      char* fkcol = GetStrCol(hstmt, 8);
       CHECK_NA(INTERNAL, AppendStrOrNull(names->children[0], fkcol ? fkcol : ""), error);
-      free(fkcol);
       struct ArrowArray* u = usage->children[0];
-      char* s;
-      // PKTABLE_CAT / PKTABLE_SCHEM come back as "" from drivers whose backend has
-      // no catalogs or schemas; ADBC wants NULL there, as for TABLE_CAT/TABLE_SCHEM.
-      s = GetStrCol(hstmt, 1); CHECK_NA(INTERNAL, AppendNameOrNull(u->children[0], s), error); free(s);
-      s = GetStrCol(hstmt, 2); CHECK_NA(INTERNAL, AppendNameOrNull(u->children[1], s), error); free(s);
-      s = GetStrCol(hstmt, 3); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[2], s ? s : ""), error); free(s);
-      s = GetStrCol(hstmt, 4); CHECK_NA(INTERNAL, AppendStrOrNull(u->children[3], s ? s : ""), error); free(s);
+      CHECK_NA(INTERNAL, AppendNameOrNull(u->children[0], pk_cat), error);
+      CHECK_NA(INTERNAL, AppendNameOrNull(u->children[1], pk_sch), error);
+      CHECK_NA(INTERNAL, AppendStrOrNull(u->children[2], pk_tbl ? pk_tbl : ""), error);
+      CHECK_NA(INTERNAL, AppendStrOrNull(u->children[3], pk_col ? pk_col : ""), error);
       CHECK_NA(INTERNAL, ArrowArrayFinishElement(u), error);
+      free(pk_cat); free(pk_sch); free(pk_tbl); free(pk_col);
+      free(fkcol);
       free(fk_name);
     }
     if (open) {
@@ -342,8 +364,15 @@ static AdbcStatusCode FetchTables(struct OdbcConnection* conn, SQLCHAR* cat, SQL
   }
   AdbcStatusCode status = ADBC_STATUS_OK;
   while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-    if (!RowListPush(out, GetNameCol(hstmt, 1), GetNameCol(hstmt, 2), GetStrCol(hstmt, 3),
-                     GetStrCol(hstmt, 4))) {
+    // SQLGetData must be issued in ascending column order unless the driver
+    // advertises SQL_GD_ANY_ORDER (msodbcsql18 does not), and C leaves the
+    // evaluation order of call arguments unspecified -- so read the four
+    // columns into locals, in order, before handing them over.
+    char* row_cat = GetNameCol(hstmt, 1);
+    char* row_sch = GetNameCol(hstmt, 2);
+    char* row_tbl = GetStrCol(hstmt, 3);
+    char* row_type = GetStrCol(hstmt, 4);
+    if (!RowListPush(out, row_cat, row_sch, row_tbl, row_type)) {
       InternalAdbcSetError(error, "out of memory");
       status = ADBC_STATUS_INTERNAL;
       break;
