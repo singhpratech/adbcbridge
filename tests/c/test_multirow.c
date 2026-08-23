@@ -25,6 +25,10 @@ void OdbcQuoteChar(SQLHDBC hdbc, char* out) { out[0] = '"'; out[1] = '\0'; }
 AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt, struct AdbcError* error) {
   return ADBC_STATUS_INVALID_STATE;
 }
+AdbcStatusCode OdbcOpenHdbc(struct OdbcDatabase* db, SQLHDBC* out, struct AdbcError* error) {
+  *out = NULL;
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
 AdbcStatusCode OdbcReaderInit(struct OdbcHandleRef* ref, const struct OdbcReaderOptions* opts,
                               struct ArrowArrayStream* out, struct AdbcError* error) {
   return ADBC_STATUS_NOT_IMPLEMENTED;
