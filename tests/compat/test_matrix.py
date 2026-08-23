@@ -22,6 +22,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFORMIX_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, COLUMNSTORE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, FLIGHTSQL_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFLUXDB3_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -539,6 +540,56 @@ DBS = {
             ("SELECT count(*) FROM orders o JOIN customer c ON o.o_custkey = c.c_custkey",
              (15000,)),
         ]),
+    "influxdb3": dict(
+        # InfluxDB 3 Core, reached over its Arrow Flight SQL endpoint (8181) with the
+        # same Dremio Arrow Flight SQL ODBC driver as the `flightsql` entry -- so the
+        # driver-side notes there apply here too, and this entry exists to run the
+        # workload against a *second*, very different Flight SQL server.
+        #   The database is not part of the Flight SQL protocol: InfluxDB reads it from a
+        # gRPC header, and the driver forwards every connection property it does not
+        # recognise as one, so `database=adbc` is all it takes.  useEncryption=false
+        # matches the server's plain-gRPC listener (no --tls-cert).
+        env="INFLUXDB3_ODBC_DRIVER",
+        conn="Driver={drv};Host=127.0.0.1;Port=18181;useEncryption=false;database=adbc;",
+        # read_only, for two independent reasons: InfluxDB 3's SQL is query-only (it
+        # answers any DDL with "DDL not supported" -- tables appear when line protocol is
+        # written to them), and the driver has no SQLBindParameter at all.  So both tables
+        # are loaded out of band, over the HTTP write API; see tests/compat/README.md.
+        read_only=True,
+        params=False,  # no SQLBindParameter: the parameterised SELECT runs as a literal
+        # InfluxDB's own column shape is not the workload's: the timestamp column of a
+        # table is always named `time` and is the only column that can hold one, and there
+        # is no DATE type (nor DECIMAL, nor a binary type).  `d` is therefore stored as
+        # text and cast here, and `time` is read as `ts` -- which keeps the entry on the
+        # server's real timestamp column instead of a stand-in.
+        select="SELECT i, f, s, b, CAST(d AS DATE) AS d, time AS ts, n, bo"
+               " FROM {t} ORDER BY i",
+        # ... and the catalog reports what the table really holds: the same columns with
+        # `time` in place of `ts`, in InfluxDB's own (alphabetical) order.
+        catalog_cols=("b", "bo", "d", "f", "i", "n", "s", "time"),
+        # `time` has no NULL state -- every point carries one -- so the all-NULL row's ts
+        # reads back as its timestamp, exactly as Access's YESNO reads back False.
+        not_null=("ts",),
+        # No binary type: the two bytes are stored as text, as for the `cratedb` entry.
+        binary_text="\\x0102",
+        # No DECIMAL type either; `n` is a text field, read back as its exact digits.
+        decimal_type="string",
+        # ddl is documentation here (nothing executes it): the line protocol in
+        # README.md writes these fields, and this is the SQL shape it produces.
+        ddl="CREATE TABLE adbc_t (i BIGINT, f DOUBLE, s VARCHAR, b VARCHAR, d VARCHAR,"
+            " time TIMESTAMP, n VARCHAR, bo BOOLEAN)",
+        # adbc_big is loaded with 100,000 points, which is also what
+        # bench/matrix_bench.py times a fetch of on a read_only entry.
+        big_rows=100000,
+        extra=[
+            # Two things only a time-series engine does, over the table the workload
+            # already reads: a time-bucketed aggregate (DataFusion's date_bin) and a
+            # range scan on the timestamp column that InfluxDB partitions by.
+            ("SELECT COUNT(*) FROM (SELECT date_bin(INTERVAL '1 hour', time) AS bucket,"
+             " COUNT(*) AS n FROM adbc_big GROUP BY bucket)", (1,)),
+            ("SELECT COUNT(*), MIN(a), MAX(a) FROM adbc_big"
+             " WHERE time >= '2024-02-29T13:45:10Z'", (100000, 0, 99999)),
+        ]),
     "access": dict(
         env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
         # No server: MDB Tools opens an .mdb file. It is read-only (it executes no DDL and
@@ -650,7 +701,13 @@ def run(name, cfg):
                 cur.execute("INSERT INTO %s VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)" % t_name)
             refresh(cur, cfg, t_name)
         # MDB Tools' SQL parser has no ORDER BY, so read_only sorts client-side instead.
-        cur.execute("SELECT * FROM %s" % t_name if ro else "SELECT * FROM %s ORDER BY i" % t_name)
+        # select: the query that reads adbc_t back, "{t}" taking the table name.  An
+        # entry overrides it where the server cannot present the workload's eight
+        # columns as they are and no view can be created to do it either (InfluxDB 3's
+        # timestamp column is always named `time`, and it has no DATE type), so the
+        # aliases and casts have to live in the query itself.
+        sel = cfg.get("select", "SELECT * FROM {t}" if ro else "SELECT * FROM {t} ORDER BY i")
+        cur.execute(sel.format(t=t_name))
         t = cur.fetch_arrow_table()
         got = [{k.lower(): v for k, v in r.items()} for r in t.to_pylist()]
         got.sort(key=lambda r: r["i"])
@@ -718,7 +775,10 @@ def run(name, cfg):
     # an arbitrary order.  The result-set metadata of a SELECT is unaffected; only the
     # catalog calls are, so those entries compare the column names as a set.
     order = (lambda c: c) if cfg.get("column_order", True) else sorted
-    cols = ["i", "f", "s", "b", "d", "ts", "n", "bo"]
+    # catalog_cols: the columns the catalog really reports for adbc_t, for an entry whose
+    # `select` reads a table shaped differently from the workload's eight columns
+    # (InfluxDB 3's mandatory `time`, which that entry's select presents as `ts`).
+    cols = list(cfg.get("catalog_cols", ("i", "f", "s", "b", "d", "ts", "n", "bo")))
     # No catalog filter is given, so every catalog on the server that happens to
     # hold a table of this name is reported -- shared servers really do have
     # more than one.  Check the columns of each match individually.

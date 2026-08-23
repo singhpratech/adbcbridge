@@ -269,3 +269,21 @@ services:
     environment: { SQLFLITE_PASSWORD: adbc, TLS_ENABLED: "0", PRINT_QUERIES: "0" }
     mem_limit: 2g
     ports: ["127.0.0.1:31337:31337"]
+  # InfluxDB 3 Core: a time-series database whose query interface is Arrow Flight SQL, on
+  # the same port (8181) as its HTTP API -- the Arrow Flight SQL ODBC driver connects to
+  # it, as it does to the `flightsql` service.  In the "extra" profile, so a plain `up -d`
+  # leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d influxdb3
+  # --without-auth runs the server with no token, which is what lets the ODBC connection
+  # in without one; --object-store=memory keeps the database in RAM (removing the
+  # container removes the data).  The matrix entry is read-only -- InfluxDB's SQL is
+  # query-only and the driver has no SQLBindParameter -- so its two tables have to be
+  # written over the HTTP API once the container is up, with
+  #   python3 tests/compat/fixtures/load_influxdb3.py
+  # See tests/compat/README.md.
+  influxdb3:
+    profiles: ["extra"]
+    image: influxdb:3-core
+    command: ["influxdb3", "serve", "--node-id=n1", "--object-store=memory", "--without-auth"]
+    mem_limit: 2g
+    ports: ["127.0.0.1:18181:8181"]
