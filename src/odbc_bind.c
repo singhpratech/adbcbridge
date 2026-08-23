@@ -29,6 +29,9 @@ struct ParamSlot {
   SQLULEN column_size;
   SQLSMALLINT decimal_digits;
   SQLLEN indicator;
+  // What SQLBindParameter is actually pointed at: `indicator` re-encoded for a driver
+  // that reads StrLen_or_IndPtr as a 32-bit SQLLEN (see OdbcIndicatorSet).
+  SQLLEN bound_indicator;
   SQLLEN buffer_length;
   const void* data;  // points into fixed or into Arrow buffers
   struct ArrowBuffer wbuf;  // UTF-16 conversion of string parameters
@@ -411,12 +414,13 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
 // Stage rows [start, start + n) of one column into its buffer/indicator arrays.
 static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSchemaView* sv,
                                      const struct ArrowArrayView* av, int64_t start, int64_t n,
-                                     struct AdbcError* error) {
+                                     bool q, struct AdbcError* error) {
+  // `q`: the driver reads indicator arrays as int32[] with stride 4 (see OdbcIndicatorSet).
   SQLLEN* ind = p->indicators;
   if (!p->buffer) {
     if (ind) {
       for (int64_t i = 0; i < n; i++) {
-        ind[i] = ArrowArrayViewIsNull(av, start + i) ? SQL_NULL_DATA : 0;
+        OdbcIndicatorSet(ind, (size_t)i, ArrowArrayViewIsNull(av, start + i) ? SQL_NULL_DATA : 0, q);
       }
     }
     return ADBC_STATUS_OK;
@@ -426,11 +430,11 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
     const int64_t row = start + i;
     uint8_t* slot = p->buffer + (size_t)i * stride;
     if (ArrowArrayViewIsNull(av, row)) {
-      if (ind) ind[i] = SQL_NULL_DATA;
+      if (ind) OdbcIndicatorSet(ind, (size_t)i, SQL_NULL_DATA, q);
       memset(slot, 0, stride);
       continue;
     }
-    if (ind) ind[i] = 0;
+    if (ind) OdbcIndicatorSet(ind, (size_t)i, 0, q);
     switch (sv->type) {
       case NANOARROW_TYPE_BOOL:
         *slot = (uint8_t)(ArrowArrayViewGetIntUnsafe(av, row) != 0);
@@ -472,7 +476,7 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
         struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(av, row);
         if (s.size_bytes > 0) memcpy(slot, s.data, (size_t)s.size_bytes);
         slot[s.size_bytes] = '\0';
-        if (ind) ind[i] = (SQLLEN)s.size_bytes;
+        if (ind) OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)s.size_bytes, q);
         break;
       }
       case NANOARROW_TYPE_BINARY:
@@ -480,7 +484,7 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
       case NANOARROW_TYPE_FIXED_SIZE_BINARY: {
         struct ArrowBufferView b = ArrowArrayViewGetBytesUnsafe(av, row);
         if (b.size_bytes > 0) memcpy(slot, b.data.as_uint8, (size_t)b.size_bytes);
-        if (ind) ind[i] = (SQLLEN)b.size_bytes;
+        if (ind) OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)b.size_bytes, q);
         break;
       }
       case NANOARROW_TYPE_DECIMAL128:
@@ -500,7 +504,7 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
         memcpy(slot, buf.data, len);
         slot[len] = '\0';
         ArrowBufferReset(&buf);
-        if (ind) ind[i] = (SQLLEN)len;
+        if (ind) OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)len, q);
         break;
       }
       default:
@@ -605,7 +609,8 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     SQLFreeStmt(hstmt, SQL_CLOSE);
     for (int64_t i = 0; i < ncols; i++) {
       struct ArrayParam* p = &params[i];
-      status = ArrayParamFill(p, &svs[i], view->children[i], row, n, error);
+      status = ArrayParamFill(p, &svs[i], view->children[i], row, n,
+                              stmt->reader_opts.sqllen_32bit, error);
       if (status != ADBC_STATUS_OK) break;
       SQLPOINTER data =
           p->buffer ? (SQLPOINTER)p->buffer
@@ -624,7 +629,7 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     SQLRETURN r = stmt->prepared ? SQLExecute(hstmt)
                                  : SQLExecDirect(hstmt, (SQLCHAR*)stmt->query, SQL_NTS);
     if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
-      if (processed == 0 && row == 0) {
+      if (OdbcReadULen(&processed, stmt->reader_opts.sqllen_32bit) == 0 && row == 0) {
         // Nothing was applied.  Let the row-at-a-time path run: it either
         // succeeds (the driver simply dislikes parameter arrays) or reports the
         // genuine data error with the offending row's own diagnostics.
@@ -646,9 +651,12 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     bool have_row_count = true;
     if (r == SQL_NO_DATA) {
       row_count = 0;  // the statement affected no rows at all
-    } else if (!SQL_SUCCEEDED(SQLRowCount(hstmt, &row_count)) || row_count < 0) {
-      have_row_count = false;
-      row_count = 0;
+    } else {
+      row_count = OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
+      if (row_count < 0) {
+        have_row_count = false;
+        row_count = 0;
+      }
     }
     SQLSMALLINT nres = 0;
     SQLNumResultCols(hstmt, &nres);
@@ -664,7 +672,9 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
       }
     }
 
-    int64_t done = (int64_t)processed;
+    // SQL_ATTR_PARAMS_PROCESSED_PTR is a SQLULEN the driver writes; `processed` was
+    // zeroed just above, so a 32-bit-SQLLEN driver's low half is the whole count.
+    int64_t done = (int64_t)OdbcReadULen(&processed, stmt->reader_opts.sqllen_32bit);
     if (!*probed) {
       *probed = true;
       if (done != 1) {
@@ -777,10 +787,11 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
           // tell us (SQLDescribeParam), a NULL value pointer and SQL_C_DEFAULT -- the
           // combination every driver we have met encodes correctly (pyodbc does the same).
           SQLSMALLINT dtype = 0, ddigits = 0, dnullable = 0;
-          SQLULEN dsize = 0;
+          SQLULEN dsize = 0;  // zeroed: a 32-bit-SQLLEN driver writes only the low half
           if (SQL_SUCCEEDED(SQLDescribeParam(hstmt, (SQLUSMALLINT)(i + 1), &dtype, &dsize, &ddigits,
                                              &dnullable)) &&
               dtype != 0 && dtype != SQL_UNKNOWN_TYPE) {
+            dsize = OdbcReadULen(&dsize, stmt->reader_opts.sqllen_32bit);
             p->sql_type = dtype;
             p->column_size = dsize ? dsize : 1;
             p->decimal_digits = ddigits;
@@ -789,9 +800,11 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
           p->data = NULL;
           p->buffer_length = 0;
         }
+        p->bound_indicator = 0;
+        OdbcIndicatorSet(&p->bound_indicator, 0, p->indicator, stmt->reader_opts.sqllen_32bit);
         SQLRETURN r = SQLBindParameter(hstmt, (SQLUSMALLINT)(i + 1), SQL_PARAM_INPUT, p->c_type,
                                        p->sql_type, p->column_size, p->decimal_digits,
-                                       (SQLPOINTER)p->data, p->buffer_length, &p->indicator);
+                                       (SQLPOINTER)p->data, p->buffer_length, &p->bound_indicator);
         if (!SQL_SUCCEEDED(r)) { status = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLBindParameter", error); break; }
       }
       if (status != ADBC_STATUS_OK) break;
@@ -806,8 +819,8 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, struct ArrowArrayS
       if (nres > 0 && out) {
         have_result = true;
       } else {
-        SQLLEN count = 0;
-        if (SQL_SUCCEEDED(SQLRowCount(hstmt, &count)) && count > 0) total += count;
+        SQLLEN count = OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
+        if (count > 0) total += count;
         if (nres > 0) SQLCloseCursor(hstmt);
       }
     }
@@ -858,15 +871,15 @@ AdbcStatusCode OdbcStatementExecuteBound(struct OdbcStatement* stmt, struct Arro
 // Ask the driver for its name of one SQL type via SQLGetTypeInfo. Returns false if the
 // driver has no such type.
 static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, int64_t length, int32_t precision,
-                        int32_t scale, char* out, size_t out_size) {
+                        int32_t scale, bool q, char* out, size_t out_size) {
   SQLHSTMT hstmt = NULL;
   bool done = false;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
   if (SQL_SUCCEEDED(SQLGetTypeInfo(hstmt, sql_type)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
     char name[256] = {0}, params[256] = {0};
     SQLLEN ind1 = 0, ind2 = 0;
-    SQLGetData(hstmt, 1, SQL_C_CHAR, name, sizeof(name), &ind1);
-    SQLGetData(hstmt, 6, SQL_C_CHAR, params, sizeof(params), &ind2);  // CREATE_PARAMS
+    OdbcGetData(hstmt, 1, SQL_C_CHAR, name, sizeof(name), &ind1, q);
+    OdbcGetData(hstmt, 6, SQL_C_CHAR, params, sizeof(params), &ind2, q);  // CREATE_PARAMS
     if (ind1 > 0) {
       // Some drivers return names with embedded parameters, e.g. "NUMBER(19,0)" or
       // "decimal(p,s)"; strip anything from '(' so we can apply our own parameters.
@@ -889,20 +902,20 @@ static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, int64_t length, int3
 
 // Try a chain of candidate SQL types (e.g. BIGINT, then NUMERIC(19,0) for Oracle).
 static void TypeNameFor(SQLHDBC hdbc, const SQLSMALLINT* candidates, int n, int64_t length,
-                        int32_t precision, int32_t scale, const char* fallback, char* out,
+                        int32_t precision, int32_t scale, bool q, const char* fallback, char* out,
                         size_t out_size) {
   for (int i = 0; i < n; i++) {
-    if (TypeNameOne(hdbc, candidates[i], length, precision, scale, out, out_size)) return;
+    if (TypeNameOne(hdbc, candidates[i], length, precision, scale, q, out, out_size)) return;
   }
   snprintf(out, out_size, "%s", fallback);
 }
 
-static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct ArrowSchemaView* sv, char* out,
-                                    size_t out_size, struct AdbcError* error) {
+static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct ArrowSchemaView* sv, bool q,
+                                    char* out, size_t out_size, struct AdbcError* error) {
 #define TYPES(...) ((const SQLSMALLINT[]){__VA_ARGS__})
 #define CHAIN(fallback, ...)                                                              \
   TypeNameFor(hdbc, TYPES(__VA_ARGS__), (int)(sizeof(TYPES(__VA_ARGS__)) / sizeof(SQLSMALLINT)), \
-              0, 0, 0, fallback, out, out_size)
+              0, 0, 0, q, fallback, out, out_size)
   switch (sv->type) {
     case NANOARROW_TYPE_BOOL: CHAIN("BOOLEAN", SQL_BIT, SQL_TINYINT, SQL_SMALLINT); break;
     case NANOARROW_TYPE_INT8: case NANOARROW_TYPE_UINT8:
@@ -910,9 +923,9 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct ArrowSchemaView* 
     case NANOARROW_TYPE_UINT16:
     case NANOARROW_TYPE_INT32: CHAIN("INTEGER", SQL_INTEGER, SQL_BIGINT); break;
     case NANOARROW_TYPE_UINT32: case NANOARROW_TYPE_INT64: case NANOARROW_TYPE_UINT64:
-      if (!TypeNameOne(hdbc, SQL_BIGINT, 0, 0, 0, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_DECIMAL, 0, 19, 0, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_NUMERIC, 0, 19, 0, out, out_size)) {
+      if (!TypeNameOne(hdbc, SQL_BIGINT, 0, 0, 0, q, out, out_size) &&
+          !TypeNameOne(hdbc, SQL_DECIMAL, 0, 19, 0, q, out, out_size) &&
+          !TypeNameOne(hdbc, SQL_NUMERIC, 0, 19, 0, q, out, out_size)) {
         snprintf(out, out_size, "BIGINT");
       }
       break;
@@ -926,8 +939,8 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct ArrowSchemaView* 
     case NANOARROW_TYPE_DATE32: CHAIN("DATE", SQL_TYPE_DATE, SQL_TYPE_TIMESTAMP); break;
     case NANOARROW_TYPE_TIMESTAMP: CHAIN("TIMESTAMP", SQL_TYPE_TIMESTAMP); break;
     case NANOARROW_TYPE_DECIMAL128: case NANOARROW_TYPE_DECIMAL256:
-      if (!TypeNameOne(hdbc, SQL_DECIMAL, 0, sv->decimal_precision, sv->decimal_scale, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_NUMERIC, 0, sv->decimal_precision, sv->decimal_scale, out, out_size)) {
+      if (!TypeNameOne(hdbc, SQL_DECIMAL, 0, sv->decimal_precision, sv->decimal_scale, q, out, out_size) &&
+          !TypeNameOne(hdbc, SQL_NUMERIC, 0, sv->decimal_precision, sv->decimal_scale, q, out, out_size)) {
         snprintf(out, out_size, "DECIMAL(%d,%d)", sv->decimal_precision, sv->decimal_scale);
       }
       break;
@@ -1001,7 +1014,8 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
         break;
       }
       char tname[300];
-      status = ColumnTypeSql(conn->hdbc, &sv, tname, sizeof(tname), error);
+      status = ColumnTypeSql(conn->hdbc, &sv, stmt->reader_opts.sqllen_32bit, tname, sizeof(tname),
+                             error);
       const char* name = schema.children[i]->name ? schema.children[i]->name : "";
       if (conn->reader_opts.nullable_type_format && (schema.children[i]->flags & ARROW_FLAG_NULLABLE)) {
         char wrapped[340];

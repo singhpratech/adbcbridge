@@ -43,6 +43,23 @@ void OdbcHandleRefRelease(struct OdbcHandleRef* ref) {
 }
 
 // ---------------------------------------------------------------------------
+// 32-bit-SQLLEN driver quirk wrappers (see OdbcReaderOptions::sqllen_32bit)
+
+SQLLEN OdbcRowCount(SQLHSTMT hstmt, bool sqllen_32bit) {
+  SQLLEN count = 0;  // zeroed so the driver's low 32 bits are the whole value
+  if (!SQL_SUCCEEDED(SQLRowCount(hstmt, &count))) return -1;
+  return OdbcReadLen(&count, sqllen_32bit);
+}
+
+SQLRETURN OdbcGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT c_type, SQLPOINTER buf,
+                      SQLLEN buf_len, SQLLEN* indicator, bool sqllen_32bit) {
+  SQLLEN ind = 0;
+  SQLRETURN ret = SQLGetData(hstmt, col, c_type, buf, buf_len, &ind);
+  if (indicator) *indicator = OdbcReadLen(&ind, sqllen_32bit);
+  return ret;
+}
+
+// ---------------------------------------------------------------------------
 // Errors
 
 static AdbcStatusCode SqlStateToStatus(const char* s) {
@@ -145,11 +162,11 @@ struct OdbcColumn {
   int32_t scale;
 };
 
-static bool IsUnsigned(SQLHSTMT hstmt, SQLUSMALLINT col) {
-  SQLLEN v = SQL_FALSE;
+static bool IsUnsigned(SQLHSTMT hstmt, SQLUSMALLINT col, bool sqllen_32bit) {
+  SQLLEN v = 0;  // zeroed: a 32-bit-SQLLEN driver only writes the low half
   if (!hstmt) return false;
   if (SQL_SUCCEEDED(SQLColAttribute(hstmt, col, SQL_DESC_UNSIGNED, NULL, 0, NULL, &v))) {
-    return v == SQL_TRUE;
+    return OdbcReadLen(&v, sqllen_32bit) == SQL_TRUE;
   }
   return false;
 }
@@ -226,22 +243,22 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       c->kind = FETCH_BOOL; c->c_type = SQL_C_BIT; c->elem_size = sizeof(unsigned char);
       break;
     case SQL_TINYINT:
-      if (IsUnsigned(hstmt, icol)) { c->kind = FETCH_U8; c->c_type = SQL_C_UTINYINT; }
+      if (IsUnsigned(hstmt, icol, opts->sqllen_32bit)) { c->kind = FETCH_U8; c->c_type = SQL_C_UTINYINT; }
       else { c->kind = FETCH_I8; c->c_type = SQL_C_STINYINT; }
       c->elem_size = 1;
       break;
     case SQL_SMALLINT:
-      if (IsUnsigned(hstmt, icol)) { c->kind = FETCH_U16; c->c_type = SQL_C_USHORT; }
+      if (IsUnsigned(hstmt, icol, opts->sqllen_32bit)) { c->kind = FETCH_U16; c->c_type = SQL_C_USHORT; }
       else { c->kind = FETCH_I16; c->c_type = SQL_C_SSHORT; }
       c->elem_size = sizeof(SQLSMALLINT);
       break;
     case SQL_INTEGER:
-      if (IsUnsigned(hstmt, icol)) { c->kind = FETCH_U32; c->c_type = SQL_C_ULONG; }
+      if (IsUnsigned(hstmt, icol, opts->sqllen_32bit)) { c->kind = FETCH_U32; c->c_type = SQL_C_ULONG; }
       else { c->kind = FETCH_I32; c->c_type = SQL_C_SLONG; }
       c->elem_size = sizeof(SQLINTEGER);
       break;
     case SQL_BIGINT:
-      if (IsUnsigned(hstmt, icol)) { c->kind = FETCH_U64; c->c_type = SQL_C_UBIGINT; }
+      if (IsUnsigned(hstmt, icol, opts->sqllen_32bit)) { c->kind = FETCH_U64; c->c_type = SQL_C_UBIGINT; }
       else { c->kind = FETCH_I64; c->c_type = SQL_C_SBIGINT; }
       c->elem_size = sizeof(SQLBIGINT);
       break;
@@ -379,9 +396,12 @@ static AdbcStatusCode DescribeColumns(SQLHSTMT hstmt, const struct OdbcReaderOpt
     SQLCHAR name[1024];
     SQLSMALLINT name_len = 0;
     struct OdbcColumn* c = &cols[i];
+    // c->column_size is a SQLULEN out-parameter: calloc has zeroed it, so a driver that
+    // writes only its low four bytes still leaves a well-defined value behind.
     SQLRETURN ret = SQLDescribeCol(hstmt, (SQLUSMALLINT)(i + 1), name, sizeof(name), &name_len,
                                    &c->sql_type, &c->column_size, &c->decimal_digits,
                                    &c->nullable);
+    c->column_size = OdbcReadULen(&c->column_size, opts->sqllen_32bit);
     if (!SQL_SUCCEEDED(ret)) {
       AdbcStatusCode s = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLDescribeCol", error);
       for (SQLSMALLINT j = 0; j < i; j++) free(cols[j].name);
@@ -750,6 +770,8 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
 
   for (SQLSMALLINT i = 0; i < r->ncols; i++) {
     struct OdbcColumn* c = &r->cols[i];
+    // A 32-bit-SQLLEN driver fills this as int32[capacity] (stride 4), which fits inside
+    // the same allocation; OdbcIndicatorGet() reads it back with the right stride.
     c->indicators = calloc(capacity, sizeof(SQLLEN));
     if (!c->indicators) {
       InternalAdbcSetError(error, "out of memory");
@@ -786,7 +808,8 @@ static AdbcStatusCode GetDataLong(struct OdbcReader* r, SQLSMALLINT i, bool* is_
     CHECK_NA(INTERNAL, ArrowBufferReserve(&r->scratch, (int64_t)chunk), error);
     uint8_t* dst = r->scratch.data + r->scratch.size_bytes;
     SQLLEN ind = 0;
-    SQLRETURN ret = SQLGetData(hstmt, (SQLUSMALLINT)(i + 1), c->c_type, dst, (SQLLEN)chunk, &ind);
+    SQLRETURN ret = OdbcGetData(hstmt, (SQLUSMALLINT)(i + 1), c->c_type, dst, (SQLLEN)chunk, &ind,
+                                r->opts.sqllen_32bit);
     if (ret == SQL_NO_DATA) break;
     if (!SQL_SUCCEEDED(ret)) {
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLGetData", error);
@@ -824,7 +847,7 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
   bool is_null;
 
   if (c->bound) {
-    SQLLEN ind = c->indicators[row];
+    SQLLEN ind = OdbcIndicatorGet(c->indicators, (size_t)row, r->opts.sqllen_32bit);
     is_null = (ind == SQL_NULL_DATA);
     data = (const uint8_t*)c->buffer + (size_t)row * (size_t)c->elem_size;
     if (ind == SQL_NO_TOTAL || ind < 0) {
@@ -967,7 +990,10 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
       status = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLFetch", error);
       break;
     }
-    for (SQLULEN row = 0; row < r->rows_fetched && status == ADBC_STATUS_OK; row++) {
+    // SQL_ATTR_ROWS_FETCHED_PTR is a SQLULEN the driver writes; it was zeroed above so a
+    // 32-bit-SQLLEN driver's low half is the whole count.
+    const SQLULEN fetched = OdbcReadULen(&r->rows_fetched, r->opts.sqllen_32bit);
+    for (SQLULEN row = 0; row < fetched && status == ADBC_STATUS_OK; row++) {
       if (r->row_status[row] == SQL_ROW_NOROW) continue;
       if (r->row_status[row] == SQL_ROW_ERROR) {
         InternalAdbcSetError(error, "[ODBC] row %lu reported SQL_ROW_ERROR",

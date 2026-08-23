@@ -4,7 +4,8 @@ Usage:
     ADBC_ODBC_DRIVER=build/libadbc_driver_odbc.so python tests/compat/test_matrix.py [db ...]
 
 Each database is enabled by an environment variable holding the path to its ODBC driver:
-    SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, PSQL_ODBC_DRIVER, MARIADB_ODBC_DRIVER, MSSQL_ODBC_DRIVER
+    SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, PSQL_ODBC_DRIVER, MARIADB_ODBC_DRIVER, MSSQL_ODBC_DRIVER,
+    MYSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER, DB2_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars).
 """
 import os, sys, tempfile, pathlib, datetime, decimal
@@ -53,6 +54,9 @@ DBS = {
     "db2": dict(
         env="DB2_ODBC_DRIVER", conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
+        # Db2 folds unquoted identifiers to upper case.  The clidriver libdb2.so is built
+        # with a 32-bit SQLLEN; the driver detects that itself (adbc.odbc.sqllen_32bit),
+        # so no tolerance flag is needed here.  See README.md.
         ident=str.upper),
 }
 
