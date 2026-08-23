@@ -26,6 +26,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, ARCADEDB_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFLUXDB3_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, STARROCKS_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, IGNITE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -830,6 +831,52 @@ DBS = {
             ("SELECT COUNT(*), MIN(a), MAX(a) FROM adbc_big"
              " WHERE time >= '2024-02-29T13:45:10Z'", (100000, 0, 99999)),
         ]),
+    "ignite": dict(
+        # Apache Ignite 2.x is a distributed in-memory key-value grid with a SQL engine on
+        # top of it, reached here over its thin-client/ODBC port (10800) by the ODBC driver
+        # built from the C++ sources the image itself ships -- Apache publishes no prebuilt
+        # libignite-odbc.so for Linux.  See tests/compat/README.md for the root-free build.
+        env="IGNITE_ODBC_DRIVER",
+        conn="Driver={drv};ADDRESS=127.0.0.1:11800;SCHEMA=PUBLIC;",
+        # Every Ignite SQL table is a cache, so it must declare a PRIMARY KEY -- a table
+        # without one is refused outright ("No PRIMARY KEY defined for CREATE TABLE"), and
+        # `i` is the natural key here.  BINARY is Ignite's byte-string type.
+        ddl="CREATE TABLE adbc_t (i INT PRIMARY KEY, f DOUBLE, s VARCHAR(50), b BINARY,"
+            " d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        # Ignite folds an unquoted identifier to upper case ...
+        ident=str.upper,
+        # ... and its ODBC driver answers SQL_IDENTIFIER_QUOTE_CHAR with an empty string,
+        # so adbc_ingest quotes nothing and the names it emits are folded too.  This file's
+        # own SQL therefore has to leave them unquoted as well: a quoted "a" would be a
+        # different column from the A that ingest just created.
+        quote="",
+        # ingest_create: that same PRIMARY KEY requirement is what the generated ingest DDL
+        # cannot satisfy -- it has no notion of a key, and no column of the ingest payload
+        # is one (`a` is [1, 2, NULL], and Ignite allows neither a NULL key nor the
+        # duplicates the append step would insert).  So adbc_ingest cannot *create* a table
+        # here at all; appending into a table that declares its own key works, which is what
+        # the `extra` steps below do -- and what an Ignite user has to do.
+        ingest_create=False,
+        # adbc_big, the table check_big() reads and the one bench/matrix_bench.py times a
+        # fetch of -- so, as for the read_only entries, it is sized for the benchmark rather
+        # than for the assertion.  SYSTEM_RANGE is the H2 table function Ignite's SQL engine
+        # inherits; it fills the table server-side in about three seconds, which is what
+        # `setup` costs on every connection opened.
+        setup=["DROP TABLE IF EXISTS adbc_big",
+               "CREATE TABLE adbc_big (a BIGINT PRIMARY KEY, b VARCHAR)",
+               "INSERT INTO adbc_big (a, b) SELECT X, 'r' || X FROM SYSTEM_RANGE(0, 99999)"],
+        big_rows=100000,
+        # Bulk ingest, in the only shape Ignite has for it: append into a table that
+        # declares a PRIMARY KEY of its own.  EXTRA_ROWS' `a` is unique and never NULL, so
+        # it can be that key.
+        extra=[
+            ("DROP TABLE IF EXISTS adbc_ig{sfx}", None),
+            ("CREATE TABLE adbc_ig{sfx} (a BIGINT PRIMARY KEY, b VARCHAR, c DOUBLE,"
+             " d DATE, e BOOLEAN)", None),
+            (("adbc_ig{sfx}", EXTRA_ROWS), (4,)),
+            ("SELECT count(*) FROM adbc_ig{sfx}", (4,)),
+            ("SELECT b, c FROM adbc_ig{sfx} WHERE a = 3", ("r", None)),
+        ]),
     "access": dict(
         env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
         # No server: MDB Tools opens an .mdb file. It is read-only (it executes no DDL and
@@ -1002,7 +1049,11 @@ def run(name, cfg):
             cur.execute("SELECT s FROM %s WHERE i = 1" % t_name)
         assert cur.fetchone()[0].startswith("héllo")
         # bulk ingest + read back (read_only reads the fixture's big table instead)
-        if ro:
+        # ingest_create: the server refuses the table adbc_ingest would have to create --
+        # Ignite has no table without a PRIMARY KEY, and the ingest payload has no column
+        # that could be one -- so this entry reads the big table `setup` built, exactly as
+        # a read_only one does, and covers bulk ingest through its `extra` steps instead.
+        if ro or not cfg.get("ingest_create", True):
             check_big(cur, cfg, "SELECT %s, %s FROM %s"
                                 % (q(cfg, "a"), q(cfg, "b"), q(cfg, "adbc_big")))
             check_big(cur, cfg, "SELECT %s, %s FROM %s" % (
@@ -1118,7 +1169,11 @@ def check_big(cur, cfg, sql):
     n = cfg.get("big_rows", 5000)
     cur.execute(sql)
     big = cur.fetch_arrow_table()
-    pairs = sorted(zip(big.column("a").to_pylist(), big.column("b").to_pylist()))
+    # By name, case-insensitively: a server that folds an unquoted identifier to upper
+    # case (Ignite, whose driver reports no identifier quote character at all, so the
+    # query above cannot quote them) labels the columns "A" and "B".
+    col = {name.lower(): i for i, name in enumerate(big.schema.names)}
+    pairs = sorted(zip(big.column(col["a"]).to_pylist(), big.column(col["b"]).to_pylist()))
     assert [a for a, _ in pairs] == list(range(n)), len(pairs)
     assert pairs[-1][1] == "r%d" % (n - 1), pairs[-1]
 

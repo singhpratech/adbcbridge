@@ -274,8 +274,11 @@ def bench(name, cfg):
     info = conn.adbc_get_info()
     r = dict(vendor="%s %s" % (info["vendor_name"], info["vendor_version"]), rows=args.rows,
              fetch_rows=args.fetch_rows)
-    if cfg.get("read_only"):
+    if cfg.get("read_only") or not cfg.get("ingest_create", True):
         # No DDL/DML through this driver: read the fixture's largest table instead.
+        # ingest_create=False is the same situation for the write side alone: the server
+        # refuses the table adbc_ingest would create (Ignite has no table without a
+        # PRIMARY KEY), so there is no create-ingest to time -- see tests/compat.
         r["read_only"] = True
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM adbc_big")

@@ -642,6 +642,24 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // parameter-status array -- five bound rows insert one, silently.
     conn->reader_opts.no_param_arrays = true;
   }
+  if (strstr((const char*)name, "ignite")) {
+    // Apache Ignite's ODBC driver (SQL_DRIVER_NAME "Apache Ignite") has no wide SQL type
+    // at all: SQLBindParameter answers HYC00 "Data type is not supported. [typeId=-9]"
+    // for SQL_WVARCHAR, before any value is looked at.  Its SQL_C_WCHAR buffers are also
+    // sized in wchar_t (4 bytes on Linux) where unixODBC passes UTF-16, the same way
+    // Firebird's OdbcFb sizes them.  Its narrow path is UTF-8 -- Ignite stores strings as
+    // UTF-8 and the driver hands the bytes straight through -- so use it.
+    conn->reader_opts.wchar_as_utf8 = true;
+    // Column-wise parameter arrays are accepted and executed, but the NULL indicator is
+    // read from the wrong row: Parameter::Write() tests `buffer.GetInputSize()` on the
+    // whole bound array -- element offset 0 -- and only then copies the buffer and points
+    // it at the row being written.  So every row of a chunk takes row 0's NULL-ness: a
+    // NULL in any later row is sent as whatever bytes sit in that row's data slot, which
+    // for a character or binary column is a length the server cannot parse -- it drops the
+    // connection mid-batch ("Failed to establish connection with any provided hosts" on
+    // the next statement).  One execute per row instead; there the indicator is element 0.
+    conn->reader_opts.no_param_arrays = true;
+  }
   if (strstr((const char*)name, "virtodbc")) {
     // OpenLink Virtuoso ships both an ANSI driver (virtodbc.so) and a Unicode one
     // (virtodbcu.so); both answer SQL_DRIVER_NAME "virtodbc.so", so this keys on either.
