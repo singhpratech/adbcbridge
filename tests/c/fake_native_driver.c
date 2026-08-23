@@ -210,6 +210,35 @@ static AdbcStatusCode FakeConnectionSetOption(struct AdbcConnection* connection,
   return ADBC_STATUS_OK;
 }
 
+// The 1.1.0 typed setters record the type as well as the value, so a test can
+// see that a held option was replayed through the setter it was set with.
+static AdbcStatusCode FakeConnectionSetOptionInt(struct AdbcConnection* connection,
+                                                 const char* key, int64_t value,
+                                                 struct AdbcError* error) {
+  char buf[48];
+  snprintf(buf, sizeof(buf), "int:%lld", (long long)value);
+  return FakeConnectionSetOption(connection, key, buf, error);
+}
+
+static AdbcStatusCode FakeConnectionSetOptionDouble(struct AdbcConnection* connection,
+                                                    const char* key, double value,
+                                                    struct AdbcError* error) {
+  char buf[48];
+  snprintf(buf, sizeof(buf), "double:%g", value);
+  return FakeConnectionSetOption(connection, key, buf, error);
+}
+
+static AdbcStatusCode FakeConnectionSetOptionBytes(struct AdbcConnection* connection,
+                                                   const char* key, const uint8_t* value,
+                                                   size_t length, struct AdbcError* error) {
+  char buf[128];
+  size_t n = length < (sizeof(buf) - 7) / 2 ? length : (sizeof(buf) - 7) / 2;
+  memcpy(buf, "bytes:", 6);
+  for (size_t i = 0; i < n; i++) snprintf(buf + 6 + 2 * i, 3, "%02x", value[i]);
+  buf[6 + 2 * n] = '\0';
+  return FakeConnectionSetOption(connection, key, buf, error);
+}
+
 static AdbcStatusCode FakeConnectionInit(struct AdbcConnection* connection,
                                          struct AdbcDatabase* database,
                                          struct AdbcError* error) {
@@ -387,6 +416,11 @@ AdbcStatusCode AdbcDriverInit(int version, void* raw_driver, struct AdbcError* e
   driver->StatementSetOption = FakeStatementSetOption;
   driver->StatementPrepare = FakeStatementPrepare;
   driver->StatementExecuteQuery = FakeStatementExecuteQuery;
-  if (version >= ADBC_VERSION_1_1_0) { driver->DatabaseGetOption = FakeDatabaseGetOption; }
+  if (version >= ADBC_VERSION_1_1_0) {
+    driver->DatabaseGetOption = FakeDatabaseGetOption;
+    driver->ConnectionSetOptionInt = FakeConnectionSetOptionInt;
+    driver->ConnectionSetOptionDouble = FakeConnectionSetOptionDouble;
+    driver->ConnectionSetOptionBytes = FakeConnectionSetOptionBytes;
+  }
   return ADBC_STATUS_OK;
 }

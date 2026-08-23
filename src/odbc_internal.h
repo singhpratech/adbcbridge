@@ -224,6 +224,7 @@ static inline SQLRETURN OdbcGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLIN
 }
 
 struct OdbcDatabase;
+struct OdbcPreOption;  // odbc_delegate.h
 struct OdbcProxyConnection;
 struct OdbcProxyStatement;
 
@@ -234,9 +235,11 @@ struct OdbcConnection {
   struct OdbcProxyConnection* proxy;
   // Options set before AdbcConnectionInit, kept so that they can be replayed on
   // the native connection when the database turns out to be delegated.
-  char** pre_keys;
-  char** pre_values;
+  struct OdbcPreOption* pre;
   size_t pre_count;
+  // The first of those options that the ODBC path itself did not understand: it
+  // is only an error once the connection is known to be served by ODBC.
+  char* held_option;
   SQLHDBC hdbc;
   bool connected;
   bool autocommit;

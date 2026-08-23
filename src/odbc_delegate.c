@@ -104,6 +104,9 @@ struct StrList {
   size_t capacity;
 };
 
+// Nothing fills a StrList on Windows: neither the driver search nor the
+// odbcinst.ini enumeration behind it exists there.
+#if !defined(_WIN32)
 static void StrListAdd(struct StrList* list, const char* value) {
   if (!value || !*value) return;
   for (size_t i = 0; i < list->count; i++) {
@@ -120,12 +123,18 @@ static void StrListAdd(struct StrList* list, const char* value) {
   if (!copy) return;
   list->items[list->count++] = copy;
 }
+#endif  // !_WIN32
 
 static void StrListFree(struct StrList* list) {
   for (size_t i = 0; i < list->count; i++) free(list->items[i]);
   free(list->items);
   memset(list, 0, sizeof(*list));
 }
+
+// Everything from here to LooksLikePath is used only when a native driver can
+// actually be loaded, which is the POSIX path: on Windows OdbcDelegateTryInit
+// gives up before the search begins (see the note there).
+#if !defined(_WIN32)
 
 /// Split a path list ("a:b:c") into a StrList.
 static void StrListAddPathList(struct StrList* list, const char* path_list) {
@@ -172,6 +181,8 @@ static bool FileExists(const char* path) {
 #endif
 }
 
+#endif  // !_WIN32
+
 /// Does this option value name a filesystem path or a manifest rather than a
 /// bare driver name?  Bare names are alphanumerics, '_' and '-' only.
 static bool LooksLikePath(const char* value) {
@@ -182,6 +193,7 @@ static bool LooksLikePath(const char* value) {
   return false;
 }
 
+#if !defined(_WIN32)
 /// Would loading this file be loading somebody else's code?  Used for the
 /// candidates adbcbridge *derives* itself (the directories of already-loaded
 /// ADBC objects): those are not something the caller asked for by name, so a
@@ -205,6 +217,8 @@ static bool PathIsTrusted(const char* path) {
   return ok;
 #endif
 }
+
+#endif  // !_WIN32
 
 /// True for a process that must not trust the environment (setuid/setgid).
 static bool IsSecureExec(void) {
@@ -955,7 +969,9 @@ static char* BuildNativeUri(enum OdbcNativeFamily family, const char* conn, cons
   return uri;
 }
 
-/// Append `key=value` to a native URI's query string.
+#if !defined(_WIN32)
+/// Append `key=value` to a native URI's query string.  Only the hand-over to a
+/// native driver needs it, which is why it is not compiled on Windows.
 static char* UriWithParams(const char* uri, const struct KeyValueList* params) {
   struct InternalAdbcStringBuilder sb;
   InternalAdbcStringBuilderInit(&sb, strlen(uri) + 64);
@@ -972,6 +988,7 @@ static char* UriWithParams(const char* uri, const struct KeyValueList* params) {
   InternalAdbcStringBuilderReset(&sb);
   return out;
 }
+#endif  // !_WIN32
 
 // ---------------------------------------------------------------------------
 // The other direction: a native URI on the ODBC fallback path
@@ -1361,6 +1378,7 @@ typedef AdbcStatusCode (*AdbcLoadDriverFn)(const char* driver_name, const char* 
 #define ADBC_ODBC_MANIFEST_PLATFORM \
   ADBC_ODBC_MANIFEST_OS "_" ADBC_ODBC_MANIFEST_ARCH ADBC_ODBC_MANIFEST_ENV
 
+#if !defined(_WIN32)
 /// Read the shared-library path out of an ADBC driver manifest (a TOML file
 /// whose [Driver.shared] table maps platform tuples to paths).
 static char* ManifestLibraryPath(const char* manifest_path) {
@@ -1396,7 +1414,6 @@ static char* ManifestLibraryPath(const char* manifest_path) {
   return found;
 }
 
-#if !defined(_WIN32)
 /// Directories of every already-loaded shared object whose path mentions ADBC,
 /// plus their parents (site-packages, lib/, ...), and the driver manager itself.
 struct LoadedObjectScan {
@@ -1943,6 +1960,7 @@ AdbcStatusCode OdbcDelegateTryInit(struct AdbcDatabase* database,
   }
 
 #if defined(_WIN32)
+  (void)self_database_init;
   NativeTargetFree(&target_info);
   return DelegateGiveUp(
       opts,
@@ -2187,8 +2205,35 @@ AdbcStatusCode OdbcProxyDatabaseGetOptionBytes(struct OdbcDelegateProxy* p, cons
                      error);
 }
 
-AdbcStatusCode OdbcProxyConnectionInit(struct OdbcDelegateProxy* p, char* const* pre_keys,
-                                       char* const* pre_values, size_t pre_count,
+/// Replay one held connection option on the native connection.  A typed setter
+/// the native driver does not have is reported as such: dropping the option
+/// silently would be worse.
+static AdbcStatusCode ProxyReplayPreOption(struct OdbcDelegateProxy* p,
+                                           struct AdbcConnection* conn,
+                                           const struct OdbcPreOption* opt,
+                                           struct AdbcError* ne, const char** missing) {
+  switch (opt->type) {
+    case ODBC_PRE_OPTION_INT:
+      if (p->version < ADBC_VERSION_1_1_0 || !p->native->ConnectionSetOptionInt) break;
+      return p->native->ConnectionSetOptionInt(conn, opt->key, opt->number, ne);
+    case ODBC_PRE_OPTION_DOUBLE:
+      if (p->version < ADBC_VERSION_1_1_0 || !p->native->ConnectionSetOptionDouble) break;
+      return p->native->ConnectionSetOptionDouble(conn, opt->key, opt->real, ne);
+    case ODBC_PRE_OPTION_BYTES:
+      if (p->version < ADBC_VERSION_1_1_0 || !p->native->ConnectionSetOptionBytes) break;
+      return p->native->ConnectionSetOptionBytes(conn, opt->key, opt->bytes, opt->length, ne);
+    case ODBC_PRE_OPTION_STRING:
+    default:
+      return p->native->ConnectionSetOption(conn, opt->key, opt->value, ne);
+  }
+  *missing = opt->type == ODBC_PRE_OPTION_INT      ? "ConnectionSetOptionInt"
+             : opt->type == ODBC_PRE_OPTION_DOUBLE ? "ConnectionSetOptionDouble"
+                                                   : "ConnectionSetOptionBytes";
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode OdbcProxyConnectionInit(struct OdbcDelegateProxy* p,
+                                       const struct OdbcPreOption* pre, size_t pre_count,
                                        struct OdbcProxyConnection** out,
                                        struct AdbcError* error) {
   PROXY_ERROR;
@@ -2198,9 +2243,10 @@ AdbcStatusCode OdbcProxyConnectionInit(struct OdbcDelegateProxy* p, char* const*
     return ADBC_STATUS_INTERNAL;
   }
   conn->proxy = p;
+  const char* missing = NULL;
   AdbcStatusCode status = p->native->ConnectionNew(&conn->conn, &ne);
   for (size_t i = 0; status == ADBC_STATUS_OK && i < pre_count; i++) {
-    status = p->native->ConnectionSetOption(&conn->conn, pre_keys[i], pre_values[i], &ne);
+    status = ProxyReplayPreOption(p, &conn->conn, &pre[i], &ne, &missing);
   }
   if (status == ADBC_STATUS_OK) {
     status = p->native->ConnectionInit(&conn->conn, &p->db, &ne);
@@ -2208,6 +2254,10 @@ AdbcStatusCode OdbcProxyConnectionInit(struct OdbcDelegateProxy* p, char* const*
   if (status != ADBC_STATUS_OK) {
     if (conn->conn.private_data) (void)p->native->ConnectionRelease(&conn->conn, NULL);
     free(conn);
+    if (missing) {
+      if (ne.release) ne.release(&ne);
+      return ProxyMissing(p, missing, error);
+    }
     return ProxyFinish(p, status, &ne, error);
   }
   if (ne.release) ne.release(&ne);

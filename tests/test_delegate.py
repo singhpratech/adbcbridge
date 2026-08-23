@@ -52,7 +52,9 @@ class Skipped(Exception):
 
 
 def skip(reason):
-    if pytest is not None:
+    # pytest.skip() raises a BaseException, which main() below cannot catch, and
+    # outside a test pytest turns it into an error: only use it under pytest.
+    if pytest is not None and "PYTEST_CURRENT_TEST" in os.environ:
         pytest.skip(reason)
     raise Skipped(reason)
 
@@ -588,6 +590,61 @@ def test_connection_options_set_before_init_reach_the_native_driver():
         conn_kwargs={"adbc.connection.autocommit": "true"},
     )
     assert "conn:adbc.connection.autocommit=true" in options, options
+
+
+def test_native_only_connection_option_reaches_the_native_driver():
+    """An option ODBC knows nothing about is held until the connection is init'd.
+
+    conn_kwargs are applied before AdbcConnectionInit, where the connection does
+    not yet know whether ODBC or a native driver will serve it, so an option like
+    Flight SQL's adbc.flight.sql.rpc.call_header.* has to be kept, not refused.
+    """
+    options = fake_delegate(
+        "Driver=psqlodbcw.so;Server=h;Database=d;",
+        query="options",
+        conn_kwargs={"adbc.fake.x": "1"},
+    )
+    assert "conn:adbc.fake.x=1" in options, options
+
+
+def test_typed_connection_options_set_before_init_reach_the_native_driver():
+    """The 1.1.0 typed setters hold their options too, and keep the type."""
+    options = fake_delegate(
+        "Driver=psqlodbcw.so;Server=h;Database=d;",
+        query="options",
+        conn_kwargs={
+            "adbc.fake.count": 7,
+            "adbc.fake.seconds": 2.5,
+            "adbc.fake.blob": b"\x01\x02\x03",
+        },
+    )
+    assert "conn:adbc.fake.count=int:7" in options, options
+    assert "conn:adbc.fake.seconds=double:2.5" in options, options
+    assert "conn:adbc.fake.blob=bytes:010203" in options, options
+
+
+def test_held_connection_option_on_the_odbc_path_is_reported():
+    """The same option on a connection ODBC ends up serving is still an error.
+
+    It is raised by AdbcConnectionInit rather than by the setter, which is the
+    first moment the connection knows nobody else will take the option.
+    """
+    drv = os.environ.get("SQLITE_ODBC_DRIVER", "SQLite3")
+    path = os.path.join(tempfile.mkdtemp(), "held.db")
+    try:
+        dbapi.connect(
+            driver=DRIVER,
+            db_kwargs={
+                "uri": f"Driver={drv};Database={path};",
+                "adbc.odbc.delegate": "never",
+            },
+            conn_kwargs={"adbc.nonesuch": "1"},
+        )
+        raise AssertionError("expected NOT_IMPLEMENTED")
+    except dbapi.Error as e:
+        assert "adbc.nonesuch" in str(e), e
+        assert "native ADBC driver" in str(e), e
+    print("held connection option on the ODBC path -> NOT_IMPLEMENTED")
 
 
 def test_delegated_to_names_the_native_driver():
