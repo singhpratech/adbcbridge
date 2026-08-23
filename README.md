@@ -93,9 +93,35 @@ The bridge runs within 7% of the raw ODBC floor; the remaining cost is the ODBC 
 
 That floor is also the ceiling for a single connection, so beating a native ADBC driver
 means doing work it does not: splitting one query across several connections. On 10 M
-rows of PostgreSQL, adbcbridge is 0.36× the native `adbc_driver_postgresql` on one
-connection, reaches parity at four partitions and **1.54×** at eight — see
+rows of PostgreSQL, adbcbridge is 0.30–0.36× the native `adbc_driver_postgresql` on one
+connection, reaches parity at four partitions and **1.42–1.79×** at eight to twelve —
+six independent rounds, each the median of interleaved A/B/C repetitions, every read
+checksum-compared against the single-connection result. See
 [Partitioned reads](#partitioned-reads-executepartitions) and `bench/BENCHMARKS.md`.
+
+### Bulk ingest
+
+`adbc_ingest` sends one `INSERT INTO t VALUES (…),(…),…` per K rows rather than one
+statement per row, inside a single transaction. K is probed against the driver — SQLite's
+999-variable limit, ClickHouse preparing 500 row-groups and then refusing to execute them,
+and Oracle rejecting the multi-row form outright (it falls back to `INSERT ALL … SELECT 1
+FROM dual`) are all discovered at run time and remembered on the connection. It works on
+every driver that can bind a parameter, including the six that mishandle ODBC parameter
+arrays, and `adbc.odbc.rows_per_insert` overrides the choice. 10,000 rows, rows/s:
+
+| Database | one statement per row | multi-row |
+|---|---:|---:|
+| ClickHouse 26 | 16 | **911** |
+| Oracle 23ai | 475 | **23,628** |
+| DuckDB | 24,057 | **344,597** |
+| CockroachDB 26 | 1,205 | **14,259** |
+| MonetDB 11.55 | 12,190 | **138,902** |
+| MySQL 8.4 (50,000 rows) | 20,784 | **200,247** |
+| PostgreSQL 16 | 102,508 | **312,025** |
+| SQLite 3.45 (50,000 rows) | 634,417 | **866,080** |
+
+MariaDB keeps ODBC parameter arrays, which are faster there (103k vs 72k rows/s); Firebird
+gains nothing, because OdbcFb rejects multi-row `VALUES` at prepare time.
 
 ### Rust
 
