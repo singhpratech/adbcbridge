@@ -657,15 +657,168 @@ share of the total, which is why SQL Server and MySQL look flatter there than at
 These were taken while the same host was serving other containers; treat them as
 ratios, not as three significant figures.
 
+## Beating the native driver: partitioned reads
+
+The section above ends at a wall. adbcbridge reads PostgreSQL within a couple of percent
+of the raw-ODBC floor, and the floor is 1.6x slower than the native
+`adbc_driver_postgresql` — because the floor *is* psqlodbc's text-protocol decoding, and
+no bridge can remove the ODBC driver from underneath itself. Shaving the inner loop
+cannot win this; the gap is not in our code.
+
+So the way past it is to do work the native driver does not do. ADBC's own
+`AdbcStatementExecutePartitions` / `AdbcConnectionReadPartition` exist for splitting one
+query across several connections, and PostgreSQL's `ctid` makes an exact split cheap: see
+[Partitioned reads](../README.md#partitioned-reads-executepartitions) in the README for
+the mechanism and the rules for when the driver refuses to split.
+
+Reproduce with:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+POSTGRES_ODBC_DRIVER=/path/to/psqlodbcw.so \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python bench/partition_bench.py --pg postgresql://adbc:adbc@127.0.0.1:5432/adbc \
+    --table bench10m --reps 5
+```
+
+### Setup
+
+PostgreSQL 16.15 in Docker (`--memory=4g`, `shared_buffers=1GB`, `work_mem=64MB`),
+`bench1m` / `bench10m` = `(id int4, val float8, txt varchar(32), dt date)`, 65 MB /
+651 MB of heap, `VACUUM ANALYZE`d, queried as `SELECT id, val, txt, dt FROM …`. Same
+machine as the rest of this file (i9-13900HK, 14C/20T); host load average was 3.8–7.1
+throughout, so a quarter to a third of the machine was already busy with other work.
+Treat the ratios as solid and the third significant figure as noise.
+
+Every timing is **wall clock, end to end** — opening the connections, executing,
+fetching and building the Arrow table — because that is what a caller waits for. The
+variants are interleaved within each repetition so a drift in load lands on all of them,
+and the median of 5 is reported with the spread. Every adbcbridge run is checksummed
+(count, sum, min and max of every column) against the single-connection read, and the
+benchmark aborts on a mismatch: none occurred.
+
+### 1,000,000 rows
+
+| variant | median | min | max | Mrow/s | vs native |
+|---|---:|---:|---:|---:|---:|
+| adbcbridge, N=1 | 0.526 s | 0.511 | 0.544 | 1.90 | 0.40x |
+| adbcbridge, N=2 | 0.298 s | 0.283 | 0.305 | 3.35 | 0.70x |
+| adbcbridge, N=4 | 0.199 s | 0.197 | 0.224 | 5.02 | 1.04x |
+| **adbcbridge, N=8** | **0.156 s** | 0.145 | 0.166 | **6.43** | **1.34x** |
+| native `adbc_driver_postgresql` | 0.208 s | 0.207 | 0.225 | 4.81 | 1.00x |
+| *floor*: raw `SQLBindCol`+`SQLFetch` | 0.493 s | 0.483 | 0.513 | 2.03 | — |
+
+### 10,000,000 rows
+
+| variant | median | min | max | Mrow/s | vs native |
+|---|---:|---:|---:|---:|---:|
+| adbcbridge, N=1 | 5.145 s | 5.047 | 5.415 | 1.94 | 0.36x |
+| adbcbridge, N=2 | 2.747 s | 2.601 | 2.888 | 3.64 | 0.68x |
+| adbcbridge, N=4 | 1.712 s | 1.507 | 1.747 | 5.84 | 1.10x |
+| **adbcbridge, N=8** | **1.216 s** | 1.207 | 1.308 | **8.22** | **1.54x** |
+| native `adbc_driver_postgresql` | 1.875 s | 1.774 | 1.894 | 5.33 | 1.00x |
+| *floor*: raw `SQLBindCol`+`SQLFetch` | 4.898 s | 4.745 | 5.004 | 2.04 | — |
+
+**The honest summary: parity at N=4, ~1.5x at N=8.** One connection is 0.36x native,
+which is the ODBC boundary and has not moved. Four connections draw level (1.04x at 1 M,
+1.10x at 10 M). Eight are a third to half again faster than the native driver. That is
+the whole result — the win is not in our per-row code, it is in using four to eight cores
+where the native driver uses one.
+
+Note also that N=1 (5.145 s) and the raw ODBC floor (4.898 s) are within 5% of each
+other at 10 M rows, which is the same finding as the section above at a ten times larger
+size: our Arrow conversion is nearly free, and the read is psqlodbc.
+
+### Where the speed-up stops, and why
+
+Scaling is real but sublinear, and it flattens hard past eight:
+
+| step | 1M | 10M |
+|---|---:|---:|
+| N=1 -> N=2 | 1.76x | 1.87x |
+| N=2 -> N=4 | 1.50x | 1.60x |
+| N=4 -> N=8 | 1.28x | 1.41x |
+| N=8 -> N=16 (10 M only) | — | 1.07x |
+
+Three measurements say what the limit is and, just as usefully, what it is not.
+
+**It is not the Python GIL.** Reading the same descriptors on a `ProcessPoolExecutor`
+instead of a `ThreadPoolExecutor` is not faster — 0.80x to 0.99x across N=1..16, i.e.
+slightly *slower* once the Arrow tables have to be pickled back. The ODBC fetch and the
+Arrow conversion both release the GIL, so threads are already parallel.
+
+**It is not that the slices get less efficient.** One slice of an 8-way split of
+`bench10m` takes 0.731 s read on its own; one eighth of the 5.801 s single-connection
+read is 0.725 s. A slice does exactly its proportional share of work at exactly the
+unsliced rate — the `ctid` range scan costs nothing extra.
+
+**It is CPU, most of it on the client.** Measuring the server container's cgroup CPU
+against the client process's:
+
+| N | wall | client CPU (user+sys) | server CPU | cores busy |
+|---|---:|---:|---:|---:|
+| 1 | 6.13 s | 7.79 s | 1.83 s | ~1.6 |
+| 4 | 2.00 s | 8.60 s | 2.59 s | ~5.6 |
+| 8 | 1.42 s | 11.27 s | 3.37 s | ~10.3 |
+
+Two things follow. First, the work is overwhelmingly client-side: psqlodbc decoding
+PostgreSQL's text protocol costs four times what the server spends producing it, which is
+the same thing the floor measurement says. Second, doing it eight ways costs **1.52x more
+total CPU** than doing it once (14.6 core-seconds against 9.6) — per-connection setup,
+eight simultaneous 8 MiB rowset buffers and eight Arrow builders competing for 24 MiB of
+L3. At N=8 about ten cores are busy on a fourteen-core machine that was already a quarter
+loaded, so N=16 adds only 7%: there are no more cores to give.
+
+The practical reading is that N should be roughly the number of cores you can spare, that
+four to eight is where the returns are, and that a bigger table pushes the useful N up
+(the 10 M numbers scale better than the 1 M ones at every step, because the fixed
+per-connection cost is amortised further).
+
+### Prefetch: measured, and largely worthless
+
+The other mechanism tried was overlapping `SQLFetch` with the Arrow conversion on a
+background thread (`adbc.odbc.prefetch`; see [Prefetch](../README.md#prefetch)). It
+works, it is correct, and it is worth almost nothing:
+
+| driver | 1,000,000 rows | prefetch=0 | prefetch=1 | prefetch=2 |
+|---|---|---:|---:|---:|
+| psqlodbc, default | PostgreSQL 16 | 0.534 s | 0.535 s (1.00x) | 0.528 s (1.01x) |
+| psqlodbc, `UseDeclareFetch=1` | PostgreSQL 16 | 0.651 s | 0.617 s (1.06x) | 0.592 s (1.10x) |
+| sqliteodbc | SQLite 3.45 | 0.597 s | 0.592 s (1.01x) | 0.591 s (1.01x) |
+| MariaDB Connector/ODBC | MariaDB 11 | 0.303 s | 0.291 s (1.04x) | 0.324 s (0.93x) |
+
+The reason is structural, not a shortcoming of the implementation: **there is no socket
+wait inside `SQLFetch` to hide.** psqlodbc in its default mode drains the entire result
+set into client memory during `SQLExecDirect`, so every subsequent `SQLFetch` is a memory
+copy; sqliteodbc is in-process and has no socket at all; MariaDB Connector/ODBC likewise
+buffers the result. Only psqlodbc's cursor mode (`UseDeclareFetch=1`, which is *slower*
+overall) leaves real network waits in `SQLFetch`, and that is the one row of the table
+where prefetch earns anything — 6–10%. At depth 2 on MariaDB it is a net loss, because a
+second 8 MiB rowset buffer costs more in cache than the overlap saves.
+
+This is why prefetch is off by default and why partitioning is the mechanism that carries
+the result. SQL Server was not measured: the only SQL Server container on this host
+belongs to another workload and starting a second one was out of scope.
+
 ## Files
 
 - `bench/fetch_bench.py` — the benchmark harness (all three paths, batch-size
   sweep, per-column attribution, unbound-column cliff, cProfile).
 - `bench/odbc_floor.c` — raw `SQLBindCol`/`SQLFetch` floor, built on demand by
   the harness with `cc -O2 ... -lodbc`.
+- `bench/partition_bench.py` — the partitioned read: adbcbridge at N partitions on N
+  threads over N connections, against native `adbc_driver_postgresql` and the raw ODBC
+  floor, with a full-result checksum at every N.
+- `bench/prefetch_bench.py` — `adbc.odbc.prefetch` at several depths against any ODBC
+  driver, checksummed against the depth-0 read.
 - `bench/ingest_bench.py`, `bench/matrix_bench.py` — the write path.
 - `bench/verify_array_binding.py` — differential check that array binding and the
   row-at-a-time fallback produce identical data and identical rows-affected.
+- `tests/test_partitions.py`, `tests/c/test_partition.c` — partition equivalence (every
+  partition count over every table size, dead tuples, an empty table, descriptors read out
+  of order and concurrently), the single-partition fallback, and the SQL scanner.
+- `tests/test_prefetch.py` — prefetch equivalence, an error mid-stream, and aborting a
+  stream while the fetch thread is running.
 - `tests/c/test_multirow.c`, `test_multirow_ingest` in `tests/test_sqlite.py` — the
   multi-row `INSERT` text and its behaviour (NULLs in every row-group position, a batch
   that is not a multiple of K, a single-row batch, a failure that must leave no rows,
