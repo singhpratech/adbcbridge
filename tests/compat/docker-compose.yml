@@ -417,3 +417,30 @@ services:
     mem_limit: 3g
     shm_size: 1g
     ports: ["127.0.0.1:15443:5432"]
+  # YDB: a distributed HTAP database whose native interface is gRPC/YQL, but which also
+  # serves a PostgreSQL-compatible wire protocol on 5432 -- that is what the matrix entry
+  # connects to, with psqlodbc.  In the "extra" profile, so a plain `up -d` leaves it
+  # alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d ydb
+  #   The `command` is not optional: the PG wire listener is there in every start, but
+  # the SQL behind it is refused ("PG syntax is disabled") until the three feature flags
+  # below are on, and this image's entrypoint has no environment variable for them -- it
+  # passes its own arguments straight through to `local_ydb deploy`.  The names have to
+  # be the *snake_case* protobuf field names of NKikimrConfig.TFeatureFlags: the config
+  # the tool writes is snake_case throughout, and ydbd rejects an unknown field outright
+  # ("unknown field \"EnablePgSyntax\"") and exits.
+  #   hostname: localhost is what the cluster registers itself under; the node has to be
+  # able to reach itself by that name.
+  #   The image ships no users at all, and psqlodbc will not send an empty password, so
+  # an `adbcuser` role has to be created once the container is up -- one `ydb sql`
+  # command, see tests/compat/README.md.
+  ydb:
+    profiles: ["extra"]
+    image: ydbplatform/local-ydb:latest
+    hostname: localhost
+    command: >
+      --enable-feature-flag enable_pg_syntax
+      --enable-feature-flag enable_table_pg_types
+      --enable-feature-flag enable_temp_tables
+    mem_limit: 3g
+    ports: ["127.0.0.1:15444:5432"]

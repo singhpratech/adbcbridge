@@ -4080,3 +4080,241 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down cloudberr
 # or, if started standalone:
 docker rm -f adbcbridge-cloudberry
 ```
+
+## YDB (PostgreSQL wire protocol)
+
+YDB is a distributed HTAP database whose native interface is gRPC with its own query
+language, YQL. It also serves a **PostgreSQL-compatible wire protocol**, and that is
+what this entry drives, with the same `psqlodbc` build the `postgres` entry uses — there
+is no YDB ODBC driver. Only the wire protocol and a thin `pg_catalog` emulation are
+PostgreSQL's; the storage engine, the DDL rules and the catalog underneath are YDB's own.
+
+### Get the ODBC driver without root
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export YDB_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+(or, if the `postgres` entry is already set up,
+`export YDB_ODBC_DRIVER=$POSTGRES_ODBC_DRIVER` — it is the same library.)
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d ydb
+# or standalone:
+docker run -d --name adbcbridge-ydb -h localhost --memory=3g \
+  -p 127.0.0.1:15444:5432 ydbplatform/local-ydb:latest \
+  --enable-feature-flag enable_pg_syntax \
+  --enable-feature-flag enable_table_pg_types \
+  --enable-feature-flag enable_temp_tables
+```
+
+It takes about a minute to bring up its single-node cluster, and settles at roughly
+500 MB resident. It is ready when the container reports healthy, or equivalently when
+this succeeds:
+
+```sh
+docker exec adbcbridge-ydb /health_check
+```
+
+#### The feature flags, and why they are arguments rather than environment variables
+
+The PG listener on 5432 is open from the first start, but the SQL behind it is refused —
+`SQLDriverConnect` fails with `Status: GENERIC_ERROR ... Error: PG syntax is disabled` —
+until `enable_pg_syntax` is on. YDB's own documentation sets these through
+`YDB_FEATURE_FLAGS` (alongside `POSTGRES_PORT`, `YDB_USE_IN_MEMORY_PDISKS` and friends),
+but **this image's entrypoint reads none of those variables**: `/initialize_local_ydb`
+passes its own arguments straight through to `local_ydb deploy`, whose flag option is
+`--enable-feature-flag`. The port is fixed at 5432 by the `--fixed-ports` the entrypoint
+always passes, so publishing `15444:5432` is all the port mapping needed.
+
+The names must be the **snake_case protobuf field names** of
+`NKikimrConfig.TFeatureFlags`, which is what the generated `config.yaml` uses throughout.
+A name in the CamelCase spelling the binary's own strings show (`EnablePgSyntax`) is
+written into that config verbatim and then rejected by `ydbd` at startup:
+
+```
+Caught exception: .../json2proto.cpp:594: unknown field "EnablePgSyntax"
+  for "NKikimrConfig.TFeatureFlags"
+```
+
+`ydbd` exits, `local_ydb deploy` never returns, and the container sits `unhealthy` with
+nothing in `docker logs` but `[ydb|init] Starting YDB...`. The message is only in
+`/ydb_data/cluster/node_1/stderr` inside the container — worth knowing, because that is
+the shape of *any* bad flag name here.
+
+#### Create the role the matrix connects as
+
+The image ships **no users at all** (`ALTER USER root ...` answers `User not found`), and
+login authentication is on, so the PG wire answers `FATAL: UNAUTHORIZED` for every
+name/password pair and `fe_sendauth: no password supplied` when the password is empty —
+`libpq` refuses to send an empty one. Create a role once the container is up (the
+`docker exec` lines below name the standalone container; under compose it is
+`compat-ydb-1`):
+
+```sh
+docker exec adbcbridge-ydb /ydb --endpoint grpc://localhost:2136 --database /local \
+  --no-discovery sql -s "CREATE USER adbcuser PASSWORD 'Ydb!Bridge2026'"
+docker exec adbcbridge-ydb /ydb --endpoint grpc://localhost:2136 --database /local \
+  --no-discovery sql -s 'GRANT ALL ON `/local` TO adbcuser'
+```
+
+Both are needed: without the `GRANT` the role logs in and queries, but every
+`CREATE TABLE` comes back `UNAUTHORIZED ... Access denied for scheme request`. The
+password may not contain the user name (`Password must not contain user name`), which
+rules out the `adbc`/`adbc` pair the other entries use.
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py ydb
+# ydb       PASS  (PostgreSQL (via ODBC) 14.0.5)
+```
+
+### The connection string: two psqlodbc settings
+
+```
+Driver={drv};Server=127.0.0.1;Port=15444;Database=local;Uid=adbcuser;
+Pwd=Ydb!Bridge2026;BoolsAsChar=0;UseServerSidePrepare=0;
+```
+
+`Database=local` is the database the single-node image creates (YDB path `/local`).
+
+**`BoolsAsChar=0`** — without it psqlodbc reports every `BOOLEAN` column as a
+`VARCHAR(5)` holding `"1"`/`"0"` instead of `SQL_BIT`, so `bo` would read back as a
+string. The `questdb` and `arcadedb` entries need the same setting for the same reason.
+
+**`UseServerSidePrepare=0`** is what makes any NULL reachable at all — see below.
+
+### Server limitation: no NULL bind parameter
+
+YDB's PG wire does not implement a NULL parameter. In the extended query protocol a
+`Bind` message gives each parameter a length, with **-1** meaning NULL; YDB reads that as
+a zero-length *value* instead. Through ODBC that surfaces as a different failure per
+column type, none of which mentions NULL:
+
+| column type | what a bound NULL does |
+|---|---|
+| `TEXT`, `VARCHAR` | stored as `''` — **silently**, no diagnostic |
+| `BYTEA` | stored as `b''` — silently |
+| `INTEGER`, `DATE`, `TIMESTAMP`, `NUMERIC`, `BOOLEAN` | `ERROR: invalid input syntax for type <t>: ""` |
+| a row with several NULLs | `Fatal: mkql_terminator.cpp:45: ERROR: invalid byte sequence for encoding "UTF8": 0xff`, and the connection is dropped |
+
+This is the server, not psqlodbc and not adbcbridge, and a ~70-line stdlib PostgreSQL v3
+frontend with no ODBC anywhere in the path shows it: connect, create
+`(i int4 PRIMARY KEY, v int4, s text)`, then
+
+* `INSERT INTO pgw VALUES (1, NULL, NULL)` over the **simple** query protocol → `ok`;
+* the same insert as `Parse`/`Bind`/`Execute` with parameter lengths `-1` → the server
+  closes the socket without even an `ErrorResponse`.
+
+A literal `NULL` in the SQL text is handled correctly, which is what the fix uses:
+psqlodbc's **`UseServerSidePrepare=0`** stops it using the extended protocol at all and
+substitutes bound values into the statement text, where a NULL becomes the literal
+`NULL`. With that one setting the whole workload — the all-NULL second row, the NULLs in
+the ingest payload — goes through unchanged, and the entry needs no `null_params=False`.
+
+### Driver quirks: two, both on existing flags
+
+Both are keyed on the server, not on the driver name — `psqlodbcw.so` drives ten servers
+in this matrix and a name-keyed quirk would fire on real PostgreSQL. See
+`OdbcDetectQuirks` in `src/odbc_driver.c`.
+
+#### Identifying YDB at all
+
+YDB is the only PostgreSQL-wire server here that `SELECT version()` does **not** name:
+
+```
+PostgreSQL 16.10 on x86_64-pc-linux-gnu, compiled by clang version 20.1.8, 64-bit
+```
+
+It does name itself in the `server_version` **ParameterStatus** of the startup handshake
+— `14.5 (ydb stable-23-4)` — but psqlodbc keeps that to itself and reports the bare
+`14.0.5` as `SQL_DBMS_VER`, so nothing reachable through ODBC carries the string "ydb".
+What YDB *does* do differently is map the `server_version` **setting** to `version()`
+itself, so `SHOW server_version` hands back the whole banner where every other server on
+this wire answers with a bare version number:
+
+| server | `SELECT version()` | `SHOW server_version` |
+|---|---|---|
+| PostgreSQL 16 | `PostgreSQL 16.15 (Debian ...) on x86_64-...` | `16.15 (Debian 16.15-1.pgdg13+2)` |
+| YDB | `PostgreSQL 16.10 on x86_64-...` | `PostgreSQL 16.10 on x86_64-...` |
+
+So the quirk asks for both and fires only when they are the same string. That extra query
+runs only for `psqlodbc` connections whose `version()` matched no other marker.
+
+#### Quirk 1: every table needs a PRIMARY KEY (`ddl_extra_column`)
+
+YDB refuses any `CREATE TABLE` that does not declare one:
+
+```
+Error: Pre type annotation, code: 1020
+  <main>:1:1: Error: Primary key is required for ydb tables.
+```
+
+`adbc_t` can simply declare `i INTEGER PRIMARY KEY`, the way the `cockroachdb` and
+`matrixone` entries do. The **generated ingest DDL** cannot: `adbc_ingest` builds
+`CREATE TABLE t (<the payload's columns>)` and no ingested column is a candidate — a YDB
+primary key is implicitly `NOT NULL` (`Tried to insert NULL value into NOT NULL column`)
+and any ingested column may be NULL. So the driver appends a key the server fills in
+itself, exactly as GreptimeDB's mandatory `TIME INDEX` column is appended:
+
+```c
+conn->reader_opts.ddl_extra_column = "adbc_pk SERIAL PRIMARY KEY";
+```
+
+The ingested columns are untouched, and `SERIAL` numbers the rows as they arrive
+(verified through a multi-row `INSERT` and through `mode="replace"`).
+
+#### Quirk 2: `pg_attribute` is empty (`no_sql_columns`)
+
+YDB lists its tables in `pg_catalog.pg_class` — `SQLTables` works — but
+`pg_catalog.pg_attribute` and `pg_catalog.pg_attrdef` are both **empty**
+(`SELECT count(*)` → 0). psqlodbc's `SQLColumns` joins `pg_class` to `pg_attribute`, so
+it returns `SQL_SUCCESS` with a zero-row result set and every table looks like it has no
+columns. Same shape as ArcadeDB (where that query fails on the server instead), and the
+same existing flag:
+
+```c
+conn->reader_opts.no_sql_columns = true;
+```
+
+`GetObjects` and `GetTableSchema` then describe `SELECT * FROM <table> WHERE 1=0`, which
+is where `GetTableSchema` already got a table's columns from. `pg_settings` is empty too;
+nothing here needs it.
+
+### Entry notes
+
+The rest of the workload is plain PostgreSQL and needs a single tolerance flag:
+
+| flag | why |
+|---|---|
+| `decimal_type="decimal128(28, 3)"` | YDB does not report the declared precision of a `NUMERIC` over the wire, so psqlodbc falls back to its own maximum (28) with the column's scale — as it does for QuestDB's `DECIMAL` and RisingWave's unqualified `NUMERIC` |
+
+Everything else round-trips exactly: `INTEGER`, `DOUBLE PRECISION`, `VARCHAR(50)`
+(including `"héllo 🚀"` — the astral-plane emoji survives), `BYTEA` (`b"\x01\x02"`),
+`DATE`, `TIMESTAMP` at full microsecond precision (`.123456`, not rounded), `BOOLEAN`,
+the all-NULL second row, the parameterised `SELECT`, bulk ingest in all three modes, the
+5,000-row batched read, `GetObjects`, `GetTableSchema` and the error text
+(`Cannot find table 'db.[/local/adbc_no_such_table]'`).
+
+### Benchmark
+
+```sh
+ADBC_MATRIX_SUFFIX=_ydb python bench/matrix_bench.py \
+  --rows 10000 --fetch-rows 100000 --pyodbc-timeout 300 ydb
+```
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down ydb
+# or, if started standalone:
+docker rm -f adbcbridge-ydb
+```

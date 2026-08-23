@@ -747,8 +747,7 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       // ("inconvertible types: STRING -> BINARY").  One execute per row instead, which
       // psqlodbc sends as a typed PQexecPrepared.
       conn->reader_opts.no_param_arrays = true;
-    }
-    if (strstr(version, "arcadedb")) {
+    } else if (strstr(version, "arcadedb")) {
       // ArcadeDB serves the PostgreSQL wire protocol over its own multi-model engine and
       // emulates enough of pg_catalog for psqlodbc's SQLTables, but not for its
       // SQLColumns: that query nests its joins in parentheses -- "((pg_class c inner join
@@ -759,6 +758,34 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       // columns.  An empty result carries no return code to fall back on, so skip the
       // call and describe "SELECT * FROM <table> WHERE 1=0" instead.
       conn->reader_opts.no_sql_columns = true;
+    } else {
+      // YDB is the one PostgreSQL-wire server here that version() does not name: it
+      // answers with a plain "PostgreSQL 16.10 on x86_64-pc-linux-gnu, compiled by
+      // clang ..." banner, indistinguishable from a real PostgreSQL's.  It does name
+      // itself in the server_version *parameter status* of the startup handshake
+      // ("14.5 (ydb stable-23-4)"), but psqlodbc keeps that to itself -- SQL_DBMS_VER
+      // is the bare "14.0.5".  What YDB does do differently is map the server_version
+      // *setting* to version() itself, so "SHOW server_version" hands back that whole
+      // banner, where PostgreSQL -- and every other server reached over this wire --
+      // answers with a bare version number ("16.10").  So: ask, and compare.  One
+      // small query, and only when version() matched no other marker.
+      char setting[256];
+      OdbcServerScalarString(conn->hdbc, "SHOW server_version", setting, sizeof(setting));
+      if (setting[0] != '\0' && strcmp(setting, version) == 0) {
+        // Every YDB table must have a PRIMARY KEY -- a CREATE TABLE without one is
+        // refused outright ("Primary key is required for ydb tables") -- and an ingest
+        // payload need not carry a column that could be one: the key may not be NULL,
+        // and any ingested column may be.  Add one the server fills in itself, the way
+        // GreptimeDB's mandatory TIME INDEX column is added below; the ingested columns
+        // are left exactly as they were.
+        conn->reader_opts.ddl_extra_column = "adbc_pk SERIAL PRIMARY KEY";
+        // YDB lists its tables in pg_catalog.pg_class but leaves pg_catalog.pg_attribute
+        // empty, so psqlodbc's SQLColumns -- which joins the two -- answers SQL_SUCCESS
+        // with a zero-row result set and every table looks like it has no columns.  Same
+        // shape as ArcadeDB above, and the same fix: describe "SELECT * FROM <table>
+        // WHERE 1=0" instead.
+        conn->reader_opts.no_sql_columns = true;
+      }
     }
   }
   if (strstr((const char*)name, "myodbc") && !conn->reader_opts.txn_capable) {
