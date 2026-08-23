@@ -210,9 +210,19 @@ static inline SQLRETURN OdbcGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLIN
 }
 
 struct OdbcDatabase;
+struct OdbcProxyConnection;
+struct OdbcProxyStatement;
 
 struct OdbcConnection {
   struct OdbcDatabase* db;
+  // Non-NULL when a native ADBC driver serves this connection: every call is
+  // forwarded to it and none of the ODBC state below is used.
+  struct OdbcProxyConnection* proxy;
+  // Options set before AdbcConnectionInit, kept so that they can be replayed on
+  // the native connection when the database turns out to be delegated.
+  char** pre_keys;
+  char** pre_values;
+  size_t pre_count;
   SQLHDBC hdbc;
   bool connected;
   bool autocommit;
@@ -221,6 +231,8 @@ struct OdbcConnection {
 
 struct OdbcStatement {
   struct OdbcConnection* conn;
+  // Non-NULL when a native ADBC driver serves this statement (see OdbcConnection).
+  struct OdbcProxyStatement* proxy;
   struct OdbcHandleRef* ref;
   char* query;
   bool prepared;           // SQLPrepare has been issued for `query` on `ref->hstmt`

@@ -34,10 +34,14 @@ struct OdbcDatabase {
   char* password;
   struct OdbcReaderOptions reader_opts;
   struct OdbcDelegateOptions delegate;
+  // Non-NULL when a native ADBC driver serves this database: every call is
+  // forwarded to it and the ODBC environment above is never opened.
+  struct OdbcDelegateProxy* proxy;
 };
 
 static void OdbcDatabaseFree(struct OdbcDatabase* db) {
   if (!db) return;
+  OdbcDelegateProxyRelease(db->proxy);
   if (db->henv) SQLFreeHandle(SQL_HANDLE_ENV, db->henv);
   free(db->connection_string);
   free(db->dsn);
@@ -90,6 +94,9 @@ static AdbcStatusCode OdbcDatabaseSetOption(struct AdbcDatabase* database, const
   if (OdbcDelegateSetOption(&db->delegate, key, value, &delegate_status, error)) {
     return delegate_status;
   }
+  // A delegated database is the native driver's: ODBC-only options (batch_size,
+  // ...) are meaningless to it and it says so itself.
+  if (db->proxy) return OdbcProxyDatabaseSetOption(db->proxy, key, value, error);
   if (strcmp(key, ADBC_OPTION_URI) == 0 || strcmp(key, ADBC_ODBC_OPTION_CONNECTION_STRING) == 0) {
     return SetString(&db->connection_string, value);
   } else if (strcmp(key, ADBC_ODBC_OPTION_DSN) == 0) {
@@ -136,20 +143,42 @@ static AdbcStatusCode OdbcDatabaseInit(struct AdbcDatabase* database, struct Adb
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
 
-  // If a native ADBC driver fits this target, hand the whole driver over to it
-  // and never open ODBC at all.  Any failure in "auto" mode falls through here
-  // with a note in adbc.odbc.delegate.last_error.
+  // If a native ADBC driver fits this target, let it serve the database and
+  // never open ODBC at all.  Any failure in "auto" mode falls through here with
+  // a note in adbc.odbc.delegate.last_error.
   struct OdbcDelegateTarget target = {db->connection_string, db->dsn, db->username,
                                       db->password};
-  bool delegated = false;
-  AdbcStatusCode delegate_status = OdbcDelegateTryInit(
-      database, OdbcDatabaseInit, &target, &db->delegate, &delegated, error);
-  if (delegated) {
-    // The native driver owns database->private_data (and the driver table) now.
-    OdbcDatabaseFree(db);
-    return delegate_status;
-  }
+  AdbcStatusCode delegate_status =
+      OdbcDelegateTryInit(database, OdbcDatabaseInit, &target, &db->delegate, &db->proxy, error);
   if (delegate_status != ADBC_STATUS_OK) return delegate_status;
+  if (db->proxy) return ADBC_STATUS_OK;
+
+  // Options meant for a native driver were accepted while delegation was still
+  // possible.  It did not happen, so they would be silently dropped: say so.
+  const char* held = OdbcDelegateHeldOption(&db->delegate);
+  if (held) {
+    InternalAdbcSetError(error,
+                         "Unknown database option %s (it is only understood by a native ADBC "
+                         "driver, and this connection is served by ODBC: %s)",
+                         held,
+                         db->delegate.last_error && *db->delegate.last_error
+                             ? db->delegate.last_error
+                             : "delegation was not attempted");
+    return ADBC_STATUS_NOT_IMPLEMENTED;
+  }
+
+  // "postgresql://..." is not an ODBC connection string; unixODBC answers a
+  // bare "[IM002] Data source name not found" for it, which says nothing about
+  // the real problem.  Translate it for an installed ODBC driver, or explain.
+  if (OdbcDelegateIsNativeUri(db->connection_string)) {
+    char* translated = NULL;
+    RAISE_ADBC(OdbcDelegateNativeUriToOdbc(db->connection_string, db->delegate.last_error,
+                                           &translated, error));
+    if (translated) {
+      free(db->connection_string);
+      db->connection_string = translated;
+    }
+  }
 
   SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &db->henv);
   if (!SQL_SUCCEEDED(ret)) {
@@ -179,6 +208,8 @@ static AdbcStatusCode OdbcDatabaseGetOption(struct AdbcDatabase* database, const
   const char* v = NULL;
   if (OdbcDelegateGetOption(&db->delegate, key, &v)) {
     // fall through to the copy-out below
+  } else if (db->proxy) {
+    return OdbcProxyDatabaseGetOption(db->proxy, key, value, length, error);
   } else if (strcmp(key, ADBC_OPTION_URI) == 0) v = db->connection_string;
   else if (strcmp(key, ADBC_ODBC_OPTION_DSN) == 0) v = db->dsn;
   else if (strcmp(key, ADBC_OPTION_USERNAME) == 0) v = db->username;
@@ -196,6 +227,8 @@ static AdbcStatusCode OdbcDatabaseGetOption(struct AdbcDatabase* database, const
 static AdbcStatusCode OdbcDatabaseGetOptionInt(struct AdbcDatabase* database, const char* key,
                                                int64_t* value, struct AdbcError* error) {
   struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
+  if (!db) return ADBC_STATUS_INVALID_STATE;
+  if (db->proxy) return OdbcProxyDatabaseGetOptionInt(db->proxy, key, value, error);
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) { *value = db->reader_opts.batch_size; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_MAX_BIND_BYTES) == 0) { *value = db->reader_opts.max_bind_bytes; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = db->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }
@@ -205,9 +238,52 @@ static AdbcStatusCode OdbcDatabaseGetOptionInt(struct AdbcDatabase* database, co
 
 static AdbcStatusCode OdbcDatabaseSetOptionInt(struct AdbcDatabase* database, const char* key,
                                                int64_t value, struct AdbcError* error) {
+  struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
+  if (!db) return ADBC_STATUS_INVALID_STATE;
+  if (db->proxy) return OdbcProxyDatabaseSetOptionInt(db->proxy, key, value, error);
   char buf[32];
   snprintf(buf, sizeof(buf), "%lld", (long long)value);
   return OdbcDatabaseSetOption(database, key, buf, error);
+}
+
+// The remaining ADBC 1.1.0 database entry points: ODBC has nothing to say about
+// them, but a delegated database is the native driver's, and it may well have.
+static AdbcStatusCode OdbcDatabaseSetOptionDouble(struct AdbcDatabase* database, const char* key,
+                                                  double value, struct AdbcError* error) {
+  struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
+  if (!db) return ADBC_STATUS_INVALID_STATE;
+  if (db->proxy) return OdbcProxyDatabaseSetOptionDouble(db->proxy, key, value, error);
+  InternalAdbcSetError(error, "Unknown database option %s", key);
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcDatabaseSetOptionBytes(struct AdbcDatabase* database, const char* key,
+                                                 const uint8_t* value, size_t length,
+                                                 struct AdbcError* error) {
+  struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
+  if (!db) return ADBC_STATUS_INVALID_STATE;
+  if (db->proxy) return OdbcProxyDatabaseSetOptionBytes(db->proxy, key, value, length, error);
+  InternalAdbcSetError(error, "Unknown database option %s", key);
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcDatabaseGetOptionDouble(struct AdbcDatabase* database, const char* key,
+                                                  double* value, struct AdbcError* error) {
+  struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
+  if (!db) return ADBC_STATUS_INVALID_STATE;
+  if (db->proxy) return OdbcProxyDatabaseGetOptionDouble(db->proxy, key, value, error);
+  InternalAdbcSetError(error, "Unknown database option %s", key);
+  return ADBC_STATUS_NOT_FOUND;
+}
+
+static AdbcStatusCode OdbcDatabaseGetOptionBytes(struct AdbcDatabase* database, const char* key,
+                                                 uint8_t* value, size_t* length,
+                                                 struct AdbcError* error) {
+  struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
+  if (!db) return ADBC_STATUS_INVALID_STATE;
+  if (db->proxy) return OdbcProxyDatabaseGetOptionBytes(db->proxy, key, value, length, error);
+  InternalAdbcSetError(error, "Unknown database option %s", key);
+  return ADBC_STATUS_NOT_FOUND;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,10 +313,35 @@ static AdbcStatusCode OdbcConnectionSetAutocommit(struct OdbcConnection* conn, b
   return ADBC_STATUS_OK;
 }
 
-static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection, const char* key,
-                                              const char* value, struct AdbcError* error) {
+// Remember an option set before AdbcConnectionInit: if the database turns out
+// to be delegated, the native connection has to be told about it too.
+static void OdbcConnectionRecordPreOption(struct OdbcConnection* conn, const char* key,
+                                          const char* value) {
+  if (conn->connected) return;
+  if (strncmp(key, "adbc.odbc.", 10) == 0) return;  // ours, never a native driver's
+  for (size_t i = 0; i < conn->pre_count; i++) {
+    if (strcmp(conn->pre_keys[i], key) == 0) {
+      char* copy = value ? strdup(value) : NULL;
+      free(conn->pre_values[i]);
+      conn->pre_values[i] = copy;
+      return;
+    }
+  }
+  char** keys = realloc(conn->pre_keys, (conn->pre_count + 1) * sizeof(char*));
+  if (!keys) return;
+  conn->pre_keys = keys;
+  char** values = realloc(conn->pre_values, (conn->pre_count + 1) * sizeof(char*));
+  if (!values) return;
+  conn->pre_values = values;
+  conn->pre_keys[conn->pre_count] = strdup(key);
+  conn->pre_values[conn->pre_count] = value ? strdup(value) : NULL;
+  if (conn->pre_keys[conn->pre_count]) conn->pre_count++;
+}
+
+static AdbcStatusCode OdbcConnectionSetOptionOdbc(struct AdbcConnection* connection,
+                                                  const char* key, const char* value,
+                                                  struct AdbcError* error) {
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
-  if (!conn) return ADBC_STATUS_INVALID_STATE;
   if (strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
     if (strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) return OdbcConnectionSetAutocommit(conn, true, error);
     if (strcmp(value, ADBC_OPTION_VALUE_DISABLED) == 0) return OdbcConnectionSetAutocommit(conn, false, error);
@@ -262,6 +363,16 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
   }
   InternalAdbcSetError(error, "Unknown connection option %s", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection, const char* key,
+                                              const char* value, struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (!conn) return ADBC_STATUS_INVALID_STATE;
+  if (conn->proxy) return OdbcProxyConnectionSetOption(conn->proxy, key, value, error);
+  AdbcStatusCode status = OdbcConnectionSetOptionOdbc(connection, key, value, error);
+  if (status == ADBC_STATUS_OK) OdbcConnectionRecordPreOption(conn, key, value);
+  return status;
 }
 
 // Per-driver workarounds, keyed on SQL_DRIVER_NAME, plus the capability probes the
@@ -336,7 +447,19 @@ static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
                                          struct AdbcError* error) {
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
   struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
-  if (!conn || !db || !db->henv) {
+  if (!conn || !db) {
+    InternalAdbcSetError(error, "Database not initialized");
+    return ADBC_STATUS_INVALID_STATE;
+  }
+  if (db->proxy) {
+    // A native driver serves this database: stand its connection up instead,
+    // replaying whatever was set on this one before init.
+    RAISE_ADBC(OdbcProxyConnectionInit(db->proxy, conn->pre_keys, conn->pre_values,
+                                       conn->pre_count, &conn->proxy, error));
+    conn->db = db;
+    return ADBC_STATUS_OK;
+  }
+  if (!db->henv) {
     InternalAdbcSetError(error, "Database not initialized");
     return ADBC_STATUS_INVALID_STATE;
   }
@@ -377,18 +500,27 @@ static AdbcStatusCode OdbcConnectionRelease(struct AdbcConnection* connection,
                                             struct AdbcError* error) {
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
   if (!conn) return ADBC_STATUS_INVALID_STATE;
+  AdbcStatusCode status = ADBC_STATUS_OK;
+  if (conn->proxy) status = OdbcProxyConnectionRelease(conn->proxy, error);
   if (conn->hdbc) {
     if (conn->connected) SQLDisconnect(conn->hdbc);
     SQLFreeHandle(SQL_HANDLE_DBC, conn->hdbc);
   }
+  for (size_t i = 0; i < conn->pre_count; i++) {
+    free(conn->pre_keys[i]);
+    free(conn->pre_values[i]);
+  }
+  free(conn->pre_keys);
+  free(conn->pre_values);
   free(conn);
   connection->private_data = NULL;
-  return ADBC_STATUS_OK;
+  return status;
 }
 
 static AdbcStatusCode OdbcConnectionCommit(struct AdbcConnection* connection,
                                            struct AdbcError* error) {
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) return OdbcProxyConnectionCommit(conn->proxy, error);
   if (!conn || !conn->connected) return ADBC_STATUS_INVALID_STATE;
   if (conn->autocommit) {
     InternalAdbcSetError(error, "Cannot commit when autocommit is enabled");
@@ -402,6 +534,7 @@ static AdbcStatusCode OdbcConnectionCommit(struct AdbcConnection* connection,
 static AdbcStatusCode OdbcConnectionRollback(struct AdbcConnection* connection,
                                              struct AdbcError* error) {
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) return OdbcProxyConnectionRollback(conn->proxy, error);
   if (!conn || !conn->connected) return ADBC_STATUS_INVALID_STATE;
   if (conn->autocommit) {
     InternalAdbcSetError(error, "Cannot rollback when autocommit is enabled");
@@ -417,6 +550,9 @@ static AdbcStatusCode OdbcConnectionGetInfo(struct AdbcConnection* connection,
                                             struct ArrowArrayStream* out,
                                             struct AdbcError* error) {
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) {
+    return OdbcProxyConnectionGetInfo(conn->proxy, info_codes, info_codes_length, out, error);
+  }
   if (!conn || !conn->connected) return ADBC_STATUS_INVALID_STATE;
 
   static const uint32_t kAll[] = {
@@ -486,6 +622,7 @@ static AdbcStatusCode OdbcConnectionGetTableTypes(struct AdbcConnection* connect
                                                   struct ArrowArrayStream* out,
                                                   struct AdbcError* error) {
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) return OdbcProxyConnectionGetTableTypes(conn->proxy, out, error);
   if (!conn || !conn->connected) return ADBC_STATUS_INVALID_STATE;
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
@@ -533,6 +670,10 @@ static AdbcStatusCode OdbcConnectionGetTableSchema(struct AdbcConnection* connec
                                                    struct ArrowSchema* schema,
                                                    struct AdbcError* error) {
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) {
+    return OdbcProxyConnectionGetTableSchema(conn->proxy, catalog, db_schema, table_name, schema,
+                                             error);
+  }
   if (!conn || !conn->connected) return ADBC_STATUS_INVALID_STATE;
   if (!table_name) {
     InternalAdbcSetError(error, "table_name must not be NULL");
@@ -566,7 +707,9 @@ static AdbcStatusCode OdbcConnectionGetTableSchema(struct AdbcConnection* connec
 
 static AdbcStatusCode OdbcConnectionCancel(struct AdbcConnection* connection,
                                            struct AdbcError* error) {
-  (void)connection; (void)error;
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) return OdbcProxyConnectionCancel(conn->proxy, error);
+  (void)error;
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
 
@@ -577,9 +720,11 @@ static AdbcStatusCode OdbcConnectionGetOption(struct AdbcConnection* connection,
   const char* v = NULL;
   SQLCHAR buf[1024];
   SQLINTEGER outlen = 0;
+  if (!conn) return ADBC_STATUS_INVALID_STATE;
   if (strcmp(key, ADBC_ODBC_OPTION_DELEGATED_TO) == 0) {
-    // Delegation replaces this driver wholesale, so if we are running, we are ODBC.
-    v = ADBC_ODBC_DELEGATED_TO_ODBC;
+    v = conn->proxy ? OdbcProxyConnectionName(conn->proxy) : ADBC_ODBC_DELEGATED_TO_ODBC;
+  } else if (conn->proxy) {
+    return OdbcProxyConnectionGetOption(conn->proxy, key, value, length, error);
   } else if (strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
     v = conn->autocommit ? ADBC_OPTION_VALUE_ENABLED : ADBC_OPTION_VALUE_DISABLED;
   } else if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
@@ -603,6 +748,130 @@ static AdbcStatusCode OdbcConnectionGetOption(struct AdbcConnection* connection,
   return ADBC_STATUS_OK;
 }
 
+// ADBC 1.1.0 connection entry points that ODBC has no answer for, but that a
+// native driver behind a delegated connection may implement.
+static AdbcStatusCode OdbcConnectionGetStatistics(struct AdbcConnection* connection,
+                                                  const char* catalog, const char* db_schema,
+                                                  const char* table_name, char approximate,
+                                                  struct ArrowArrayStream* out,
+                                                  struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) {
+    return OdbcProxyConnectionGetStatistics(conn->proxy, catalog, db_schema, table_name,
+                                            approximate, out, error);
+  }
+  InternalAdbcSetError(error, "GetStatistics is not supported over ODBC");
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcConnectionGetStatisticNames(struct AdbcConnection* connection,
+                                                      struct ArrowArrayStream* out,
+                                                      struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) return OdbcProxyConnectionGetStatisticNames(conn->proxy, out, error);
+  InternalAdbcSetError(error, "GetStatisticNames is not supported over ODBC");
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcConnectionReadPartition(struct AdbcConnection* connection,
+                                                  const uint8_t* serialized_partition,
+                                                  size_t serialized_length,
+                                                  struct ArrowArrayStream* out,
+                                                  struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) {
+    return OdbcProxyConnectionReadPartition(conn->proxy, serialized_partition, serialized_length,
+                                            out, error);
+  }
+  InternalAdbcSetError(error, "Partitioned results are not supported over ODBC");
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcConnectionSetOptionInt(struct AdbcConnection* connection,
+                                                 const char* key, int64_t value,
+                                                 struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (!conn) return ADBC_STATUS_INVALID_STATE;
+  if (conn->proxy) return OdbcProxyConnectionSetOptionInt(conn->proxy, key, value, error);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%lld", (long long)value);
+  return OdbcConnectionSetOption(connection, key, buf, error);
+}
+
+static AdbcStatusCode OdbcConnectionSetOptionDouble(struct AdbcConnection* connection,
+                                                    const char* key, double value,
+                                                    struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (!conn) return ADBC_STATUS_INVALID_STATE;
+  if (conn->proxy) return OdbcProxyConnectionSetOptionDouble(conn->proxy, key, value, error);
+  InternalAdbcSetError(error, "Unknown connection option %s", key);
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcConnectionSetOptionBytes(struct AdbcConnection* connection,
+                                                   const char* key, const uint8_t* value,
+                                                   size_t length, struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (!conn) return ADBC_STATUS_INVALID_STATE;
+  if (conn->proxy) return OdbcProxyConnectionSetOptionBytes(conn->proxy, key, value, length, error);
+  InternalAdbcSetError(error, "Unknown connection option %s", key);
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcConnectionGetOptionInt(struct AdbcConnection* connection,
+                                                 const char* key, int64_t* value,
+                                                 struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (!conn) return ADBC_STATUS_INVALID_STATE;
+  if (conn->proxy) return OdbcProxyConnectionGetOptionInt(conn->proxy, key, value, error);
+  if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) {
+    *value = conn->reader_opts.batch_size;
+    return ADBC_STATUS_OK;
+  }
+  if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
+    *value = conn->reader_opts.sqllen_32bit ? 1 : 0;
+    return ADBC_STATUS_OK;
+  }
+  InternalAdbcSetError(error, "Unknown connection option %s", key);
+  return ADBC_STATUS_NOT_FOUND;
+}
+
+static AdbcStatusCode OdbcConnectionGetOptionDouble(struct AdbcConnection* connection,
+                                                    const char* key, double* value,
+                                                    struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (!conn) return ADBC_STATUS_INVALID_STATE;
+  if (conn->proxy) return OdbcProxyConnectionGetOptionDouble(conn->proxy, key, value, error);
+  InternalAdbcSetError(error, "Unknown connection option %s", key);
+  return ADBC_STATUS_NOT_FOUND;
+}
+
+static AdbcStatusCode OdbcConnectionGetOptionBytes(struct AdbcConnection* connection,
+                                                   const char* key, uint8_t* value, size_t* length,
+                                                   struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (!conn) return ADBC_STATUS_INVALID_STATE;
+  if (conn->proxy) return OdbcProxyConnectionGetOptionBytes(conn->proxy, key, value, length, error);
+  InternalAdbcSetError(error, "Unknown connection option %s", key);
+  return ADBC_STATUS_NOT_FOUND;
+}
+
+static AdbcStatusCode OdbcConnectionGetObjectsEntry(struct AdbcConnection* connection,
+                                                    int depth, const char* catalog,
+                                                    const char* db_schema, const char* table_name,
+                                                    const char** table_type,
+                                                    const char* column_name,
+                                                    struct ArrowArrayStream* out,
+                                                    struct AdbcError* error) {
+  struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
+  if (conn && conn->proxy) {
+    return OdbcProxyConnectionGetObjects(conn->proxy, depth, catalog, db_schema, table_name,
+                                         table_type, column_name, out, error);
+  }
+  return OdbcConnectionGetObjects(connection, depth, catalog, db_schema, table_name, table_type,
+                                  column_name, out, error);
+}
+
 void OdbcQuoteChar(SQLHDBC hdbc, char* out) {
   SQLSMALLINT qlen = 0;
   strcpy(out, "\"");
@@ -617,7 +886,7 @@ void OdbcQuoteChar(SQLHDBC hdbc, char* out) {
 static AdbcStatusCode OdbcStatementNew(struct AdbcConnection* connection,
                                        struct AdbcStatement* statement, struct AdbcError* error) {
   struct OdbcConnection* conn = (struct OdbcConnection*)connection->private_data;
-  if (!conn || !conn->connected) {
+  if (!conn || (!conn->connected && !conn->proxy)) {
     InternalAdbcSetError(error, "Connection not initialized");
     return ADBC_STATUS_INVALID_STATE;
   }
@@ -625,6 +894,15 @@ static AdbcStatusCode OdbcStatementNew(struct AdbcConnection* connection,
   if (!stmt) {
     InternalAdbcSetError(error, "out of memory");
     return ADBC_STATUS_INTERNAL;
+  }
+  if (conn->proxy) {
+    AdbcStatusCode status = OdbcProxyStatementNew(conn->proxy, &stmt->proxy, error);
+    if (status != ADBC_STATUS_OK) {
+      free(stmt);
+      return status;
+    }
+    statement->private_data = stmt;
+    return ADBC_STATUS_OK;
   }
   stmt->conn = conn;
   stmt->reader_opts = conn->reader_opts;
@@ -637,6 +915,12 @@ static AdbcStatusCode OdbcStatementRelease(struct AdbcStatement* statement,
                                            struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) {
+    AdbcStatusCode status = OdbcProxyStatementRelease(stmt->proxy, error);
+    free(stmt);
+    statement->private_data = NULL;
+    return status;
+  }
   OdbcHandleRefRelease(stmt->ref);
   if (stmt->bind_stream.release) stmt->bind_stream.release(&stmt->bind_stream);
   free(stmt->query);
@@ -653,6 +937,7 @@ static AdbcStatusCode OdbcStatementSetSqlQuery(struct AdbcStatement* statement, 
                                                struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementSetSqlQuery(stmt->proxy, query, error);
   free(stmt->query);
   stmt->query = strdup(query);
   stmt->prepared = false;
@@ -667,6 +952,7 @@ static AdbcStatusCode OdbcStatementSetOption(struct AdbcStatement* statement, co
                                              const char* value, struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementSetOption(stmt->proxy, key, value, error);
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) {
     long v = strtol(value, NULL, 10);
     if (v <= 0) return ADBC_STATUS_INVALID_ARGUMENT;
@@ -714,6 +1000,9 @@ static AdbcStatusCode OdbcStatementSetOption(struct AdbcStatement* statement, co
 
 static AdbcStatusCode OdbcStatementSetOptionInt(struct AdbcStatement* statement, const char* key,
                                                 int64_t value, struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementSetOptionInt(stmt->proxy, key, value, error);
   char buf[32];
   snprintf(buf, sizeof(buf), "%lld", (long long)value);
   return OdbcStatementSetOption(statement, key, buf, error);
@@ -724,6 +1013,7 @@ static AdbcStatusCode OdbcStatementBindStream(struct AdbcStatement* statement,
                                               struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementBindStream(stmt->proxy, stream, error);
   if (stmt->bind_stream.release) stmt->bind_stream.release(&stmt->bind_stream);
   stmt->bind_stream = *stream;
   memset(stream, 0, sizeof(*stream));
@@ -735,6 +1025,7 @@ static AdbcStatusCode OdbcStatementBind(struct AdbcStatement* statement, struct 
                                         struct ArrowSchema* schema, struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementBind(stmt->proxy, values, schema, error);
   struct ArrowArrayStream stream;
   struct ArrowSchema schema_copy;
   CHECK_NA(INTERNAL, ArrowSchemaDeepCopy(schema, &schema_copy), error);
@@ -797,6 +1088,7 @@ static AdbcStatusCode OdbcStatementPrepare(struct AdbcStatement* statement,
                                            struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementPrepare(stmt->proxy, error);
   if (!stmt->query) {
     InternalAdbcSetError(error, "Must call StatementSetSqlQuery first");
     return ADBC_STATUS_INVALID_STATE;
@@ -812,6 +1104,7 @@ static AdbcStatusCode OdbcStatementExecuteQuery(struct AdbcStatement* statement,
                                                 struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementExecuteQuery(stmt->proxy, out, rows_affected, error);
   if (stmt->ingest_table) {
     if (out) {
       InternalAdbcSetError(error, "Bulk ingest does not produce a result set");
@@ -878,6 +1171,7 @@ static AdbcStatusCode OdbcStatementExecuteSchema(struct AdbcStatement* statement
                                                  struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementExecuteSchema(stmt->proxy, schema, error);
   if (!stmt->query) {
     InternalAdbcSetError(error, "Must call StatementSetSqlQuery first");
     return ADBC_STATUS_INVALID_STATE;
@@ -891,6 +1185,7 @@ static AdbcStatusCode OdbcStatementGetParameterSchema(struct AdbcStatement* stat
                                                       struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementGetParameterSchema(stmt->proxy, schema, error);
   if (!stmt->query) {
     InternalAdbcSetError(error, "Must call StatementSetSqlQuery first");
     return ADBC_STATUS_INVALID_STATE;
@@ -903,6 +1198,7 @@ static AdbcStatusCode OdbcStatementGetParameterSchema(struct AdbcStatement* stat
 static AdbcStatusCode OdbcStatementCancel(struct AdbcStatement* statement,
                                           struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (stmt && stmt->proxy) return OdbcProxyStatementCancel(stmt->proxy, error);
   if (!stmt || !stmt->ref) return ADBC_STATUS_INVALID_STATE;
   ODBC_CHECK(SQLCancel(stmt->ref->hstmt), SQL_HANDLE_STMT, stmt->ref->hstmt, "SQLCancel", error);
   return ADBC_STATUS_OK;
@@ -911,9 +1207,86 @@ static AdbcStatusCode OdbcStatementCancel(struct AdbcStatement* statement,
 static AdbcStatusCode OdbcStatementGetOptionInt(struct AdbcStatement* statement, const char* key,
                                                 int64_t* value, struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementGetOptionInt(stmt->proxy, key, value, error);
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) { *value = stmt->reader_opts.batch_size; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) { *value = stmt->array_binding ? 1 : 0; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = stmt->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }
+  InternalAdbcSetError(error, "Unknown statement option %s", key);
+  return ADBC_STATUS_NOT_FOUND;
+}
+
+// Statement entry points ODBC does not implement, forwarded when a native driver
+// is behind this statement.
+static AdbcStatusCode OdbcStatementExecutePartitions(struct AdbcStatement* statement,
+                                                     struct ArrowSchema* schema,
+                                                     struct AdbcPartitions* partitions,
+                                                     int64_t* rows_affected,
+                                                     struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (stmt && stmt->proxy) {
+    return OdbcProxyStatementExecutePartitions(stmt->proxy, schema, partitions, rows_affected,
+                                               error);
+  }
+  InternalAdbcSetError(error, "Partitioned results are not supported over ODBC");
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcStatementSetSubstraitPlan(struct AdbcStatement* statement,
+                                                    const uint8_t* plan, size_t length,
+                                                    struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (stmt && stmt->proxy) return OdbcProxyStatementSetSubstraitPlan(stmt->proxy, plan, length, error);
+  InternalAdbcSetError(error, "Substrait plans are not supported over ODBC");
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcStatementSetOptionDouble(struct AdbcStatement* statement,
+                                                   const char* key, double value,
+                                                   struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementSetOptionDouble(stmt->proxy, key, value, error);
+  InternalAdbcSetError(error, "Unknown statement option %s", key);
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcStatementSetOptionBytes(struct AdbcStatement* statement, const char* key,
+                                                  const uint8_t* value, size_t length,
+                                                  struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementSetOptionBytes(stmt->proxy, key, value, length, error);
+  InternalAdbcSetError(error, "Unknown statement option %s", key);
+  return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+static AdbcStatusCode OdbcStatementGetOption(struct AdbcStatement* statement, const char* key,
+                                             char* value, size_t* length,
+                                             struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementGetOption(stmt->proxy, key, value, length, error);
+  InternalAdbcSetError(error, "Unknown statement option %s", key);
+  return ADBC_STATUS_NOT_FOUND;
+}
+
+static AdbcStatusCode OdbcStatementGetOptionDouble(struct AdbcStatement* statement,
+                                                   const char* key, double* value,
+                                                   struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementGetOptionDouble(stmt->proxy, key, value, error);
+  InternalAdbcSetError(error, "Unknown statement option %s", key);
+  return ADBC_STATUS_NOT_FOUND;
+}
+
+static AdbcStatusCode OdbcStatementGetOptionBytes(struct AdbcStatement* statement, const char* key,
+                                                  uint8_t* value, size_t* length,
+                                                  struct AdbcError* error) {
+  struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
+  if (!stmt) return ADBC_STATUS_INVALID_STATE;
+  if (stmt->proxy) return OdbcProxyStatementGetOptionBytes(stmt->proxy, key, value, length, error);
   InternalAdbcSetError(error, "Unknown statement option %s", key);
   return ADBC_STATUS_NOT_FOUND;
 }
@@ -942,8 +1315,8 @@ AdbcStatusCode AdbcDriverOdbcInit(int version, void* raw_driver, struct AdbcErro
   struct AdbcDriver* driver = (struct AdbcDriver*)raw_driver;
   memset(driver, 0, version == ADBC_VERSION_1_0_0 ? ADBC_DRIVER_1_0_0_SIZE : ADBC_DRIVER_1_1_0_SIZE);
 
-  // Remembered so that native delegation knows how many bytes of the caller's
-  // function table it may overwrite.  Nothing else uses private_data.
+  // The ADBC revision this table was initialized with; nothing else uses
+  // private_data.
   driver->private_data = (void*)(intptr_t)version;
   driver->release = OdbcDriverRelease;
   driver->DatabaseInit = OdbcDatabaseInit;
@@ -961,8 +1334,12 @@ AdbcStatusCode AdbcDriverOdbcInit(int version, void* raw_driver, struct AdbcErro
   driver->ConnectionRollback = OdbcConnectionRollback;
   driver->ConnectionSetOption = OdbcConnectionSetOption;
 
-  driver->ConnectionGetObjects = OdbcConnectionGetObjects;
+  driver->ConnectionGetObjects = OdbcConnectionGetObjectsEntry;
+  driver->ConnectionReadPartition = OdbcConnectionReadPartition;
   driver->StatementBind = OdbcStatementBind;
+  driver->StatementExecutePartitions = OdbcStatementExecutePartitions;
+  driver->StatementGetParameterSchema = OdbcStatementGetParameterSchema;
+  driver->StatementSetSubstraitPlan = OdbcStatementSetSubstraitPlan;
   driver->StatementBindStream = OdbcStatementBindStream;
   driver->StatementExecuteQuery = OdbcStatementExecuteQuery;
   driver->StatementGetParameterSchema = OdbcStatementGetParameterSchema;
@@ -979,11 +1356,28 @@ AdbcStatusCode AdbcDriverOdbcInit(int version, void* raw_driver, struct AdbcErro
     driver->DatabaseGetOption = OdbcDatabaseGetOption;
     driver->DatabaseGetOptionInt = OdbcDatabaseGetOptionInt;
     driver->DatabaseSetOptionInt = OdbcDatabaseSetOptionInt;
+    driver->DatabaseGetOptionBytes = OdbcDatabaseGetOptionBytes;
+    driver->DatabaseGetOptionDouble = OdbcDatabaseGetOptionDouble;
+    driver->DatabaseSetOptionBytes = OdbcDatabaseSetOptionBytes;
+    driver->DatabaseSetOptionDouble = OdbcDatabaseSetOptionDouble;
     driver->ConnectionCancel = OdbcConnectionCancel;
     driver->ConnectionGetOption = OdbcConnectionGetOption;
+    driver->ConnectionGetOptionBytes = OdbcConnectionGetOptionBytes;
+    driver->ConnectionGetOptionDouble = OdbcConnectionGetOptionDouble;
+    driver->ConnectionGetOptionInt = OdbcConnectionGetOptionInt;
+    driver->ConnectionGetStatistics = OdbcConnectionGetStatistics;
+    driver->ConnectionGetStatisticNames = OdbcConnectionGetStatisticNames;
+    driver->ConnectionSetOptionBytes = OdbcConnectionSetOptionBytes;
+    driver->ConnectionSetOptionDouble = OdbcConnectionSetOptionDouble;
+    driver->ConnectionSetOptionInt = OdbcConnectionSetOptionInt;
     driver->StatementCancel = OdbcStatementCancel;
     driver->StatementExecuteSchema = OdbcStatementExecuteSchema;
+    driver->StatementGetOption = OdbcStatementGetOption;
+    driver->StatementGetOptionBytes = OdbcStatementGetOptionBytes;
+    driver->StatementGetOptionDouble = OdbcStatementGetOptionDouble;
     driver->StatementGetOptionInt = OdbcStatementGetOptionInt;
+    driver->StatementSetOptionBytes = OdbcStatementSetOptionBytes;
+    driver->StatementSetOptionDouble = OdbcStatementSetOptionDouble;
     driver->StatementSetOptionInt = OdbcStatementSetOptionInt;
   }
   return ADBC_STATUS_OK;
