@@ -44,8 +44,11 @@ reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
 | PostgreSQL 16 | psqlodbc 16 | PASS |
 | MariaDB 11 / MySQL | MariaDB Connector/ODBC 3.1 | PASS |
 | SQL Server 2022 | msodbcsql 18 | PASS (incl. `NVARCHAR(MAX)` via chunked `SQLGetData`) |
+| MonetDB 11.55 (Dec2025-SP3) | MonetDBODBClib 11.55 | PASS |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
+Per-database setup (including how to fetch each ODBC driver without root) is in
+[`tests/compat/README.md`](tests/compat/README.md).
 
 ## Build
 
