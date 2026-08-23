@@ -7,7 +7,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, POSTGRES_ODBC_DRIVER, MARIADB_ODBC_DRIVER,
     MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER,
     DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
-    YUGABYTE_ODBC_DRIVER
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars).
 See README.md in this directory for how to obtain each driver without root.
 """
@@ -20,6 +20,17 @@ DRIVER = os.environ.get("ADBC_ODBC_DRIVER", str(HERE.parent.parent / "build" / "
 TMP = tempfile.mkdtemp()
 
 SUFFIX = os.environ.get("ADBC_MATRIX_SUFFIX", "")  # set to isolate concurrent runs on a shared server
+# Payload for the `extra` ingest steps: same column layout as the standard ingest
+# table, but with no NULL in the date column, which a partitioned/time-series table
+# may require of the column it is partitioned on.
+EXTRA_ROWS = pa.table({
+    "a": pa.array([1, 2, 3, 4], pa.int64()),
+    "b": pa.array(["p", "q", "r", "s"]),
+    "c": pa.array([1.5, 2.5, None, 4.5]),
+    "d": pa.array([datetime.date(2024, 1, 1), datetime.date(2024, 1, 2),
+                   datetime.date(2024, 2, 1), datetime.date(2024, 3, 1)], pa.date32()),
+    "e": pa.array([True, None, False, True], pa.bool_()),
+})
 DBS = {
     "sqlite": dict(
         env="SQLITE_ODBC_DRIVER", conn="Driver={drv};Database=" + os.path.join(TMP, "m.db") + ";",
@@ -79,6 +90,30 @@ DBS = {
         # same psqlodbc build drives it; the types below are plain PostgreSQL types.
         env="YUGABYTE_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15433;Database=yugabyte;Uid=yugabyte;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"),
+    "timescaledb": dict(
+        # PostgreSQL plus the timescaledb extension, so psqlodbc drives it and the
+        # plain PostgreSQL workload applies unchanged.  The `extra` steps go beyond
+        # that: they turn a table into a hypertable (Timescale's transparently
+        # partitioned time-series table) and check that ingest and reads -- including
+        # a read through time_bucket() -- work against the partitioned table.
+        env="TIMESCALE_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15434;Database=adbc;Uid=adbc;Pwd=adbc;",
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        setup=["CREATE EXTENSION IF NOT EXISTS timescaledb"],
+        extra=[
+            ('DROP TABLE IF EXISTS "adbc_ht{sfx}"', None),
+            # Column names/types match EXTRA_ROWS: the ingest below appends into it.
+            ('CREATE TABLE "adbc_ht{sfx}" ("a" BIGINT, "b" VARCHAR(20), "c" DOUBLE PRECISION,'
+             ' "d" DATE NOT NULL, "e" BOOLEAN)', None),
+            # create_hypertable() partitions it by "d", one chunk per 7 days.  The
+            # partitioning column is why EXTRA_ROWS has no NULL there: Timescale puts
+            # a NOT NULL constraint on it.
+            ("""SELECT (create_hypertable('adbc_ht{sfx}', by_range('d', INTERVAL '7 days'))).created""", (True,)),
+            (("adbc_ht{sfx}", EXTRA_ROWS), (4,)),          # bulk ingest into the hypertable
+            ('SELECT count(*) FROM timescaledb_information.chunks'
+             " WHERE hypertable_name = 'adbc_ht{sfx}'", (3,)),   # rows landed in 3 chunks
+            ('SELECT "b", "c" FROM "adbc_ht{sfx}" WHERE "a" = 3', ("r", None)),
+            ('SELECT count(DISTINCT time_bucket(INTERVAL \'7 days\', "d")) FROM "adbc_ht{sfx}"', (3,)),
+        ]),
     "firebird": dict(
         env="FIREBIRD_ODBC_DRIVER",
         conn="Driver={drv};DBNAME=inet://127.0.0.1:13050//var/lib/firebird/data/adbc.fdb;UID=adbc;PWD=adbc;CHARSET=UTF8;",
@@ -176,6 +211,21 @@ def run(name, cfg):
         big = cur.fetch_arrow_table()
         assert big.column("a").to_pylist() == list(range(N))
         assert big.column("b").to_pylist()[-1] == "r%d" % (N - 1)
+        # extra: per-database steps run after the standard workload, for features
+        # only that database has.  Each entry is (step, expected): `step` is either
+        # SQL, or (table, arrow table) to bulk ingest (mode="append") into a table an
+        # earlier step created; `expected` is the first result row -- or the ingested
+        # row count -- to assert, or None to run the step without checking it.
+        # "{sfx}" in a step expands to ADBC_MATRIX_SUFFIX.
+        for step, expected in cfg.get("extra", []):
+            if isinstance(step, str):
+                sql = step.format(sfx=SUFFIX)
+                cur.execute(sql)
+                got = tuple(cur.fetchone()) if expected is not None else None
+            else:
+                sql = "ingest into " + step[0].format(sfx=SUFFIX)
+                got = (cur.adbc_ingest(step[0].format(sfx=SUFFIX), step[1], mode="append"),)
+            assert expected is None or got == expected, (sql, got)
         # error path
         try:
             cur.execute("SELECT * FROM adbc_no_such_table")

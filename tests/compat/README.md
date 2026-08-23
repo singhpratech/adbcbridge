@@ -447,3 +447,120 @@ Notes on this driver/server pair, all visible in the matrix entry:
 * OdbcFb sizes `SQL_C_WCHAR` buffers in 4-byte `wchar_t` while unixODBC passes UTF-16.
   adbcbridge detects the driver (`SQL_DRIVER_NAME` = `OdbcFb`) and stays on the narrow
   UTF-8 path — see `wchar_as_utf8` in `src/odbc_internal.h`.
+
+## TimescaleDB (PostgreSQL 16 + timescaledb)
+
+TimescaleDB is the `timescaledb` extension on top of stock PostgreSQL, so it speaks the
+PostgreSQL wire protocol and the same `psqlodbc` build used for the `postgres` entry
+drives it — there is no TimescaleDB ODBC driver.
+
+### Get the ODBC driver without root
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export TIMESCALE_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml up -d timescaledb
+# or standalone:
+docker run -d --name adbcbridge-timescale -p 127.0.0.1:15434:5432 \
+  -e POSTGRES_USER=adbc -e POSTGRES_PASSWORD=adbc -e POSTGRES_DB=adbc \
+  timescale/timescaledb:latest-pg16
+```
+
+The port is `15434` so the entry can run alongside the plain `postgres` entry on
+`15432`. The image installs the extension into the `POSTGRES_DB` database itself
+(`shared_preload_libraries` is already set for it); the entry still runs
+`CREATE EXTENSION IF NOT EXISTS timescaledb` in `setup`, which makes it work on a plain
+PostgreSQL image that merely has the extension available. It is ready when this
+succeeds:
+
+```sh
+docker exec adbcbridge-timescale psql -U adbc -d adbc \
+  -c "SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'"
+```
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py timescaledb
+# timescaledb PASS  (PostgreSQL (via ODBC) 16.0.15)
+```
+
+### What the entry tests beyond `postgres`
+
+The standard workload would make this a duplicate of the `postgres` entry, so the entry
+also exercises a **hypertable** — the partitioned time-series table that is the reason to
+run TimescaleDB at all. Its `extra` steps (see below) create a table, turn it into a
+hypertable partitioned by a `DATE` column, bulk-ingest into it through `adbc_ingest`, and
+read it back:
+
+```sql
+CREATE TABLE "adbc_ht" ("a" BIGINT, "b" VARCHAR(20), "c" DOUBLE PRECISION,
+                        "d" DATE NOT NULL, "e" BOOLEAN);
+SELECT (create_hypertable('adbc_ht', by_range('d', INTERVAL '7 days'))).created;
+-- ingest 4 rows spanning Jan/Feb/Mar 2024, then:
+SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name = 'adbc_ht';
+SELECT count(DISTINCT time_bucket(INTERVAL '7 days', "d")) FROM "adbc_ht";
+```
+
+Both counts are `3`: the four rows land in three chunks (the 2024-01-01 and 2024-01-02
+rows share one 7-day chunk), which confirms the ingest really went through the
+partitioning machinery rather than into a plain table. `time_bucket()` is TimescaleDB's own
+bucketing function, so the last query also proves the read path works on the result of a
+Timescale-provided function.
+
+Two things are load-bearing in that DDL:
+
+* **`"d" DATE NOT NULL`.** `create_hypertable()` requires the partitioning column to be
+  `NOT NULL` (it adds the constraint itself when it can). This is why the entry ingests
+  its own `EXTRA_ROWS` payload rather than the matrix's standard ingest table — that one
+  carries a NULL in the date column, which a hypertable rejects.
+* **The main `adbc_t` table stays a plain table.** Its `ts`/`d` columns are NULL in the
+  second row the workload inserts, so it cannot be partitioned on either of them, and
+  the standard checks (`GetObjects`, `GetTableSchema`, batched reads) are meant to run
+  against an ordinary table anyway.
+
+Chunks live in the internal `_timescaledb_internal` schema under generated names
+(`_hyper_1_1_chunk`, …), so they never collide with the `adbc_t`/`adbc_ing` names the
+standard workload filters on in `GetObjects`.
+
+### The `extra` key
+
+`extra` is a generic per-database hook in `test_matrix.py`, not a Timescale special
+case: a list of `(step, expected)` pairs run after the standard workload, where `step` is
+either SQL or a `(table, arrow table)` pair to bulk-ingest with `mode="append"`, and
+`expected` is the first result row (or, for an ingest, the row count) to assert — `None`
+runs the step without checking it. `{sfx}` in a step expands to `ADBC_MATRIX_SUFFIX`, so
+extra tables are isolated per run exactly like `adbc_t` is. Any other database can use it
+for its own dialect-specific feature.
+
+### Notes
+
+The entry needs **no tolerance flags and no driver quirk**: everything the plain
+PostgreSQL entry passes, TimescaleDB passes identically, and the hypertable steps need no
+special handling on the ADBC side either — `adbc_ingest` appends into a hypertable with
+the same `INSERT` path it uses for a plain table, and Timescale routes the rows to chunks
+transparently. `GetInfo` reports the PostgreSQL server version (`16.0.15` for
+`timescale/timescaledb:latest-pg16`, which runs PostgreSQL 16.15 with timescaledb 2.29.2);
+the extension version is only visible via `pg_extension`, exactly as for a real
+PostgreSQL server, so no quirk keyed on the driver or server name could tell the two
+apart — nor should it.
+
+The entry is re-runnable: its first `extra` step is `DROP TABLE IF EXISTS`, which drops
+the hypertable and all of its chunks.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml down timescaledb
+# or, if started standalone:
+docker stop adbcbridge-timescale && docker rm adbcbridge-timescale
+```
