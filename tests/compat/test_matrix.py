@@ -7,9 +7,8 @@ Each database is enabled by an environment variable holding the path to its ODBC
     SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, POSTGRES_ODBC_DRIVER, MARIADB_ODBC_DRIVER,
     MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER,
     DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
-    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER,
-    ACCESS_ODBC_DRIVER
-    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER, CITUS_ODBC_DRIVER,
+    QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -117,6 +116,44 @@ DBS = {
              " WHERE hypertable_name = 'adbc_ht{sfx}'", (3,)),   # rows landed in 3 chunks
             ('SELECT "b", "c" FROM "adbc_ht{sfx}" WHERE "a" = 3', ("r", None)),
             ('SELECT count(DISTINCT time_bucket(INTERVAL \'7 days\', "d")) FROM "adbc_ht{sfx}"', (3,)),
+        ]),
+    "citus": dict(
+        # Citus is the `citus` extension on top of stock PostgreSQL (citusdata/citus:latest
+        # is PostgreSQL 18 + citus 14), so psqlodbc drives it and the plain PostgreSQL
+        # workload applies unchanged.  `setup` turns the single container into a one-node
+        # Citus cluster: citus_set_coordinator_host() registers the coordinator in
+        # pg_dist_node, and shouldhaveshards makes it hold shards itself -- without that
+        # create_distributed_table() fails with "replication_factor (1) exceeds number of
+        # worker nodes (0)".  All three statements are idempotent, which matters because
+        # bench/matrix_bench.py replays `setup` on every connection it opens.
+        env="CITUS_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15436;Database=adbc;Uid=adbc;Pwd=adbc;",
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        setup=["CREATE EXTENSION IF NOT EXISTS citus",
+               "SELECT citus_set_coordinator_host('localhost', 5432)",
+               "SELECT citus_set_node_property('localhost', 5432, 'shouldhaveshards', true)"],
+        # The standard workload alone would be a duplicate of `postgres`, so the `extra`
+        # steps exercise the reason to run Citus: a hash-distributed table whose rows live
+        # in shards and whose reads fan out to them.  adbc_t itself stays a plain table --
+        # its second row is NULL in every column but `i`, and a distribution column may
+        # not be NULL.
+        extra=[
+            ('DROP TABLE IF EXISTS "adbc_dist{sfx}"', None),
+            # Column names/types match EXTRA_ROWS: the ingest below appends into it.
+            # "a" is the distribution column, hence NOT NULL.
+            ('CREATE TABLE "adbc_dist{sfx}" ("a" BIGINT NOT NULL, "b" VARCHAR(20),'
+             ' "c" DOUBLE PRECISION, "d" DATE, "e" BOOLEAN)', None),
+            ("SELECT create_distributed_table('adbc_dist{sfx}', 'a')", None),
+            # partmethod 'h': Citus now owns the table and hash-distributes it.
+            ("SELECT partmethod FROM pg_dist_partition"
+             " WHERE logicalrelid = 'adbc_dist{sfx}'::regclass", ("h",)),
+            (("adbc_dist{sfx}", EXTRA_ROWS), (4,)),   # bulk ingest into the distributed table
+            # The ingested rows really did go through the distribution machinery: they
+            # hash to more than one shard.
+            ("SELECT count(DISTINCT get_shard_id_for_distribution_column("
+             "'adbc_dist{sfx}', \"a\")) > 1 FROM \"adbc_dist{sfx}\"", (True,)),
+            ('SELECT "b", "c" FROM "adbc_dist{sfx}" WHERE "a" = 3', ("r", None)),
+            # An aggregate is planned across the shards and merged on the coordinator.
+            ('SELECT count(*), sum("a") FROM "adbc_dist{sfx}"', (4, 10)),
         ]),
     "cratedb": dict(
         # CrateDB speaks the PostgreSQL wire protocol (it announces itself as PostgreSQL

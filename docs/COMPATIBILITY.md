@@ -29,6 +29,7 @@ from the second table to the first.
 | CockroachDB 26 | psqlodbc (PG wire) | PASS | |
 | YugabyteDB 2026.1 | psqlodbc (PG wire) | PASS | |
 | TimescaleDB 2.29 | psqlodbc (PG wire) | PASS | |
+| Citus 14.1 (PostgreSQL 18) | psqlodbc (PG wire) | PASS | no quirks; the single container must be registered as its own worker (`citus_set_coordinator_host` + `shouldhaveshards`) before `create_distributed_table()` works; ingest 107k rows/s (array binding), fetch 1.86M rows/s |
 | CrateDB 6.4 | psqlodbc (PG wire) | PASS | eventually consistent (`REFRESH TABLE`); no binary or `DATE` column type; ingest 626 rows/s, fetch 767k rows/s |
 | QuestDB 10 | psqlodbc (PG wire) | PASS | own type system behind the PG wire: standard-SQL ingest DDL, `true`/`false` boolean params, no usable parameter arrays; `SQLColumns` fails, `GetObjects` describes a zero-row SELECT instead |
 | MonetDB 11.55 | MonetDBODBClib | PASS | no usable parameter arrays; `SQLEndTran` unreliable under pyodbc |
@@ -41,7 +42,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 
 | Database | Wire / driver | Server | Status |
 |---|---|---|---|
-| Citus | psqlodbc | `citusdata/citus` | queued |
 | RisingWave | psqlodbc | `risingwavelabs/risingwave` | queued |
 | Materialize | psqlodbc | `materialize/materialized` | queued |
 | openGauss | psqlodbc | `enmotech/opengauss` | queued |
