@@ -58,6 +58,9 @@ struct OdbcReaderOptions {
   int64_t batch_size;
   int64_t max_bind_bytes;
   bool decimal_as_string;
+  // Driver quirk: some drivers (DuckDB) write a whole internal chunk into bound
+  // buffers regardless of SQL_ATTR_ROW_ARRAY_SIZE; allocate at least this many rows.
+  int64_t min_buffer_rows;
 };
 
 struct OdbcDatabase;

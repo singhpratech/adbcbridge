@@ -193,6 +193,22 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
 
+// Per-driver workarounds, keyed on SQL_DRIVER_NAME.
+static void OdbcDetectQuirks(struct OdbcConnection* conn) {
+  SQLCHAR name[256] = {0};
+  SQLSMALLINT len = 0;
+  if (!SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DRIVER_NAME, name, sizeof(name), &len))) return;
+  for (SQLSMALLINT i = 0; i < len && i < (SQLSMALLINT)sizeof(name); i++) {
+    if (name[i] >= 'A' && name[i] <= 'Z') name[i] = (SQLCHAR)(name[i] - 'A' + 'a');
+  }
+  if (strstr((const char*)name, "duckdb")) {
+    // DuckDB ODBC writes a full 2048-row vector into bound buffers regardless of
+    // SQL_ATTR_ROW_ARRAY_SIZE (heap overflow otherwise) and misaligns rows when the
+    // array size is not a multiple of 2048.
+    conn->reader_opts.min_buffer_rows = 2048;
+  }
+}
+
 static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
                                          struct AdbcDatabase* database,
                                          struct AdbcError* error) {
@@ -230,6 +246,7 @@ static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
     return s;
   }
   conn->connected = true;
+  OdbcDetectQuirks(conn);
   if (!conn->autocommit) RAISE_ADBC(OdbcConnectionSetAutocommit(conn, false, error));
   return ADBC_STATUS_OK;
 }

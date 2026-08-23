@@ -458,28 +458,38 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
   }
   r->rows_per_fetch = all_bound ? (SQLULEN)r->opts.batch_size : 1;
   if (r->rows_per_fetch < 1) r->rows_per_fetch = 1;
+  if (r->opts.min_buffer_rows > 0 && all_bound) {
+    // Round up to a multiple of the driver's internal chunk so rows stay aligned.
+    SQLULEN m = (SQLULEN)r->opts.min_buffer_rows;
+    r->rows_per_fetch = ((r->rows_per_fetch + m - 1) / m) * m;
+  }
+  SQLULEN capacity = r->rows_per_fetch;
+  if (r->opts.min_buffer_rows > 0 && capacity < (SQLULEN)r->opts.min_buffer_rows) {
+    capacity = (SQLULEN)r->opts.min_buffer_rows;
+  }
 
-  ODBC_CHECK(SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_BIND_TYPE, (SQLPOINTER)SQL_BIND_BY_COLUMN, 0),
-             SQL_HANDLE_STMT, hstmt, "SQLSetStmtAttr(ROW_BIND_TYPE)", error);
+  // Column-wise binding is the ODBC default; some drivers (DuckDB) reject setting it
+  // explicitly, so this is best-effort.
+  SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_BIND_TYPE, (SQLPOINTER)SQL_BIND_BY_COLUMN, 0);
   SQLRETURN ret = SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)r->rows_per_fetch, 0);
   if (!SQL_SUCCEEDED(ret)) {
     // Driver doesn't support block cursors: fall back to one row at a time.
     r->rows_per_fetch = 1;
     SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)1, 0);
   }
-  r->row_status = calloc(r->rows_per_fetch, sizeof(SQLUSMALLINT));
+  r->row_status = calloc(capacity, sizeof(SQLUSMALLINT));
   SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_STATUS_PTR, r->row_status, 0);
   SQLSetStmtAttr(hstmt, SQL_ATTR_ROWS_FETCHED_PTR, &r->rows_fetched, 0);
 
   for (SQLSMALLINT i = 0; i < r->ncols; i++) {
     struct OdbcColumn* c = &r->cols[i];
-    c->indicators = calloc(r->rows_per_fetch, sizeof(SQLLEN));
+    c->indicators = calloc(capacity, sizeof(SQLLEN));
     if (!c->indicators) {
       InternalAdbcSetError(error, "out of memory");
       return ADBC_STATUS_INTERNAL;
     }
     if (!c->bound) continue;
-    c->buffer = calloc(r->rows_per_fetch, (size_t)c->elem_size);
+    c->buffer = calloc(capacity, (size_t)c->elem_size);
     if (!c->buffer) {
       InternalAdbcSetError(error, "out of memory binding column %s", c->name);
       return ADBC_STATUS_INTERNAL;
