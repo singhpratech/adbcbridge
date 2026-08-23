@@ -112,6 +112,7 @@ reads, GetObjects, error mapping) run through `tests/compat/test_matrix.py`:
 | TimescaleDB 2.29 (PostgreSQL 16) | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; also ingests into and reads back a `create_hypertable()` hypertable) |
 | IBM Db2 12.1 | Db2 CLI driver (clidriver `libdb2.so`) | PASS (driver quirk handled: 32-bit `SQLLEN` — see `adbc.odbc.sqllen_32bit`) |
 | Firebird 5 | Firebird ODBC 3.5.0-rc1 | PASS (driver quirk handled: `SQL_C_WCHAR` sized in 4-byte `wchar_t`) |
+| Microsoft Access `.mdb`/`.accdb` | MDB Tools 1.0 (`odbc-mdbtools`) | PASS, read side only — the driver executes no DDL/DML and has no `SQLBindParameter` (32-bit `SQLLEN`, as Db2) |
 
 Servers for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`.
 Per-database driver setup (root-free) and run commands: [`tests/compat/README.md`](tests/compat/README.md).

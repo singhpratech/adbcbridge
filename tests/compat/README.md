@@ -11,7 +11,9 @@ ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so python tests/compat/test_matr
 ```
 
 The connection string of an entry can be overridden with `<NAME>_CONN`
-(e.g. `MYSQL_CONN=...`).
+(e.g. `MYSQL_CONN=...`). The file-based entries need no server at all: `sqlite` and
+`duckdb` create their database in a temp dir, and `access` reads a checked-in `.mdb`
+fixture.
 
 ## IBM Db2 12.1
 
@@ -564,3 +566,138 @@ docker compose -f tests/compat/docker-compose.yml down timescaledb
 # or, if started standalone:
 docker stop adbcbridge-timescale && docker rm adbcbridge-timescale
 ```
+
+## Microsoft Access (MDB Tools)
+
+No server: MDB Tools reads an Access `.mdb`/`.accdb` file directly. Getting the driver
+without root is two commands — download the Debian/Ubuntu packages and unpack them into
+a directory of your own:
+
+```sh
+mkdir -p /tmp/adbc-access && cd /tmp/adbc-access
+apt-get download odbc-mdbtools libmdb3t64 libmdbsql3t64 mdbtools
+for f in *.deb; do dpkg-deb -x "$f" ex; done
+```
+
+`libmdbodbc*.so` needs `libmdb.so.3`/`libmdbsql.so.3` from the same set, so put their
+directory on the loader path:
+
+```sh
+export LD_LIBRARY_PATH=/tmp/adbc-access/ex/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+export ACCESS_ODBC_DRIVER=/tmp/adbc-access/ex/usr/lib/x86_64-linux-gnu/odbc/libmdbodbcW.so
+```
+
+Then, from the repository root:
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py access
+# access    PASS  (MDBTOOLS (via ODBC) 1.0.0)
+```
+
+Verified with `odbc-mdbtools` 1.0.0+dfsg-1.2ubuntu1 on Ubuntu 24.04. Both driver flavours
+in the package pass: `libmdbodbcW.so` (Unicode entry points, the default above) and
+`libmdbodbc.so` (ANSI). The `mdbtools` package is not required by the matrix — it only
+brings the `mdb-*` command-line tools, which are handy for inspecting a fixture
+(`mdb-tables`, `mdb-schema`, `mdb-export`).
+
+### The fixture
+
+MDB Tools is **read-only**: it executes no DDL and no DML whatsoever, and it cannot
+create a database file. The matrix therefore runs the `access` entry with
+`read_only=True` against `fixtures/access.mdb`, a Jet 4 (Access 2000) file *generated*
+by `fixtures/MakeAccessMdb.java` — it is not copied from anywhere, so no third-party
+licence attaches to it. `test_matrix.py` copies it into a temporary directory before
+connecting, so a run never touches the checked-in file.
+
+To regenerate it you need a JDK (17+, for the single-file source launcher) and
+[Jackcess](https://jackcess.sourceforge.io/) (Apache-2.0), which is the only free
+library that can *write* an Access file:
+
+```sh
+cd /tmp/adbc-access
+for j in com/healthmarketscience/jackcess/jackcess/4.0.5/jackcess-4.0.5 \
+         org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0 \
+         commons-logging/commons-logging/1.3.0/commons-logging-1.3.0; do
+  curl -sSLO "https://repo1.maven.org/maven2/$j.jar"
+done
+cd /path/to/adbcbridge
+java -cp '/tmp/adbc-access/jackcess-4.0.5.jar:/tmp/adbc-access/commons-lang3-3.14.0.jar:/tmp/adbc-access/commons-logging-1.3.0.jar' \
+     tests/compat/fixtures/MakeAccessMdb.java tests/compat/fixtures/access.mdb 3000
+```
+
+The trailing argument is the row count of the batch-crossing `adbc_big` table; it must
+match the entry's `big_rows`.
+
+Changing `V2000` to `V2016` in that file produces an `.accdb` (Access 2007+) instead.
+MDB Tools reads those too, and the entry passes against one when pointed at it with
+`ACCESS_CONN`:
+
+```sh
+sed 's/V2000/V2016/; s/MakeAccessMdb/MakeAccdb/g' \
+    tests/compat/fixtures/MakeAccessMdb.java > /tmp/adbc-access/MakeAccdb.java
+java -cp "$JACKCESS_CP" /tmp/adbc-access/MakeAccdb.java /tmp/adbc-access/access.accdb 3000
+ACCESS_CONN='Driver={drv};DBQ=/tmp/adbc-access/access.accdb;' \
+  python tests/compat/test_matrix.py access
+```
+
+The checked-in fixture stays `.mdb`: Jet 4 is the format MDB Tools supports most
+completely, and the `.accdb` holding the same rows is more than twice the size
+(456 kB against 196 kB).
+
+### What works, and what MDB Tools cannot do
+
+Working through adbcbridge, exactly as for the server-backed databases:
+
+| | |
+|---|---|
+| types | `LONG`→`int32`, `DOUBLE`→`double`, `TEXT`→`string`, `LONGBINARY`→`binary`, `DATETIME`→`timestamp[us]`, `DECIMAL(10,3)`→`string`, `YESNO`→`bool` |
+| NULLs | every nullable column round-trips as NULL |
+| Unicode | UCS-2 → UTF-8, including accented Latin |
+| `SELECT ... WHERE` | literal predicates, quoted identifiers, `COUNT(*)` |
+| batched reads | 3000 rows across the reader's 1024-row batch boundary |
+| metadata | `GetInfo`, `GetObjects` (filtered to the requested table), `GetTableSchema` |
+| errors | surfaced as ADBC errors carrying the driver's message and native code |
+
+Rough edges the matrix does not assert on: MDB Tools answers `SQLGetInfo` for
+`SQL_DBMS_NAME` but not `SQL_DRIVER_NAME`, and its `SQLTables` ignores the special
+"list the table types" call, so `GetTableTypes` returns one row per table
+(`SYSTEM TABLE` five times, `TABLE` twice) rather than the distinct types. Errors reach
+ADBC as `ADBC_STATUS_UNKNOWN` because the driver reports SQLSTATE `0000` for everything,
+including a missing table.
+
+The tolerances the entry sets, each for a limitation of MDB Tools or of the Access file
+format itself:
+
+| flag | why |
+|---|---|
+| `read_only=True` | no `CREATE`/`INSERT`/`UPDATE`/`DELETE` at all — its SQL parser rejects them, so the table and rows come from the fixture and the bulk-ingest steps are skipped. Its parser also has no `ORDER BY`, so the read-only path sorts client-side. |
+| `params=False` | neither `SQLPrepare` nor `SQLBindParameter` is implemented ("Driver does not support this function"); the parameterised query runs with a literal instead. |
+| `error_text=False` | an unknown table produces a bare `Couldn't parse SQL` naming neither the table nor the problem. |
+| `astral=False` | the iconv conversion out of Jet's UCS-2 turns the emoji's surrogate pair into `??`. Latin-1 accents survive. |
+| `ts_precision="s"` | Access `DATETIME` is a day fraction with one-second resolution; the 123456 µs of the fixture timestamp cannot be stored. |
+| `not_null=("bo",)` | Access `YESNO` has no NULL state — the all-NULL row reads back `False`, not `None`. |
+
+Three fixes in `src/` were needed to reach `PASS`; two of them reuse machinery that was
+already there for other drivers.
+
+- `SQLSetStmtAttr(SQL_ATTR_ROWS_FETCHED_PTR)` fails, so the driver never reported how
+  many rows `SQLFetch` produced and every result set read as empty. The reader now
+  notices that return code, drops to one row per fetch and counts one row per successful
+  `SQLFetch`. Not keyed on a driver name — it is decided by what the driver answered.
+- MDB Tools writes bound-column indicators four bytes wide, leaving the high half of our
+  `SQLLEN` untouched: after `SQLFetch` a NULL column reads `0x……ffffffff`, so every NULL
+  looked like a 4 GB value. That is the same shape as the Db2 CLI driver's 32-bit
+  `SQLLEN`, so the existing `sqllen_32bit` quirk covers it — MDB Tools simply turns it
+  on. (`adbc.odbc.sqllen_32bit` can still pin it either way by hand.)
+- Its `SQLTables` ignores the `TableName` argument, so `GetObjects(table_name_filter=…)`
+  returned the columns of every table in the file, `MSys*` system tables included.
+  `GetObjects` already re-applied the catalog and schema patterns client-side for drivers
+  that ignore those (SQLiteODBC); the table-name pattern is now enforced in the same
+  place, for every driver.
+
+The quirk lives in `OdbcDetectQuirks` (`src/odbc_driver.c`). Because MDB Tools does not
+implement `SQL_DRIVER_NAME`, that function now falls back to `SQL_DBMS_NAME`
+(`MDBTOOLS`) when `SQL_DRIVER_NAME` is unavailable; drivers that answer it are still
+keyed on it. For the same reason the read-only option `adbc.odbc.driver_name` returns an
+error on this driver rather than a name.

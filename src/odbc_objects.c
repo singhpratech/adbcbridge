@@ -25,7 +25,9 @@
 // Small helpers
 
 static char* GetStrCol(const struct OdbcConnection* conn, SQLHSTMT hstmt, SQLUSMALLINT col) {
-  char buf[2048];
+  // Zeroed: a minimal driver (MDB Tools) can answer SQL_SUCCESS for an empty value
+  // without writing so much as the terminator.
+  char buf[2048] = {0};
   SQLLEN ind = 0;
   SQLRETURN ret = OdbcGetData(hstmt, col, SQL_C_CHAR, buf, sizeof(buf), &ind,
                               conn->reader_opts.sqllen_32bit);
@@ -486,14 +488,18 @@ static AdbcStatusCode CollectTables(struct OdbcConnection* conn, int depth, cons
     return status;
   }
 
-  // ODBC drivers may ignore the catalog/schema patterns they were handed, so
-  // enforce them here as well.  The schema filter does not apply at CATALOGS
-  // depth, where no schema is being reported at all.
+  // ODBC drivers may ignore the patterns they were handed, so enforce them here as
+  // well: SQLiteODBC ignores the catalog and schema ones, and MDB Tools ignores
+  // TableName outright, handing back every table in the .mdb file (MSys* system
+  // tables included).  A filter only applies at a depth that reports that name.
+  const bool has_table = depth != ADBC_OBJECT_DEPTH_CATALOGS &&
+                         depth != ADBC_OBJECT_DEPTH_DB_SCHEMAS;
   size_t w = 0;
   for (size_t i = 0; i < l.n; i++) {
     bool keep = NameMatches(catalog, l.rows[i].catalog) &&
                 (depth == ADBC_OBJECT_DEPTH_CATALOGS ||
-                 NameMatches(db_schema, l.rows[i].schema));
+                 NameMatches(db_schema, l.rows[i].schema)) &&
+                (!has_table || NameMatches(table_name, l.rows[i].table));
     if (!keep) {
       free(l.rows[i].catalog); free(l.rows[i].schema);
       free(l.rows[i].table); free(l.rows[i].type);

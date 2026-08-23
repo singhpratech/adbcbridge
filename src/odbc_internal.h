@@ -131,6 +131,9 @@ struct OdbcReaderOptions {
   // (SQLRowCount, SQLDescribeCol's column size, SQLColAttribute's numeric attribute,
   // SQLGetData's StrLen_or_Ind, the rows-fetched / params-processed pointers) get only
   // their low four bytes.  See OdbcReadLen()/OdbcReadULen()/OdbcIndicator*() below.
+  // MDB Tools (Microsoft Access) writes bound-column indicators the same way: after
+  // SQLFetch a NULL column's four low bytes are 0xffffffff and the high half is
+  // whatever was there before, so an unrepaired NULL reads as a 4 GB length.
   bool sqllen_32bit;
   // True once a user option pinned sqllen_32bit; suppresses autodetection.
   bool sqllen_32bit_forced;

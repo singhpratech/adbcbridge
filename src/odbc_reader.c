@@ -890,6 +890,9 @@ struct OdbcReader {
   struct ArrowSchema schema;
   SQLULEN rows_per_fetch;
   SQLULEN rows_fetched;
+  // Set when the driver rejected SQL_ATTR_ROWS_FETCHED_PTR and therefore never reports
+  // how many rows SQLFetch produced; then each successful SQLFetch means exactly one row.
+  bool no_rows_fetched_ptr;
   SQLUSMALLINT* row_status;
   bool done;
   bool bound;
@@ -928,8 +931,17 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
     SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)1, 0);
   }
   r->row_status = calloc(capacity, sizeof(SQLUSMALLINT));
+  // calloc leaves the statuses at SQL_ROW_SUCCESS, which is what a driver that ignores
+  // SQL_ATTR_ROW_STATUS_PTR (MDB Tools) implies for the row it just fetched.
   SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_STATUS_PTR, r->row_status, 0);
-  SQLSetStmtAttr(hstmt, SQL_ATTR_ROWS_FETCHED_PTR, &r->rows_fetched, 0);
+  // MDB Tools rejects SQL_ATTR_ROWS_FETCHED_PTR, leaving rows_fetched at 0 forever, so
+  // every result set read as empty. Without a row count we can only fetch one row per
+  // SQLFetch, which is also all such a driver supports.
+  if (!SQL_SUCCEEDED(SQLSetStmtAttr(hstmt, SQL_ATTR_ROWS_FETCHED_PTR, &r->rows_fetched, 0))) {
+    r->no_rows_fetched_ptr = true;
+    r->rows_per_fetch = 1;
+    SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)1, 0);
+  }
 
   for (SQLSMALLINT i = 0; i < r->ncols; i++) {
     struct OdbcColumn* c = &r->cols[i];
@@ -1271,8 +1283,8 @@ static AdbcStatusCode BulkAppendColumn(struct OdbcReader* r, SQLSMALLINT i, SQLU
   struct OdbcColumn* c = &r->cols[i];
   const int64_t n = (int64_t)nrows;
   // The bulk loops index the indicator array as SQLLEN; a 32-bit-SQLLEN driver
-  // (Db2 clidriver) writes it at stride 4, so those columns take the per-value
-  // path, which reads indicators through OdbcIndicatorGet().
+  // (Db2 clidriver, MDB Tools) writes it at stride 4, so those columns take the
+  // per-value path, which reads indicators through OdbcIndicatorGet().
   if (r->opts.sqllen_32bit) return ADBC_STATUS_NOT_IMPLEMENTED;
   const SQLLEN* ind = c->indicators;
   const uint8_t* base = (const uint8_t*)c->buffer;
@@ -1456,8 +1468,10 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
       break;
     }
     // SQL_ATTR_ROWS_FETCHED_PTR is a SQLULEN the driver writes; it was zeroed above so a
-    // 32-bit-SQLLEN driver's low half is the whole count.
-    const SQLULEN fetched = OdbcReadULen(&r->rows_fetched, r->opts.sqllen_32bit);
+    // 32-bit-SQLLEN driver's low half is the whole count.  A driver that refused the
+    // attribute outright (MDB Tools) never writes it and fetches one row per SQLFetch.
+    const SQLULEN fetched =
+        r->no_rows_fetched_ptr ? 1 : OdbcReadULen(&r->rows_fetched, r->opts.sqllen_32bit);
     // Column-at-a-time conversion needs every row of the rowset to be usable; a
     // rowset with skipped or failed rows falls back to the row-at-a-time path.
     bool bulk = fetched > 0;

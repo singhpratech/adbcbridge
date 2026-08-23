@@ -1,5 +1,7 @@
 # Test servers for the adbcbridge compatibility matrix.
 #   docker compose -f tests/compat/docker-compose.yml up -d
+# The file-based entries need no service here: sqlite and duckdb create their database in
+# a temp dir, and access reads tests/compat/fixtures/access.mdb (see README.md).
 services:
   postgres:
     image: postgres:16

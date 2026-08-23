@@ -7,11 +7,12 @@ Each database is enabled by an environment variable holding the path to its ODBC
     SQLITE_ODBC_DRIVER, DUCKDB_ODBC_DRIVER, POSTGRES_ODBC_DRIVER, MARIADB_ODBC_DRIVER,
     MYSQL_ODBC_DRIVER, MSSQL_ODBC_DRIVER, ORACLE_ODBC_DRIVER, CLICKHOUSE_ODBC_DRIVER,
     DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
-    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER
-Servers are expected as in docker-compose.yml (override with *_CONN env vars).
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, ACCESS_ODBC_DRIVER
+Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
+file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
 """
-import os, sys, tempfile, pathlib, datetime, decimal
+import os, sys, shutil, tempfile, pathlib, datetime, decimal
 import pyarrow as pa
 import adbc_driver_manager.dbapi as dbapi
 
@@ -35,7 +36,8 @@ DBS = {
     "sqlite": dict(
         env="SQLITE_ODBC_DRIVER", conn="Driver={drv};Database=" + os.path.join(TMP, "m.db") + ";",
         ddl="CREATE TABLE adbc_t (i INTEGER, f REAL, s TEXT, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
-        decimal_type="string", ts_precision="ms"),
+        # sqliteodbc converts UTF-8 through UCS-2 and drops the astral-plane emoji.
+        decimal_type="string", ts_precision="ms", astral=False),
     "duckdb": dict(
         env="DUCKDB_ODBC_DRIVER", conn="Driver={drv};Database=:memory:;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)"),
@@ -123,6 +125,28 @@ DBS = {
         # Firebird upper-cases unquoted identifiers; NUMERIC(10,3) is stored as a scaled
         # BIGINT and OdbcFb reports the storage precision (18), not the declared one.
         ident=str.upper, decimal_type="decimal128(18, 3)", ts_us=(123400,)),
+    "access": dict(
+        env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
+        # No server: MDB Tools opens an .mdb file. It is read-only (it executes no DDL and
+        # no DML at all), so the workload runs against a fixture generated out of band by
+        # fixtures/MakeAccessMdb.java -- this DDL is the Jet SQL for what that file holds.
+        fixture="access.mdb", read_only=True,
+        ddl="CREATE TABLE adbc_t (i LONG, f DOUBLE, s TEXT(100), b LONGBINARY, d DATETIME, ts DATETIME, n DECIMAL(10,3), bo YESNO)",
+        # MDB Tools implements neither SQLPrepare nor SQLBindParameter ("Driver does not
+        # support this function"), so the parameterised query runs with a literal.
+        params=False,
+        # Its SQL parser rejects an unknown table with a bare "Couldn't parse SQL" that
+        # names neither the table nor the problem.
+        error_text=False,
+        # iconv from Jet's UCS-2 mangles the surrogate pair of the emoji into "??".
+        astral=False,
+        # Access DATETIME is a day fraction with one-second resolution: no microseconds.
+        ts_us=(0,),
+        # Access YESNO has no NULL state; row 2's bo comes back False, not NULL.
+        not_null=("bo",),
+        # adbc_big ships in the fixture; 3000 rows still cross the 1024-row batch
+        # boundary while keeping the checked-in .mdb under 200 kB.
+        big_rows=3000),
 }
 
 # Typed values: ADBC clients send Arrow-typed parameters, so dates/timestamps go as
@@ -139,6 +163,8 @@ def run(name, cfg):
     for kv in cfg.get("unicode_env", "").split():
         k, v = kv.split("=", 1)
         os.environ.setdefault(k, v)
+    if cfg.get("fixture"):  # file-based, read-only database: work on a private copy
+        shutil.copy(HERE / "fixtures" / cfg["fixture"], os.path.join(TMP, cfg["fixture"]))
     uri = os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(drv=drv)
     # This matrix exists to exercise the ODBC path, so native delegation (which
     # would take over for e.g. SQLite/PostgreSQL) is switched off here.
@@ -149,28 +175,37 @@ def run(name, cfg):
     )
     info = conn.adbc_get_info()
     ident = cfg.get("ident", lambda x: x)  # how the server stores unquoted names
-    t_name, ing_name = "adbc_t" + SUFFIX, "adbc_ing" + SUFFIX
+    # read_only: the driver executes no DDL/DML (MDB Tools), so the table and its rows
+    # come from the checked-in fixture and only the read side of the workload runs. Its
+    # names are fixed by the fixture -- no suffix -- and concurrent runs cannot collide
+    # anyway, each working on its own copy of the file in its own temp dir.
+    ro = cfg.get("read_only", False)
+    sfx = "" if ro else SUFFIX
+    t_name, ing_name = "adbc_t" + sfx, "adbc_ing" + sfx
     T, ING = ident(t_name), ident(ing_name)
     with conn.cursor() as cur:
         for sql in cfg.get("setup", []):
             cur.execute(sql)
-        for t in (t_name, ing_name, '"%s"' % ing_name):  # ingest quotes names (exact case)
-            try:
-                cur.execute("DROP TABLE " + t)
-            except Exception:
-                pass
-        cur.execute(cfg["ddl"].replace("adbc_t", t_name))
-        rows = [ROW1, ROW2] if cfg.get("null_params", True) else [ROW1]
-        cur.executemany("INSERT INTO %s VALUES (?, ?, ?, ?, ?, ?, ?, ?)" % t_name, rows)
-        if not cfg.get("null_params", True):
-            cur.execute("INSERT INTO %s VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)" % t_name)
-        cur.execute("SELECT * FROM %s ORDER BY i" % t_name)
+        if not ro:
+            for t in (t_name, ing_name, '"%s"' % ing_name):  # ingest quotes names (exact case)
+                try:
+                    cur.execute("DROP TABLE " + t)
+                except Exception:
+                    pass
+            cur.execute(cfg["ddl"].replace("adbc_t", t_name))
+            rows = [ROW1, ROW2] if cfg.get("null_params", True) else [ROW1]
+            cur.executemany("INSERT INTO %s VALUES (?, ?, ?, ?, ?, ?, ?, ?)" % t_name, rows)
+            if not cfg.get("null_params", True):
+                cur.execute("INSERT INTO %s VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)" % t_name)
+        # MDB Tools' SQL parser has no ORDER BY, so read_only sorts client-side instead.
+        cur.execute("SELECT * FROM %s" % t_name if ro else "SELECT * FROM %s ORDER BY i" % t_name)
         t = cur.fetch_arrow_table()
-        r1, r2 = t.to_pylist()
-        r1 = {k.lower(): v for k, v in r1.items()}; r2 = {k.lower(): v for k, v in r2.items()}
+        got = [{k.lower(): v for k, v in r.items()} for r in t.to_pylist()]
+        got.sort(key=lambda r: r["i"])
+        r1, r2 = got
         assert r1["i"] == 1 and r1["f"] == 1.5, r1
         assert r1["b"] in (b"\x01\x02", "\x01\x02"), r1["b"]
-        assert r1["s"] == "héllo 🚀" or (name == "sqlite" and r1["s"].startswith("héllo")), r1["s"]
+        assert r1["s"] == "héllo 🚀" or (not cfg.get("astral", True) and r1["s"].startswith("héllo")), r1["s"]
         assert r1["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), r1["d"]
         ts = r1["ts"]
         assert ts.replace(microsecond=0) == datetime.datetime(2024, 2, 29, 13, 45, 10), ts
@@ -184,33 +219,20 @@ def run(name, cfg):
         assert n in (decimal.Decimal("12.345"), "12.345"), n
         assert fields["bo"] == cfg.get("bool_type", "bool"), fields["bo"]
         assert r1["bo"] in (True, 1), r1["bo"]
-        assert all(v is None for k, v in r2.items() if k != "i"), r2
-        # parameterised query
-        cur.execute("SELECT s FROM %s WHERE i = ?" % t_name, (1,))
+        # not_null: columns whose type has no NULL state at all (Access YESNO).
+        skip = ("i",) + tuple(cfg.get("not_null", ()))
+        assert all(v is None for k, v in r2.items() if k not in skip), r2
+        # parameterised query (literal where the driver has no SQLBindParameter)
+        if cfg.get("params", True):
+            cur.execute("SELECT s FROM %s WHERE i = ?" % t_name, (1,))
+        else:
+            cur.execute("SELECT s FROM %s WHERE i = 1" % t_name)
         assert cur.fetchone()[0].startswith("héllo")
-        # bulk ingest + read back
-        tbl = pa.table({
-            "a": pa.array([1, 2, None], pa.int64()),
-            "b": pa.array(["x", None, "zz"]),
-            "c": pa.array([1.5, None, 2.5]),
-            "d": pa.array([0, 19782, None], pa.date32()),
-            "e": pa.array([True, None, False], pa.bool_()),
-        })
-        n1 = cur.adbc_ingest(ing_name, tbl, mode="create")
-        n2 = cur.adbc_ingest(ing_name, tbl, mode="append")
-        assert (n1, n2) == (3, 3) or not cfg.get("rowcount", True), (n1, n2)
-        cur.execute('SELECT "a", "b", "c", "d" FROM "%s" WHERE "a" = 2' % ing_name)
-        got = cur.fetch_arrow_table().to_pylist()
-        assert len(got) == 2 and got[0]["b"] is None and got[0]["c"] is None and got[0]["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), got
-        # bigger result to cross batch boundaries
-        N = cfg.get("big_rows", 5000)
-        cur.adbc_ingest(ing_name, pa.table({"a": pa.array(range(N), pa.int64()), "b": pa.array(["r%d" % i for i in range(N)]),
-                                             "c": pa.array([float(i) for i in range(N)]), "d": pa.array([i for i in range(N)], pa.date32()),
-                                             "e": pa.array([i % 2 == 0 for i in range(N)])}), mode="replace")
-        cur.execute('SELECT "a", "b" FROM "%s" ORDER BY "a"' % ing_name)
-        big = cur.fetch_arrow_table()
-        assert big.column("a").to_pylist() == list(range(N))
-        assert big.column("b").to_pylist()[-1] == "r%d" % (N - 1)
+        # bulk ingest + read back (read_only reads the fixture's big table instead)
+        if ro:
+            check_big(cur, cfg, 'SELECT "a", "b" FROM "adbc_big"')
+        else:
+            check_ingest(cur, cfg, ing_name)
         # extra: per-database steps run after the standard workload, for features
         # only that database has.  Each entry is (step, expected): `step` is either
         # SQL, or (table, arrow table) to bulk ingest (mode="append") into a table an
@@ -231,7 +253,8 @@ def run(name, cfg):
             cur.execute("SELECT * FROM adbc_no_such_table")
             raise AssertionError("expected error")
         except dbapi.Error as e:
-            assert "adbc_no_such_table" in str(e) or "not" in str(e).lower(), str(e)
+            if cfg.get("error_text", True):
+                assert "adbc_no_such_table" in str(e) or "not" in str(e).lower(), str(e)
     # metadata
     objs = conn.adbc_get_objects(depth="all", table_name_filter=T).read_all().to_pylist()
     # No catalog filter is given, so every catalog on the server that happens to
@@ -246,6 +269,39 @@ def run(name, cfg):
     assert [f.name.lower() for f in sch] == ["i", "f", "s", "b", "d", "ts", "n", "bo"]
     conn.close()
     return "PASS  (%s %s)" % (info["vendor_name"], info["vendor_version"])
+
+
+def check_big(cur, cfg, sql):
+    """Read a table of big_rows (a, b) rows, crossing the reader's batch boundary."""
+    n = cfg.get("big_rows", 5000)
+    cur.execute(sql)
+    big = cur.fetch_arrow_table()
+    pairs = sorted(zip(big.column("a").to_pylist(), big.column("b").to_pylist()))
+    assert [a for a, _ in pairs] == list(range(n)), len(pairs)
+    assert pairs[-1][1] == "r%d" % (n - 1), pairs[-1]
+
+
+def check_ingest(cur, cfg, ing_name):
+    """Bulk ingest, read back, then ingest big_rows rows and read those back."""
+    tbl = pa.table({
+        "a": pa.array([1, 2, None], pa.int64()),
+        "b": pa.array(["x", None, "zz"]),
+        "c": pa.array([1.5, None, 2.5]),
+        "d": pa.array([0, 19782, None], pa.date32()),
+        "e": pa.array([True, None, False], pa.bool_()),
+    })
+    n1 = cur.adbc_ingest(ing_name, tbl, mode="create")
+    n2 = cur.adbc_ingest(ing_name, tbl, mode="append")
+    assert (n1, n2) == (3, 3) or not cfg.get("rowcount", True), (n1, n2)
+    cur.execute('SELECT "a", "b", "c", "d" FROM "%s" WHERE "a" = 2' % ing_name)
+    got = cur.fetch_arrow_table().to_pylist()
+    assert len(got) == 2 and got[0]["b"] is None and got[0]["c"] is None and got[0]["d"] in (datetime.date(2024, 2, 29), datetime.datetime(2024, 2, 29)), got
+    # bigger result to cross batch boundaries
+    N = cfg.get("big_rows", 5000)
+    cur.adbc_ingest(ing_name, pa.table({"a": pa.array(range(N), pa.int64()), "b": pa.array(["r%d" % i for i in range(N)]),
+                                        "c": pa.array([float(i) for i in range(N)]), "d": pa.array([i for i in range(N)], pa.date32()),
+                                        "e": pa.array([i % 2 == 0 for i in range(N)])}), mode="replace")
+    check_big(cur, cfg, 'SELECT "a", "b" FROM "%s" ORDER BY "a"' % ing_name)
 
 
 if __name__ == "__main__":

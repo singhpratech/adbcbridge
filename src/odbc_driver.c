@@ -264,8 +264,8 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
 
-// Per-driver workarounds, keyed on SQL_DRIVER_NAME, plus the capability probes the
-// reader needs.
+// Per-driver workarounds, keyed on SQL_DRIVER_NAME (or SQL_DBMS_NAME for a driver that
+// does not implement it), plus the capability probes the reader needs.
 static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   SQLCHAR name[256] = {0};
   SQLSMALLINT len = 0;
@@ -278,7 +278,15 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     conn->reader_opts.getdata_repair = (gd & need) == need;
   }
 
-  if (!SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DRIVER_NAME, name, sizeof(name), &len))) return;
+  if (!SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DRIVER_NAME, name, sizeof(name), &len))) {
+    // MDB Tools does not implement SQL_DRIVER_NAME at all (SQLGetInfo returns SQL_ERROR),
+    // so fall back to the DBMS name to identify it. Drivers that answer SQL_DRIVER_NAME
+    // are still keyed on that.
+    name[0] = 0;
+    len = 0;
+    if (!SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DBMS_NAME, name, sizeof(name), &len))) return;
+  }
+  if (len > (SQLSMALLINT)sizeof(name)) len = (SQLSMALLINT)sizeof(name);
   for (SQLSMALLINT i = 0; i < len && i < (SQLSMALLINT)sizeof(name); i++) {
     if (name[i] >= 'A' && name[i] <= 'Z') name[i] = (SQLCHAR)(name[i] - 'A' + 'a');
   }
@@ -325,9 +333,13 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // ships a libdb2.so built with 32-bit SQLLEN/SQLULEN even on 64-bit Linux; it
     // reports SQL_DRIVER_NAME "libdb2.a".  The 64-bit-SQLLEN build is the separate
     // libdb2o.so ("libdb2o.a"), which needs no quirk.
+    // MDB Tools writes bound-column indicators the same way: a NULL column's low four
+    // bytes come back 0xffffffff with the high half untouched.  It is identified through
+    // the SQL_DBMS_NAME fallback above, having no SQL_DRIVER_NAME of its own.
     const char* n = (const char*)name;
-    conn->reader_opts.sqllen_32bit = strstr(n, "db2") != NULL && strstr(n, "libdb2o") == NULL &&
-                                     strstr(n, "db2o.") == NULL;
+    conn->reader_opts.sqllen_32bit = (strstr(n, "db2") != NULL && strstr(n, "libdb2o") == NULL &&
+                                      strstr(n, "db2o.") == NULL) ||
+                                     strstr(n, "mdbtools") != NULL;
   }
 }
 
