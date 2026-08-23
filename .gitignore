@@ -8,3 +8,4 @@ __pycache__/
 tests/validation-upstream/
 dist/
 private/
+*.egg-info/

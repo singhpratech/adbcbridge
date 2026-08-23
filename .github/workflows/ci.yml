@@ -101,6 +101,18 @@ jobs:
           ADBC_ODBC_DRIVER: ${{ github.workspace }}/build/libadbc_driver_odbc.so
         run: python tests/test_sqlite.py
 
+      # The Python package (python/) is a thin wrapper around the library built
+      # above; ADBC_ODBC_DRIVER points its driver lookup at that build.
+      - name: Test the Python package (Linux)
+        if: runner.os == 'Linux'
+        env:
+          SQLITE_ODBC_DRIVER: /usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
+          ADBC_ODBC_DRIVER: ${{ github.workspace }}/build/libadbc_driver_odbc.so
+        run: |
+          python -m pip install pytest
+          python -m pip install -e python
+          python -m pytest python/tests -q
+
       # Check that the installed manifest really lets the driver manager find
       # the driver by name.  Both install flavours are covered: the prefix
       # given at configure time (dist, installed above) and a prefix given at

@@ -219,6 +219,57 @@ Options (set on the database):
 | `adbc.odbc.max_bind_bytes` | max bound buffer per value before falling back to `SQLGetData` (default 32768) |
 | `adbc.odbc.decimal_as_string` | `true` to return DECIMAL/NUMERIC as strings |
 
+## Python package
+
+`python/` holds a thin pip-installable wrapper, `adbcbridge`, that locates the
+shared library for you and hands it to the ADBC driver manager:
+
+```sh
+pip install ./python          # from a checkout; `pip install adbcbridge` once published
+```
+
+```python
+import adbcbridge
+
+with adbcbridge.connect(uri="Driver=SQLite3;Database=my.db;") as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM t")
+        table = cur.fetch_arrow_table()      # pyarrow.Table
+```
+
+`connect(uri=None, dsn=None, username=None, password=None, driver_path=None, **options)`
+returns a plain `adbc_driver_manager.dbapi.Connection` — nothing is wrapped or
+hidden. Extra keyword options become database options: a bare name is prefixed
+with `adbc.odbc.` (`batch_size=4096` → `adbc.odbc.batch_size`), a dotted name is
+passed through as given, and `True`/`False` become `"true"`/`"false"`.
+
+`adbcbridge.driver_path()` returns the path of `libadbc_driver_odbc.so`, looked
+up in this order: the `ADBC_ODBC_DRIVER` environment variable, a copy bundled
+inside the package, the driver manifest named `odbc` (see above), then common
+install locations (`<sys.prefix>/lib`, `/usr/local/lib`, `/usr/lib`, and a
+`build/` tree next to a source checkout). It raises
+`adbcbridge.DriverNotFoundError` if none of those has it.
+
+There is a command line tool too:
+
+```sh
+adbcbridge query "Driver=SQLite3;Database=my.db;" "SELECT * FROM t"   # --format csv|schema, --limit N, -p PARAM
+adbcbridge drivers        # ODBC drivers registered in odbcinst.ini
+adbcbridge driver-path    # which libadbc_driver_odbc.so would be used
+```
+
+Wheels are pure Python unless a driver library is present at build time, in
+which case it is bundled into the wheel and the wheel is tagged for the current
+platform:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+python -m build --wheel python     # picks up ./build/libadbc_driver_odbc.so
+# or: ADBCBRIDGE_LIBRARY=/path/to/libadbc_driver_odbc.so python -m build --wheel python
+```
+
+Details and the package-only README: [`python/README.md`](python/README.md).
+
 ## Use from Rust
 
 ```toml
@@ -369,6 +420,10 @@ load the driver by the name `odbc` — is covered by:
 
 ```sh
 SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_plug_and_play.py
+The Python package (`python/`) has its own pytest suite, which also runs
+against SQLite:
+
+pip install -e python
 ```
 
 The same smoke tests from Rust (see `tests/rust/README.md`):
