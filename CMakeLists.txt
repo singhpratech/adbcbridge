@@ -45,6 +45,12 @@ option(ADBCBRIDGE_INSTALL_MANIFEST "Install an ADBC driver manifest (odbc.toml)"
 set(ADBCBRIDGE_MANIFEST_DIR "etc/adbc/drivers"
     CACHE STRING "Install directory for the ADBC driver manifest, relative to the install prefix")
 
+# Native delegation caches the driver manager's loader and unixODBC's odbc.ini
+# reader behind a pthread_once/pthread_mutex, so that concurrent
+# AdbcDatabaseInit calls cannot race on them.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 # --- ODBC driver manager (unixODBC / iODBC / Windows) ---
 find_package(ODBC QUIET)
 if(NOT ODBC_FOUND)
@@ -76,7 +82,7 @@ target_compile_definitions(adbc_driver_odbc PRIVATE
 # ${CMAKE_DL_LIBS}: native delegation resolves the ADBC driver manager
 # (AdbcLoadDriver) and unixODBC's odbc.ini reader with dlopen/dlsym rather
 # than linking them, which would make the dependency circular.
-target_link_libraries(adbc_driver_odbc PRIVATE ODBC::ODBC ${CMAKE_DL_LIBS})
+target_link_libraries(adbc_driver_odbc PRIVATE ODBC::ODBC ${CMAKE_DL_LIBS} Threads::Threads)
 set_target_properties(adbc_driver_odbc PROPERTIES
   C_VISIBILITY_PRESET hidden
   PREFIX "lib"
@@ -233,6 +239,24 @@ if(ADBC_ODBC_BUILD_TESTS AND NOT WIN32)
   endif()
   if(ADBC_ODBC_ASAN)
     target_compile_definitions(adbc_odbc_test_driver PRIVATE ADBC_ODBC_TEST_ASAN)
+  endif()
+
+  # A stand-in "native" ADBC driver for the delegation tests: it hands back the
+  # URI and options adbcbridge translated for it, so tests can assert on exactly
+  # what a native driver would have been given.  Never installed.
+  add_library(adbc_fake_native_driver SHARED
+    tests/c/fake_native_driver.c
+    vendor/nanoarrow/nanoarrow.c)
+  target_include_directories(adbc_fake_native_driver PRIVATE include vendor)
+  target_compile_definitions(adbc_fake_native_driver PRIVATE
+    ADBC_EXPORTING
+    NANOARROW_DLL=)
+  set_target_properties(adbc_fake_native_driver PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    PREFIX "lib"
+    OUTPUT_NAME "adbc_fake_native_driver")
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(adbc_fake_native_driver PRIVATE -Wall -Wextra)
   endif()
 
   add_test(NAME adbc_odbc_c_smoke

@@ -47,7 +47,12 @@ SQLITE_ODBC = os.environ.get("SQLITE_ODBC_DRIVER", "SQLite3")
 # unixODBC's own libodbc.so picked up by the dlopen fallback.
 CONNECT_SNIPPET = """
 import adbc_driver_manager.dbapi as dbapi
-conn = dbapi.connect(driver="odbc", db_kwargs={{"uri": {uri!r}}})
+# This is about resolving the driver by name, not about native delegation
+# (which would hand a SQLite target to adbc_driver_sqlite and report its name).
+conn = dbapi.connect(
+    driver="odbc",
+    db_kwargs={{"uri": {uri!r}, "adbc.odbc.delegate": "never"}},
+)
 info = conn.adbc_get_info()
 with conn.cursor() as cur:
     cur.execute("SELECT 42 AS answer")

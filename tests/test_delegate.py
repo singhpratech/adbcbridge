@@ -26,6 +26,7 @@ driver package) are missing.
 
 import os
 import pathlib
+import shutil
 import statistics
 import tempfile
 import time
@@ -68,16 +69,54 @@ def driver_name(conn):
 
 
 def delegated_to(conn):
-    """Who is serving this connection?
-
-    Delegation replaces adbcbridge's whole function table, so the option only
-    answers on the ODBC path; once the native driver has taken over it does not
-    know the key.
-    """
+    """Who is serving this connection: "odbc", or the native driver's name."""
     try:
         return conn.adbc_connection.get_option("adbc.odbc.delegated_to")
     except Exception:
         return None
+
+
+FAKE_NATIVE = os.environ.get(
+    "ADBC_FAKE_NATIVE_DRIVER",
+    str(HERE.parent / "build" / "libadbc_fake_native_driver.so"),
+)
+
+
+def fake_native(family):
+    """A copy of the stand-in native driver, named after a database family.
+
+    It records the URI and the options adbcbridge translated for it, so a test
+    can assert on exactly what a real native driver would have been handed.
+    """
+    if not os.path.exists(FAKE_NATIVE):
+        skip(f"{FAKE_NATIVE} is not built (cmake --build build)")
+    path = os.path.join(tempfile.mkdtemp(), f"libadbc_driver_fake_{family}.so")
+    shutil.copy(FAKE_NATIVE, path)
+    return path
+
+
+def fake_delegate(conn_str, family="postgres", query="uri", conn_kwargs=None, **options):
+    """Delegate `conn_str` to the stand-in driver and run `query` against it.
+
+    "uri" answers with the URI it was given, "options" with every option.
+    """
+    db_kwargs = {
+        "uri": conn_str,
+        "adbc.odbc.delegate": "always",
+        "adbc.odbc.delegate.allow_paths": "true",
+        "adbc.odbc.delegate.driver": fake_native(family),
+    }
+    db_kwargs.update(options)
+    connection = dbapi.connect(
+        driver=DRIVER, db_kwargs=db_kwargs, conn_kwargs=conn_kwargs or {}
+    )
+    with connection as conn, conn.cursor() as cur:
+        cur.execute(query)
+        return cur.fetch_arrow_table().to_pydict()["value"]
+
+
+def fake_uri(conn_str, family="postgres", **options):
+    return fake_delegate(conn_str, family=family, **options)[0]
 
 
 def pg_odbc_connection_string():
@@ -338,7 +377,10 @@ def test_forced_driver_that_cannot_be_loaded_falls_back():
     path = os.path.join(tempfile.mkdtemp(), "fallback.db")
     with bridge(
         f"Driver={sqlite_odbc};Database={path};",
-        **{"adbc.odbc.delegate.driver": "/nonexistent/libadbc_driver_sqlite.so"},
+        **{
+            "adbc.odbc.delegate.allow_paths": "true",
+            "adbc.odbc.delegate.driver": "/nonexistent/libadbc_driver_sqlite.so",
+        },
     ) as conn:
         assert delegated_to(conn) == "odbc"
         last_error = conn.adbc_database.get_option("adbc.odbc.delegate.last_error")
@@ -347,6 +389,227 @@ def test_forced_driver_that_cannot_be_loaded_falls_back():
             cur.execute("SELECT 1 AS one")
             assert cur.fetch_arrow_table().to_pydict() == {"one": [1]}
     print(f"unloadable adbc.odbc.delegate.driver -> ODBC ({last_error})")
+
+
+
+# --- security: what reaches the native driver -------------------------------
+
+
+def test_tls_keywords_are_forwarded_not_dropped():
+    """psqlodbc's TLS settings must survive the rebuild into a libpq URI."""
+    uri = fake_uri(
+        "Driver=psqlodbcw.so;Server=db.internal;Database=prod;Uid=app;Pwd=s3cret;"
+        "SSLmode=verify-full;sslrootcert=/etc/pki/ca.pem;"
+    )
+    assert uri.startswith("postgresql://app:s3cret@db.internal/prod?"), uri
+    assert "sslmode=verify-full" in uri, uri
+    assert "sslrootcert=%2Fetc%2Fpki%2Fca.pem" in uri, uri
+    print(f"TLS keywords forwarded -> {uri}")
+
+
+def test_pqopt_block_is_forwarded():
+    uri = fake_uri(
+        "Driver=psqlodbcw.so;Server=h;Database=d;Uid=u;Pwd=p;"
+        "pqopt={sslrootcert=/etc/ca.pem sslmode=require};"
+    )
+    assert "sslmode=require" in uri and "sslrootcert=%2Fetc%2Fca.pem" in uri, uri
+
+
+def test_unrepresentable_keyword_stops_delegation():
+    """A keyword we cannot translate must not be dropped behind the user's back."""
+    try:
+        fake_uri("Driver=psqlodbcw.so;Server=h;Database=d;ReadOnly=1;")
+        raise AssertionError("expected delegation to be refused")
+    except dbapi.Error as e:
+        assert "ReadOnly" in str(e), e
+    # ... and in auto mode that means the ODBC driver keeps serving it.
+    drv = os.environ.get("SQLITE_ODBC_DRIVER", "SQLite3")
+    path = os.path.join(tempfile.mkdtemp(), "fk.db")
+    with bridge(f"Driver={drv};Database={path};FKSupport=True;") as conn:
+        assert delegated_to(conn) == "odbc"
+        last_error = conn.adbc_database.get_option("adbc.odbc.delegate.last_error")
+        assert "FKSupport" in last_error, last_error
+    print(f"unrepresentable keyword -> ODBC ({last_error})")
+
+
+def test_connection_string_values_are_uri_escaped():
+    """A tenant-controlled Database= must not become libpq query parameters."""
+    uri = fake_uri(
+        "Driver=psqlodbcw.so;Server=db;Uid=svc;Pwd=S;"
+        "Database=x?host=attacker.example&sslmode=disable;"
+    )
+    assert uri == "postgresql://svc:S@db/x%3Fhost%3Dattacker.example%26sslmode%3Ddisable", uri
+
+
+def test_unix_socket_and_ipv6_hosts():
+    uri = fake_uri("Driver=psqlodbcw.so;Server=/var/run/postgresql;Port=5432;Database=adbc;Uid=adbc;")
+    assert uri == "postgresql://adbc@/adbc?host=%2Fvar%2Frun%2Fpostgresql&port=5432", uri
+    uri = fake_uri("Driver=psqlodbcw.so;Server=::1;Port=5432;Database=adbc;")
+    assert uri == "postgresql://[::1]:5432/adbc", uri
+
+
+def test_brace_escape_in_connection_string():
+    """`}}` is a literal '}' per the ODBC grammar, not the end of the value."""
+    uri = fake_uri("Driver=libsqlite3odbc.so;Database={/tmp/a}}b/x.db};", family="sqlite")
+    assert uri == "/tmp/a}b/x.db", uri
+    uri = fake_uri("Driver=psqlodbcw.so;Server=h;Database=d;Uid=u;Pwd={p}}w};")
+    assert uri == "postgresql://u:p%7Dw@h/d", uri
+
+
+def test_delegate_driver_paths_are_opt_in():
+    """A caller-supplied option must not be able to dlopen() anything it likes."""
+    evil = os.path.join(tempfile.mkdtemp(), "libadbc_driver_postgresql.so")
+    open(evil, "wb").close()
+    try:
+        bridge("postgresql://localhost/db", **{"adbc.odbc.delegate.driver": evil})
+        raise AssertionError("expected the path to be refused")
+    except dbapi.Error as e:
+        assert "allow_paths" in str(e), e
+    try:
+        bridge(
+            "Driver=psqlodbcw.so;Server=h;Database=d;",
+            **{"adbc.odbc.delegate.search_path": os.path.dirname(evil)},
+        )
+        raise AssertionError("expected the search path to be refused")
+    except dbapi.Error as e:
+        assert "allow_paths" in str(e), e
+    print("adbc.odbc.delegate.driver=/path -> refused unless allow_paths")
+
+
+def test_nested_delegation_to_the_bridge_is_refused():
+    """adbcbridge must not delegate to itself (it used to corrupt the table)."""
+    try:
+        bridge(
+            "postgresql://127.0.0.1:1/db",
+            **{
+                "adbc.odbc.delegate": "always",
+                "adbc.odbc.delegate.allow_paths": "true",
+                "adbc.odbc.delegate.driver": DRIVER,
+            },
+        )
+        raise AssertionError("expected self-delegation to be refused")
+    except dbapi.Error as e:
+        assert "itself" in str(e), e
+    print("delegating to adbcbridge itself -> refused")
+
+
+# --- diagnostics ------------------------------------------------------------
+
+
+def test_native_uri_with_username_reaches_the_native_driver():
+    uri = fake_uri("postgresql://h/db", username="u", password="p")
+    assert uri == "postgresql://h/db?user=u&password=p", uri
+    # A file-backed database has nowhere to put credentials: say so, do not fall
+    # back to ODBC with a URI ODBC cannot parse.
+    try:
+        fake_uri("sqlite:/tmp/x.db", family="sqlite", username="u")
+        raise AssertionError("expected an error")
+    except dbapi.Error as e:
+        assert "username" in str(e), e
+
+
+def test_native_connection_error_is_not_masked_by_odbc():
+    """A native URI the native driver rejected must report *its* error."""
+    require_postgres()
+    try:
+        bridge("postgresql://adbc:adbc@127.0.0.1:1/adbc")
+        raise AssertionError("expected a connection error")
+    except dbapi.Error as e:
+        message = str(e)
+        assert "IM002" not in message, message
+        assert "onnect" in message or "refused" in message, message
+    print("native connection failure surfaces the native error")
+
+
+def test_native_uri_over_odbc_is_translated_or_explained():
+    """delegate=never with a native URI: ODBC cannot parse it as-is."""
+    try:
+        with bridge("postgresql://127.0.0.1:15432/adbc", **{"adbc.odbc.delegate": "never"}):
+            pass
+    except dbapi.Error as e:
+        message = str(e)
+        assert "IM002" not in message, message
+        assert "native ADBC URI" in message or "postgres" in message.lower(), message
+        print(f"native URI on the ODBC path -> {message.splitlines()[0]}")
+
+
+def test_options_after_init_are_rejected():
+    drv = os.environ.get("SQLITE_ODBC_DRIVER", "SQLite3")
+    path = os.path.join(tempfile.mkdtemp(), "frozen.db")
+    with bridge(f"Driver={drv};Database={path};", **{"adbc.odbc.delegate": "never"}) as conn:
+        try:
+            conn.adbc_database.set_options(**{"adbc.odbc.delegate": "always"})
+            raise AssertionError("expected INVALID_STATE")
+        except dbapi.Error as e:
+            assert "after AdbcDatabaseInit" in str(e), e
+    print("adbc.odbc.delegate after init -> INVALID_STATE")
+
+
+def test_unknown_adbc_option_is_reported_not_dropped():
+    drv = os.environ.get("SQLITE_ODBC_DRIVER", "SQLite3")
+    path = os.path.join(tempfile.mkdtemp(), "opt.db")
+    # delegate=never: nothing can ever consume it.
+    try:
+        bridge(
+            f"Driver={drv};Database={path};",
+            **{"adbc.odbc.delegate": "never", "adbc.nonesuch": "1"},
+        )
+        raise AssertionError("expected NOT_IMPLEMENTED")
+    except dbapi.Error as e:
+        assert "adbc.nonesuch" in str(e), e
+    # auto, but nothing to delegate to: reported at init rather than dropped.
+    mariadb = os.environ.get("MARIADB_ODBC_DRIVER")
+    if mariadb:
+        try:
+            bridge(
+                f"Driver={mariadb};Server=127.0.0.1;Port=13306;Database=adbc;User=adbc;Password=adbc;",
+                **{"adbc.nonesuch": "1"},
+            )
+            raise AssertionError("expected NOT_IMPLEMENTED")
+        except dbapi.Error as e:
+            assert "adbc.nonesuch" in str(e), e
+    print("unknown adbc.* option -> NOT_IMPLEMENTED")
+
+
+def test_pass_through_option_reaches_the_native_driver():
+    options = fake_delegate(
+        "Driver=psqlodbcw.so;Server=h;Database=d;",
+        query="options",
+        **{"adbc.fake.custom": "42"},
+    )
+    assert "adbc.fake.custom=42" in options, options
+
+
+def test_connection_options_set_before_init_reach_the_native_driver():
+    """conn_kwargs are applied before AdbcConnectionInit, delegated or not."""
+    options = fake_delegate(
+        "Driver=psqlodbcw.so;Server=h;Database=d;",
+        query="options",
+        conn_kwargs={"adbc.connection.autocommit": "true"},
+    )
+    assert "conn:adbc.connection.autocommit=true" in options, options
+
+
+def test_delegated_to_names_the_native_driver():
+    require_postgres()
+    with bridge(PG_URI) as conn:
+        assert delegated_to(conn) == "postgresql", delegated_to(conn)
+        assert conn.adbc_database.get_option("adbc.odbc.delegated_to") == "postgresql"
+    print("adbc.odbc.delegated_to -> postgresql")
+
+
+def test_delegated_connection_keeps_the_native_feature_surface():
+    """The bridge forwards; it does not shrink what the native driver can do."""
+    require_postgres()
+    with bridge(PG_URI) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT $1::int AS a", parameters=(1,))
+            assert cur.fetch_arrow_table().to_pydict() == {"a": [1]}
+        with conn.cursor() as cur:
+            # StatementGetParameterSchema, forwarded to the native driver.
+            cur.adbc_prepare("SELECT $1::int")
+            assert cur.adbc_prepare("SELECT $1::int") is not None
+        assert conn.adbc_get_table_types()
 
 
 def main():
