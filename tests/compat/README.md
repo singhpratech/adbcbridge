@@ -1901,3 +1901,102 @@ This row moves back out of "Known not to work" if sqld ever restores a PostgreSQ
 listener, or if a libSQL ODBC driver appears; the entry would then look like the other
 PG-wire entries, with SQLite's type affinity driving the tolerance flags (the `sqlite`
 entry's `decimal_type="string"` is the likely starting point).
+
+## IBM Informix 15 (developer edition)
+
+Informix answers DRDA — the wire protocol Db2 speaks — on a second listener, the
+`<server>_dr` alias the image puts on port 9089. So the driver is the one the `db2`
+entry already uses, IBM's freely downloadable **clidriver** `libdb2.so`: no new download,
+just point `INFORMIX_ODBC_DRIVER` at it. (Informix's own CSDK ODBC driver is a licensed
+SDK; this entry does not need it.)
+
+Server:
+
+```sh
+docker run -d --name adbcbridge-informix --hostname informix --memory=2g \
+  -e LICENSE=accept -e GL_USEGLU=1 -e DELIMIDENT=y \
+  -p 127.0.0.1:19089:9089 icr.io/informix/informix-developer-database:latest
+```
+
+or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d informix`.
+
+Three things about that command are load-bearing:
+
+* **No `--privileged`.** IBM's quickstart runs this image privileged; do not. In a
+  privileged container `sudo` inside it fails PAM account management
+  (`sudo: PAM account management error: Authentication service cannot retrieve
+  authentication info`), and the entrypoint routes *every* setup step through `sudo`
+  (`RUNAS`/`SED` in `/opt/ibm/scripts/informix_functions.sh`). The `$ONCONFIG` and
+  `sqlhosts` edits are then silently skipped, `oninit` dies with `Bad DBSERVERNAME`,
+  and the log loops on `Waiting for sysadmin` forever. Unprivileged, the same image
+  initialises in about a minute.
+* **`GL_USEGLU=1`** switches the server's Unicode handling to ICU. Without it a
+  four-byte UTF-8 character — the matrix stores `"héllo 🚀"` — is rejected on the way in
+  (`-202 An illegal character has been found in the statement` on the narrow path,
+  `-415 Data conversion error` on the wide one). Two- and three-byte characters work
+  either way, so this only shows up on the emoji.
+* **`DELIMIDENT=y`** makes the server read `"..."` as a delimited identifier instead of
+  a string literal. `adbc_ingest` quotes the names it generates, and without this the
+  generated `CREATE TABLE "adbc_ing" ("a" BIGINT, ...)` is `-201 A syntax error has
+  occurred`. On a DRDA session this has to be set in the **server's** environment: the
+  client-side `DELIMIDENT` belongs to Informix's own CSDK, and Informix has no
+  `SET ENVIRONMENT` for it the way MySQL has `sql_mode`.
+
+Then create the database. The image ships no user database, and the locale it would
+default to is `en_US.819` (ISO-8859-1), which cannot hold the workload's emoji:
+
+```sh
+docker exec adbcbridge-informix bash -lc '
+  . /opt/ibm/scripts/informix_inf.env
+  export DB_LOCALE=en_us.utf8 CLIENT_LOCALE=en_us.utf8
+  printf "CREATE DATABASE adbc WITH LOG;\n" > /tmp/c.sql && dbaccess - /tmp/c.sql'
+```
+
+`WITH LOG` is required: an unlogged Informix database cannot be reached over DRDA at all.
+
+Run the entry (the same `LD_LIBRARY_PATH` the `db2` entry needs — `libdb2.so` loads its
+siblings from there):
+
+```sh
+export INFORMIX_ODBC_DRIVER=/tmp/dbs/db2/clidriver/lib/libdb2.so
+LD_LIBRARY_PATH=/tmp/dbs/db2/clidriver/lib:$LD_LIBRARY_PATH \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+python tests/compat/test_matrix.py informix
+# informix  PASS  (IDS/UNIX64 (via ODBC) 12.10.0000)
+```
+
+`12.10.0000` is the DRDA compatibility level the listener reports, not the server
+version — the image is Informix 15.0.1.
+
+### Quirks
+
+`libdb2.so` reports `SQL_DRIVER_NAME` "libdb2.a" whether it is talking to Db2 or to
+Informix, so the Informix workarounds cannot be keyed on the driver name; the driver asks
+`SQL_DBMS_NAME` instead, which is `IDS/UNIX64` here and `DB2/LINUXX8664` for Db2. Two
+things then differ from Db2:
+
+* **`SQL_C_WCHAR` parameters.** Informix converts UTF-16 in the server and gives up on a
+  surrogate pair: the emoji fails the `INSERT` with `-415 Data conversion error`. The
+  driver sends character parameters on the narrow (UTF-8) path instead
+  (`reader_opts.wchar_as_utf8`, as for Firebird and Virtuoso).
+* **`SQL_C_BIT` parameters.** Binding one against an Informix `BOOLEAN` corrupts the DRDA
+  conversation itself — `SQL30020N`, "syntax error in the communication data stream" —
+  and the connection is unusable afterwards. Booleans go as integers instead
+  (`reader_opts.bool_param_as_int`).
+
+The 32-bit `SQLLEN` of the clidriver applies here exactly as it does for Db2, and is
+detected the same way (`adbc.odbc.sqllen_32bit`).
+
+Two things are the server's, not the driver's, and are handled by the entry's tolerance
+flags rather than a quirk:
+
+* Informix's finest timestamp is `DATETIME YEAR TO FRACTION(5)` — five fractional
+  digits — so `13:45:10.123456` is stored as `.12345` (`ts_us=(123450,)`).
+* Informix `BOOLEAN` has no DRDA counterpart and is described as `SMALLINT`, so the
+  column reads back as `int16` with `1` for true (`bool_type="int16"`).
+
+For binary the entry declares `BYTE`, Informix's byte-string type (there is no
+`VARBINARY`; the sibling `BLOB` is a smart large object and needs an sbspace the image
+does not configure). The clidriver describes it with IBM's own `SQL_BLOB` type code
+`-98`, which the reader now treats as a binary column — left unrecognised it fell through
+to the text default, where the driver hands the bytes back hex-encoded (`"0102"`).

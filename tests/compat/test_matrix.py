@@ -17,7 +17,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER,
     RISINGWAVE_ODBC_DRIVER
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER, QUESTDB_ODBC_DRIVER,
-    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFORMIX_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -166,6 +166,29 @@ DBS = {
         # with a 32-bit SQLLEN; the driver detects that itself (adbc.odbc.sqllen_32bit),
         # so no tolerance flag is needed here.  See README.md.
         ident=str.upper),
+    "informix": dict(
+        # IBM Informix is reached over DRDA -- the same wire protocol Db2 speaks, served
+        # by Informix's `<server>_dr` alias on port 9089 -- so the Db2 CLI driver
+        # (clidriver `libdb2.so`, the `db2` entry's driver) drives it unchanged.  It
+        # answers SQL_DRIVER_NAME "libdb2.a" and SQL_DBMS_NAME "IDS/UNIX64"; the 32-bit
+        # SQLLEN of that library applies here too and the driver detects it itself.
+        env="INFORMIX_ODBC_DRIVER",
+        conn="Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=19089;Protocol=TCPIP;Uid=informix;Pwd=in4mix;",
+        # Informix type names, none of which are the SQL-standard spellings:
+        #   * BYTE is its byte-string type (there is no VARBINARY).  Its sibling BLOB is
+        #     a smart large object and needs an sbspace, which the developer image does
+        #     not configure, so BYTE is the one that works out of the box.
+        #   * DATETIME YEAR TO FRACTION(5) is the timestamp; FRACTION(5) is the finest
+        #     Informix has, so the stored value is rounded to 10 microseconds -- see
+        #     ts_us below.
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTE, d DATE,"
+            " ts DATETIME YEAR TO FRACTION(5), n DECIMAL(10,3), bo BOOLEAN)",
+        # FRACTION(5) holds five fractional digits: .123456 is stored as .12345.
+        ts_us=(123450,),
+        # Informix BOOLEAN has no DRDA counterpart; it is described as SMALLINT, so the
+        # column reads back as int16 with 1 for true.  (The driver also has to send
+        # boolean parameters as integers here -- see adbc.odbc's Informix quirk.)
+        bool_type="int16"),
     "monetdb": dict(
         env="MONETDB_ODBC_DRIVER", conn="Driver={drv};Host=127.0.0.1;Port=15000;Database=adbc;Uid=monetdb;Pwd=adbc;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b BLOB, d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"),

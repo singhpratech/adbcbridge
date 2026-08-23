@@ -643,6 +643,27 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;
   }
+  if (strstr((const char*)name, "db2")) {
+    // IBM's CLI driver ("libdb2.a") speaks DRDA to Db2 *and* to Informix, whose DRDA
+    // alias is a second listener on the same server, so the driver name says nothing
+    // about which of the two is behind it.  Ask the server: Informix answers
+    // SQL_DBMS_NAME "IDS/<platform>" ("IDS/UNIX64"), Db2 answers "DB2/LINUXX8664".
+    SQLCHAR dbms[64] = {0};
+    SQLSMALLINT dbms_len = 0;
+    if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DBMS_NAME, dbms, sizeof(dbms), &dbms_len)) &&
+        strncmp((const char*)dbms, "IDS", 3) == 0) {
+      // Informix converts a SQL_C_WCHAR parameter from UTF-16 in the server and gives up
+      // on a surrogate pair: an INSERT of "hello <U+1F680>" fails outright with -415,
+      // "Data conversion error".  The same parameter on the narrow path -- which is
+      // UTF-8, the database locale being en_us.utf8 -- stores and reads back unchanged.
+      conn->reader_opts.wchar_as_utf8 = true;
+      // A SQL_C_BIT parameter breaks the DRDA conversation itself: SQL30020N, "syntax
+      // error in the communication data stream", after which the connection is dead.
+      // Informix describes its BOOLEAN as SMALLINT over DRDA anyway, and an integer
+      // parameter stores into one correctly.
+      conn->reader_opts.bool_param_as_int = true;
+    }
+  }
   if (!conn->reader_opts.sqllen_32bit_forced) {
     // IBM Db2's freely downloadable CLI driver package ("linuxx64_odbc_cli.tar.gz")
     // ships a libdb2.so built with 32-bit SQLLEN/SQLULEN even on 64-bit Linux; it

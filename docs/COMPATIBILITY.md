@@ -41,6 +41,7 @@ from the second table to the first.
 | Databend | MySQL Connector/ODBC (MySQL wire) | PASS | no prepared statements (`NO_SSPS=1`); `_binary` literals; MySQL type names in ingest DDL |
 | Azure SQL Edge 16.0 | msodbcsql 18 | PASS | SQL Server 2022 engine; no quirks |
 | OpenLink Virtuoso 7.2 | Virtuoso ODBC (`virtodbc.so`) | PASS | ODBC-native server; no `SQL_C_WCHAR` (UTF-8 narrow path), no `SQL_C_SBIGINT`, date parameter arrays repeat row 0; no `BOOLEAN` type; ingest 11.9k rows/s, fetch 1.04M rows/s |
+| IBM Informix 15.0.1 | Db2 clidriver (DRDA) | PASS | same `libdb2.so` as Db2, keyed on `SQL_DBMS_NAME`: no `SQL_C_WCHAR` params (UTF-8 narrow path), no `SQL_C_BIT` params; 32-bit `SQLLEN`; `BYTE` described as IBM's `SQL_BLOB` (-98); server side: `GL_USEGLU=1` for 4-byte UTF-8, `DELIMIDENT=y` for quoted identifiers, `FRACTION(5)` timestamps; ingest 15.6k rows/s (130k array), fetch 751k rows/s |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 
 ## Driver available, free server available — queued for verification
@@ -55,7 +56,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | MatrixOne | MySQL Connector/ODBC | `matrixorigin/matrixone` | queued |
 | MariaDB ColumnStore | MariaDB Connector/ODBC | `mariadb/columnstore` | queued |
 | MongoDB (BI Connector) | MySQL Connector/ODBC | `mongo` + `mongosqld` | queued |
-| IBM Informix | Db2 clidriver (DRDA) | `icr.io/informix/informix-developer-database` | queued |
 | Apache Ignite | ignite-odbc | `apacheignite/ignite` | queued |
 | Vertica CE | Vertica ODBC | `vertica/vertica-ce` | queued |
 | OpenSearch | opensearch-sql-odbc | `opensearchproject/opensearch` | queued |
