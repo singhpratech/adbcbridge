@@ -625,6 +625,12 @@ static AdbcStatusCode OdbcStatementBind(struct AdbcStatement* statement, struct 
   CHECK_NA(INTERNAL, ArrowSchemaDeepCopy(schema, &schema_copy), error);
   CHECK_NA(INTERNAL, ArrowBasicArrayStreamInit(&stream, &schema_copy, 1), error);
   ArrowBasicArrayStreamSetArray(&stream, 0, values);
+  // AdbcStatementBind consumes both `values` and `schema` (upstream's driver framework moves
+  // both into its bound stream). We deep-copied the schema, so release the caller's copy --
+  // otherwise its memory is never freed. Symptom: the Java driver manager exports the bound
+  // VectorSchemaRoot's schema from a BufferAllocator, so tests/java saw
+  // "Memory was leaked by query" when closing the RootAllocator after a parameterised query.
+  if (schema->release) schema->release(schema);
   return OdbcStatementBindStream(statement, &stream, error);
 }
 
