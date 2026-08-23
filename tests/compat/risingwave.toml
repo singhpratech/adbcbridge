@@ -1,0 +1,11 @@
+# RisingWave config for the compatibility matrix -- see README.md ("RisingWave 3").
+#
+# single_node derives every component's memory budget from the memory available to the
+# process, and the compactor's share is a sixteenth of it.  Under any container small
+# enough to run beside the rest of the matrix that share lands below the compactor's own
+# minimum (roughly twice one SST, ~537 MB) and the process aborts at startup on
+#   assertion failed: compactor_memory_limit_bytes > min_compactor_memory_limit_bytes * 2
+# Pinning the budget here satisfies that check.  It is a cap on what compaction may use,
+# not an allocation: the container settles around 300 MB in practice.
+[storage]
+compactor_memory_limit_mb = 1024

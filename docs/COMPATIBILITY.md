@@ -31,6 +31,7 @@ from the second table to the first.
 | TimescaleDB 2.29 | psqlodbc (PG wire) | PASS | |
 | CrateDB 6.4 | psqlodbc (PG wire) | PASS | eventually consistent (`REFRESH TABLE`); no binary or `DATE` column type; ingest 626 rows/s, fetch 767k rows/s |
 | QuestDB 10 | psqlodbc (PG wire) | PASS | own type system behind the PG wire: standard-SQL ingest DDL, `true`/`false` boolean params, no usable parameter arrays; `SQLColumns` fails, `GetObjects` describes a zero-row SELECT instead |
+| RisingWave 3.0 | psqlodbc (PG wire) | PASS | no driver quirks; server side: no type modifiers at all (`VARCHAR`, `NUMERIC` unqualified) and writes are visible only after `FLUSH`; ingest 983 rows/s, fetch 991k rows/s |
 | MonetDB 11.55 | MonetDBODBClib | PASS | no usable parameter arrays; `SQLEndTran` unreliable under pyodbc |
 | Firebird 5 | Firebird ODBC 3.5 | PASS | `wchar_t`-sized wide strings; no usable parameter arrays |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
@@ -42,7 +43,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Database | Wire / driver | Server | Status |
 |---|---|---|---|
 | Citus | psqlodbc | `citusdata/citus` | queued |
-| RisingWave | psqlodbc | `risingwavelabs/risingwave` | queued |
 | Materialize | psqlodbc | `materialize/materialized` | queued |
 | openGauss | psqlodbc | `enmotech/opengauss` | queued |
 | libSQL server | psqlodbc (PG wire) | `ghcr.io/tursodatabase/libsql-server` | queued |

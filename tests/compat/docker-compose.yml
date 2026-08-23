@@ -77,3 +77,17 @@ services:
     environment: { CRATE_HEAP_SIZE: 512m }
     mem_limit: 2g
     ports: ["127.0.0.1:15440:5432"]
+  # RisingWave: a streaming database that speaks the PostgreSQL wire protocol on 4566.
+  # In the "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d risingwave
+  # single_node runs meta, compute, frontend and compactor in one process.  The mounted
+  # config pins the compactor's memory budget, which is otherwise a fraction of the
+  # memory available to the process and falls below the compactor's own minimum in a
+  # container this size -- see tests/compat/risingwave.toml.
+  risingwave:
+    profiles: ["extra"]
+    image: risingwavelabs/risingwave:latest
+    command: single_node --config-path /risingwave.toml
+    volumes: ["./risingwave.toml:/risingwave.toml:ro"]
+    mem_limit: 2g
+    ports: ["127.0.0.1:14566:4566"]
