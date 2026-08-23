@@ -69,6 +69,15 @@
 /// Bind Arrow batches as ODBC parameter arrays (one execute per batch) when the
 /// driver supports it.  "true"/"false"; default true.
 #define ADBC_ODBC_OPTION_ARRAY_BINDING "adbc.odbc.array_binding"
+/// Rows per INSERT statement for bulk ingest ("adbc.ingest.*"): the driver ingests a
+/// batch with `INSERT INTO t VALUES (?,?),(?,?),...` carrying this many row-groups of
+/// parameters per execute, which collapses one round trip per row into one per group.
+/// 0 (the default) picks a group size automatically, 1 disables the rewrite and leaves
+/// the ingest on one INSERT per row (or on parameter arrays, where the driver has
+/// usable ones).  Only bulk ingest is rewritten; a caller's own SQL is never touched.
+/// See OdbcConnection::multirow_* for the probe that decides whether the server takes
+/// the multi-row form at all.
+#define ADBC_ODBC_OPTION_ROWS_PER_INSERT "adbc.odbc.rows_per_insert"
 /// Force the 32-bit-SQLLEN driver quirk on or off ("true"/"false").  Unset means
 /// autodetect from SQL_DRIVER_NAME; see OdbcReaderOptions::sqllen_32bit.
 #define ADBC_ODBC_OPTION_SQLLEN_32BIT "adbc.odbc.sqllen_32bit"
@@ -89,6 +98,25 @@
 // 0.069 s at 4 KiB, 0.101 s at 16 KiB and 0.59 s at the declared 256 KiB.
 #define ADBC_ODBC_DEFAULT_LONG_BIND_BYTES 2048
 #define ADBC_ODBC_DEFAULT_ROWSET_BYTES (8 * 1024 * 1024)
+
+// --- Multi-row INSERT ingest batching ---------------------------------------
+// ODBC has no SQLGetInfo for "how many parameters may one statement carry": the closest
+// is SQL_MAX_STATEMENT_LEN (bytes of SQL text), and most drivers answer 0 = unknown for
+// even that.  So the parameter ceiling starts at a value every tested backend accepts and
+// is *probed* downwards -- SQLPrepare of the K-row statement, halving K on failure -- with
+// the answer remembered on the connection.  2000 clears SQL Server's 2100-parameter limit
+// and, at four columns, its 1000-row VALUES limit; SQLite (999 or 32766 depending on the
+// build) and anything else smaller is found by halving.
+#define ADBC_ODBC_MULTIROW_MAX_PARAMS 2000
+// SQL Server refuses a VALUES clause with more than 1000 row constructors.
+#define ADBC_ODBC_MULTIROW_MAX_ROWS 1000
+// SQL text budget when the driver answers 0 for SQL_MAX_STATEMENT_LEN.  Db2's real limit
+// is ~2 MB and MySQL's max_allowed_packet defaults to 64 MB; 1 MB is under both and is
+// never the binding constraint at the parameter counts above (a four-column row group is
+// about fifteen bytes of text).
+#define ADBC_ODBC_MULTIROW_MAX_SQL_BYTES (1024 * 1024)
+// Ceiling on the per-row parameter scratch one multi-row execute may allocate.
+#define ADBC_ODBC_MULTIROW_MAX_SLOT_BYTES (16 * 1024 * 1024)
 
 /// A refcounted ODBC statement handle shared between an AdbcStatement and
 /// the ArrowArrayStream it produced.
@@ -241,6 +269,19 @@ struct OdbcReaderOptions {
   // SQL_TXN_CAPABLE said something other than SQL_TC_NONE, so turning autocommit off
   // around a multi-row execute is worth trying.
   bool txn_capable;
+  // Driver quirk: the server has no `INSERT INTO t VALUES (...),(...)`, but does have
+  // Oracle's `INSERT ALL INTO t VALUES (...) INTO t VALUES (...) SELECT 1 FROM dual`.
+  // Only consulted after the standard multi-row form has actually been refused, so it
+  // costs a server that takes the standard form nothing.
+  bool multirow_insert_all;
+  // Driver quirk: keep ODBC parameter arrays ahead of multi-row INSERT batching for bulk
+  // ingest.  Multi-row INSERT is the default because it was faster on every server
+  // measured (see ExecuteRows), including most of the ones whose arrays work; MariaDB
+  // Connector/ODBC, which turns a bound array into one COM_STMT_BULK_EXECUTE, is the
+  // exception and the only thing that sets this.
+  bool prefer_param_arrays;
+  // SQL_MAX_STATEMENT_LEN, in bytes; 0 when the driver will not say.
+  int64_t max_statement_len;
 };
 
 // --- 32-bit-SQLLEN driver quirk accessors -----------------------------------
@@ -321,6 +362,16 @@ struct OdbcConnection {
   SQLHDBC hdbc;
   bool connected;
   bool autocommit;
+  // Multi-row INSERT ingest batching, learned once per connection (see
+  // ADBC_ODBC_OPTION_ROWS_PER_INSERT).  The probe is a two-row SQLPrepare against the
+  // ingest target: whether the server takes the form at all is a property of the server,
+  // not of the table, so the verdict is cached here rather than paid per statement.
+  bool multirow_probed;      // the form probe has run
+  bool multirow_unsupported; // ... and the server takes neither form: never try again
+  bool multirow_insert_all;  // ... and the form it takes is Oracle's INSERT ALL
+  // Largest parameter count an INSERT on this connection was seen to prepare, discovered
+  // by halving; 0 until something has actually been refused.
+  int64_t multirow_max_params;
   struct OdbcReaderOptions reader_opts;
 };
 
@@ -339,12 +390,18 @@ struct OdbcStatement {
   bool has_bind;
   /// Try column-wise parameter arrays before falling back to row-at-a-time.
   bool array_binding;
+  /// Rows of parameters per INSERT for bulk ingest; 0 = automatic, 1 = disabled.
+  int64_t rows_per_insert;
   // Bulk ingest
   char* ingest_table;
   char* ingest_catalog;
   char* ingest_schema;
   char* ingest_mode;  // ADBC_INGEST_OPTION_MODE_* value
   bool ingest_temporary;
+  // `"schema"."table" ("a", "b")` -- the part of the generated INSERT that a multi-row
+  // form repeats.  Set by OdbcStatementIngest only, so the multi-row rewrite can never
+  // reach a query the caller wrote themselves.
+  char* ingest_into;
 };
 
 /// Fetch the identifier quote character ('"' default, '\0' if none) into out[8].

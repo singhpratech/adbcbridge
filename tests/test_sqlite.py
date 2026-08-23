@@ -655,3 +655,125 @@ def test_bound_params():
 if __name__ == "__main__":
     test_bound_params()
     test_release_with_open_transaction_drops_locks()
+
+
+def test_multirow_ingest():
+    """Multi-row INSERT batching for bulk ingest (adbc.odbc.rows_per_insert).
+
+    Ingest packs K rows into one `INSERT ... VALUES (...),(...)` instead of executing a
+    one-row INSERT K times.  What has to hold whatever K is: NULLs land in the right
+    row-group, a batch that is not a whole multiple of K still ingests exactly once, a
+    failure part way through leaves no rows at all, and a K the backend will not prepare
+    is narrowed until one is.
+    """
+    import pyarrow as pa
+
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "mr.db")
+
+    def rows_of(cur, table, cols="*"):
+        cur.execute('SELECT %s FROM "%s" ORDER BY "id"' % (cols, table))
+        return cur.fetch_arrow_table().to_pydict()
+
+    with connect(db) as conn:
+        with conn.cursor() as cur:
+            # --- NULLs in every row-group position ------------------------
+            # Row i has a NULL in column i % 4 and values everywhere else, so with any K
+            # every position inside a row-group is a NULL in some group -- and the row
+            # that follows a NULL row must not inherit it.
+            n = 41  # deliberately not a multiple of any K used below
+            cols = ["a", "b", "c", "d"]
+            data = {
+                "id": pa.array(range(n), pa.int32()),
+                "a": pa.array([None if i % 4 == 0 else i for i in range(n)], pa.int64()),
+                "b": pa.array([None if i % 4 == 1 else "s%d" % i for i in range(n)]),
+                "c": pa.array([None if i % 4 == 2 else i * 0.5 for i in range(n)], pa.float64()),
+                "d": pa.array([None if i % 4 == 3 else i % 20000 for i in range(n)], pa.date32()),
+            }
+            tbl = pa.table(data)
+            for k in (0, 1, 2, 3, 7, 40, 1000):
+                name = "nulls_k%d" % k
+                cur.adbc_statement.set_options(**{"adbc.odbc.rows_per_insert": str(k)})
+                assert cur.adbc_ingest(name, tbl, mode="create") == n
+                got = rows_of(cur, name)
+                assert got["id"] == list(range(n)), (k, got["id"][:5])
+                for j, col in enumerate(cols):
+                    want = [None if i % 4 == j else True for i in range(n)]
+                    have = [None if v is None else True for v in got[col]]
+                    assert have == want, (k, col, have[:8], want[:8])
+                assert got["b"][2] == "s2" and got["a"][1] == 1
+
+            # --- a batch that is not a multiple of K, and a single-row batch ---
+            cur.adbc_statement.set_options(**{"adbc.odbc.rows_per_insert": "7"})
+            for size in (1, 2, 6, 7, 8, 14, 15, 100):
+                t = pa.table({"id": pa.array(range(size), pa.int32()),
+                              "v": pa.array(["r%d" % i for i in range(size)])})
+                name = "size%d" % size
+                assert cur.adbc_ingest(name, t, mode="create") == size, size
+                got = rows_of(cur, name)
+                assert got["id"] == list(range(size)), size
+                assert got["v"] == ["r%d" % i for i in range(size)], size
+
+            # An empty batch has nothing to group and must still create the table.
+            empty = pa.table({"id": pa.array([], pa.int32()), "v": pa.array([], pa.string())})
+            assert cur.adbc_ingest("empty_t", empty, mode="create") == 0
+            cur.execute('SELECT COUNT(*) FROM "empty_t"')
+            assert cur.fetchone()[0] == 0
+
+            # --- a K the backend will not prepare is narrowed --------------
+            # SQLite caps the parameters of one statement (999 or 32766 depending on the
+            # build).  1000 row-groups of 120 columns is 120,000 parameters, past either
+            # -- the ingest must find a K that prepares rather than fail.
+            wide_cols = 120
+            wide = pa.table({"id": pa.array(range(30), pa.int32()),
+                             **{"c%d" % c: pa.array([c * 1000 + r for r in range(30)], pa.int64())
+                                for c in range(wide_cols)}})
+            cur.adbc_statement.set_options(**{"adbc.odbc.rows_per_insert": "1000"})
+            assert cur.adbc_ingest("wide_t", wide, mode="create") == 30
+            got = rows_of(cur, "wide_t")
+            assert got["id"] == list(range(30))
+            assert got["c0"] == list(range(30))
+            assert got["c119"] == [119000 + r for r in range(30)]
+
+            # An out-of-range option value is refused rather than quietly ignored.
+            for bad in ("-1", "banana", "12x"):
+                try:
+                    cur.adbc_statement.set_options(**{"adbc.odbc.rows_per_insert": bad})
+                    raise AssertionError("expected a rejection for %r" % bad)
+                except AssertionError:
+                    raise
+                except Exception:
+                    pass
+            cur.adbc_statement.set_options(**{"adbc.odbc.rows_per_insert": "0"})
+
+    # --- a failure part way through leaves no rows ----------------------
+    # The driver batches a whole ingest into one transaction of its own when the caller
+    # has not opened one, so a row that the server refuses must roll the lot back.
+    uri = f"Driver={SQLITE_ODBC};Database={db};"
+    with dbapi.connect(driver=DRIVER, autocommit=True,
+                       db_kwargs={"uri": uri, "adbc.odbc.delegate": "never"}) as conn:
+        with conn.cursor() as cur:
+            cur.execute('CREATE TABLE "uniq" ("id" INTEGER PRIMARY KEY, "v" TEXT)')
+            cur.execute('INSERT INTO "uniq" VALUES (700, \'planted\')')
+            n = 1000
+            clash = pa.table({"id": pa.array(range(n), pa.int32()),
+                              "v": pa.array(["r%d" % i for i in range(n)])})
+            for k in ("0", "7", "1"):
+                cur.adbc_statement.set_options(**{"adbc.odbc.rows_per_insert": k})
+                try:
+                    cur.adbc_ingest("uniq", clash, mode="append")
+                    raise AssertionError("expected the duplicate key to fail (K=%s)" % k)
+                except AssertionError:
+                    raise
+                except Exception:
+                    pass
+                cur.execute('SELECT COUNT(*) FROM "uniq"')
+                assert cur.fetchone()[0] == 1, ("half a table left behind at K=%s" % k)
+                cur.execute('SELECT "v" FROM "uniq"')
+                assert cur.fetchone()[0] == "planted"
+
+    print("MULTIROW INGEST OK")
+
+
+if __name__ == "__main__":
+    test_multirow_ingest()

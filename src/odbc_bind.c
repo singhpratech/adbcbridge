@@ -1221,6 +1221,385 @@ static AdbcStatusCode OdbcAutoTxnEnd(struct OdbcAutoTxn* txn, bool commit,
   return status;
 }
 
+// ---------------------------------------------------------------------------
+// Multi-row INSERT batching (bulk ingest only)
+//
+// Parameter arrays collapse a whole Arrow batch into one SQLExecute, but five of the
+// ODBC drivers in the compatibility matrix mishandle them (see
+// OdbcReaderOptions::no_param_arrays) and one -- MySQL Connector/ODBC -- accepts them
+// and then walks them row by row inside the driver.  On those, ingest costs one
+// SQLExecute, and for a client/server database one network round trip, per row:
+// clickhouse-odbc sends one HTTP request per row and manages sixteen rows a second.
+//
+// The rewrite here needs no array support at all.  Instead of executing
+// `INSERT INTO t VALUES (?,?,?,?)` N times, it prepares
+// `INSERT INTO t VALUES (?,?,?,?),(?,?,?,?),...` with K row-groups and binds K rows'
+// worth of ordinary scalar parameters per execute, over exactly the same
+// SQLBindParameter machinery (and the same per-driver parameter quirks) as the
+// row-at-a-time path.  Round trips drop by a factor of K.
+//
+// Only the INSERT that bulk ingest generates is ever rewritten: it is reached through
+// OdbcStatement::ingest_into, which nothing but OdbcStatementIngest sets.  A query the
+// caller wrote is theirs and is executed as written.
+
+// A prepared INSERT carrying a fixed number of row-groups.
+struct MultiRowGroup {
+  SQLHSTMT hstmt;
+  int64_t rows;
+};
+
+struct MultiRowInsert {
+  struct OdbcStatement* stmt;
+  bool enabled;  // the ingest path and the option allow the rewrite
+  bool ready;    // the setup below has run
+  bool active;   // ... and produced a usable prepared statement
+  bool insert_all;
+  int64_t ncols;
+  int64_t rows;               // K: row-groups in the `full` statement
+  struct MultiRowGroup full;  // K row-groups; used for every whole group of a batch
+  struct MultiRowGroup tail;  // the last partial group, prepared on demand
+  struct ParamSlot* slots;    // K * ncols, reused by every execute
+  int64_t nslots;
+  // SQLDescribeParam of the first row-group's parameters, so a NULL is bound with the
+  // type the driver expects.  Parameter i+1 of the K-row statement is column i, and the
+  // answer is the same for every row-group, so it is asked for once per column.
+  SQLSMALLINT* null_type;
+  SQLULEN* null_size;
+  SQLSMALLINT* null_digits;
+  signed char* null_described;  // 0 unknown, 1 answered, -1 refused
+};
+
+// `INSERT INTO t (a, b) VALUES (?, ?), (?, ?)`, or Oracle's
+// `INSERT ALL INTO t (a, b) VALUES (?, ?) INTO t (a, b) VALUES (?, ?) SELECT 1 FROM dual`.
+// Returns a malloc'd string, or NULL on allocation failure.
+static char* MultiRowSql(const char* into, int64_t ncols, int64_t rows, bool insert_all) {
+  struct InternalAdbcStringBuilder sb;
+  if (InternalAdbcStringBuilderInit(&sb, 256) != 0) return NULL;
+  if (insert_all) {
+    InternalAdbcStringBuilderAppend(&sb, "INSERT ALL");
+  } else {
+    InternalAdbcStringBuilderAppend(&sb, "INSERT INTO %s VALUES ", into);
+  }
+  for (int64_t r = 0; r < rows; r++) {
+    if (insert_all) {
+      InternalAdbcStringBuilderAppend(&sb, " INTO %s VALUES (", into);
+    } else {
+      InternalAdbcStringBuilderAppend(&sb, r ? ", (" : "(");
+    }
+    for (int64_t c = 0; c < ncols; c++) InternalAdbcStringBuilderAppend(&sb, c ? ", ?" : "?");
+    InternalAdbcStringBuilderAppend(&sb, ")");
+  }
+  if (insert_all) InternalAdbcStringBuilderAppend(&sb, " SELECT 1 FROM dual");
+  char* out = sb.buffer ? strdup(sb.buffer) : NULL;
+  InternalAdbcStringBuilderReset(&sb);
+  return out;
+}
+
+// Allocate a statement handle and SQLPrepare the `rows`-group INSERT on it.  NULL when
+// the driver or the server refuses the statement -- which is the probe: too many
+// parameters, or a server with no multi-row VALUES at all.
+static SQLHSTMT MultiRowPrepare(struct OdbcConnection* conn, const char* into, int64_t ncols,
+                                int64_t rows, bool insert_all) {
+  char* sql = MultiRowSql(into, ncols, rows, insert_all);
+  if (!sql) return NULL;
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt))) {
+    free(sql);
+    return NULL;
+  }
+  if (!SQL_SUCCEEDED(SQLPrepare(hstmt, (SQLCHAR*)sql, SQL_NTS))) {
+    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+    hstmt = NULL;
+  }
+  free(sql);
+  return hstmt;
+}
+
+static void MultiRowInit(struct MultiRowInsert* mr, struct OdbcStatement* stmt, int64_t ncols) {
+  memset(mr, 0, sizeof(*mr));
+  mr->stmt = stmt;
+  mr->ncols = ncols;
+  // Only bulk ingest, only with something to batch, and only when the option allows it.
+  mr->enabled = stmt->ingest_into != NULL && ncols > 0 && stmt->rows_per_insert != 1 &&
+                stmt->conn != NULL && stmt->conn->connected;
+}
+
+static void MultiRowReset(struct MultiRowInsert* mr) {
+  if (mr->full.hstmt) SQLFreeHandle(SQL_HANDLE_STMT, mr->full.hstmt);
+  if (mr->tail.hstmt) SQLFreeHandle(SQL_HANDLE_STMT, mr->tail.hstmt);
+  mr->full.hstmt = NULL;
+  mr->tail.hstmt = NULL;
+  for (int64_t i = 0; i < mr->nslots; i++) ArrowBufferReset(&mr->slots[i].wbuf);
+  free(mr->slots);
+  mr->slots = NULL;
+  mr->nslots = 0;
+  free(mr->null_type);
+  free(mr->null_size);
+  free(mr->null_digits);
+  free(mr->null_described);
+  mr->null_type = NULL;
+  mr->null_size = NULL;
+  mr->null_digits = NULL;
+  mr->null_described = NULL;
+  mr->active = false;
+}
+
+// Decide K and prepare the K-row statement.  Runs once, on the first batch worth
+// batching, before the ingest transaction opens -- a refused SQLPrepare must not be able
+// to poison a transaction on a server that aborts one on any error.
+static void MultiRowSetup(struct MultiRowInsert* mr) {
+  mr->ready = true;
+  struct OdbcStatement* stmt = mr->stmt;
+  struct OdbcConnection* conn = stmt->conn;
+  const struct OdbcReaderOptions* opts = &stmt->reader_opts;
+  const char* into = stmt->ingest_into;
+  const int64_t ncols = mr->ncols;
+  if (conn->multirow_unsupported) return;
+
+  // Does this server take a multi-row INSERT at all?  Two row-groups is the cheapest
+  // question that answers it, and it separates "the form is not supported" from "that
+  // many parameters is too many", which the search below handles instead.
+  if (!conn->multirow_probed) {
+    bool insert_all = false;
+    SQLHSTMT probe = MultiRowPrepare(conn, into, ncols, 2, false);
+    if (!probe && opts->multirow_insert_all) {
+      // Oracle has no multi-row VALUES; INSERT ALL is its spelling.
+      probe = MultiRowPrepare(conn, into, ncols, 2, true);
+      insert_all = probe != NULL;
+    }
+    conn->multirow_probed = true;
+    if (!probe) {
+      conn->multirow_unsupported = true;
+      return;
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, probe);
+    conn->multirow_insert_all = insert_all;
+  }
+  mr->insert_all = conn->multirow_insert_all;
+
+  // A row count the caller asked for is taken at its word, subject only to what this
+  // connection has actually been refused and to the hard budgets below; the default
+  // parameter budget is a guess about an unknown backend, and the caller may know
+  // better.  Nothing asked for means the guess.
+  int64_t k = stmt->rows_per_insert > 0 ? stmt->rows_per_insert
+                                        : ADBC_ODBC_MULTIROW_MAX_PARAMS / ncols;
+  if (conn->multirow_max_params > 0 && k > conn->multirow_max_params / ncols) {
+    k = conn->multirow_max_params / ncols;
+  }
+  if (k > ADBC_ODBC_MULTIROW_MAX_ROWS) k = ADBC_ODBC_MULTIROW_MAX_ROWS;
+  // SQL text budget: `(?, ?, ?, ?), ` plus, for INSERT ALL, another `INTO <table> VALUES `.
+  {
+    int64_t sql_max = (opts->max_statement_len > 0 &&
+                       opts->max_statement_len < ADBC_ODBC_MULTIROW_MAX_SQL_BYTES)
+                          ? opts->max_statement_len
+                          : ADBC_ODBC_MULTIROW_MAX_SQL_BYTES;
+    int64_t into_len = (int64_t)strlen(into);
+    int64_t per_group = ncols * 3 + 4 + (mr->insert_all ? into_len + 20 : 0);
+    int64_t budget = (sql_max - into_len - 64) / per_group;
+    if (budget < k) k = budget;
+  }
+  // Parameter scratch budget.
+  {
+    int64_t per_group = (int64_t)sizeof(struct ParamSlot) * ncols;
+    int64_t budget = ADBC_ODBC_MULTIROW_MAX_SLOT_BYTES / (per_group > 0 ? per_group : 1);
+    if (budget < k) k = budget;
+  }
+  if (k < 2) return;  // a one-group "batch" is the row-at-a-time path with extra steps
+
+  // Prepare, halving on refusal: the parameter ceiling is not something ODBC lets a
+  // driver report (there is no SQL_MAX_PARAMETERS), so it has to be found by asking.
+  bool narrowed = false;
+  SQLHSTMT hstmt = NULL;
+  while (k >= 2) {
+    hstmt = MultiRowPrepare(conn, into, ncols, k, mr->insert_all);
+    if (hstmt) break;
+    k /= 2;
+    narrowed = true;
+  }
+  if (!hstmt) {
+    // Two row-groups prepared a moment ago and K >= 2 will not: nothing about this
+    // statement is going to work.  Leave the ingest on the paths that already do.
+    conn->multirow_unsupported = true;
+    return;
+  }
+  // Remember a ceiling only when one was actually hit; a small K the caller asked for
+  // says nothing about what the server would have taken.
+  if (narrowed) conn->multirow_max_params = k * ncols;
+
+  mr->slots = calloc((size_t)(k * ncols), sizeof(*mr->slots));
+  mr->null_type = calloc((size_t)ncols, sizeof(*mr->null_type));
+  mr->null_size = calloc((size_t)ncols, sizeof(*mr->null_size));
+  mr->null_digits = calloc((size_t)ncols, sizeof(*mr->null_digits));
+  mr->null_described = calloc((size_t)ncols, sizeof(*mr->null_described));
+  if (!mr->slots || !mr->null_type || !mr->null_size || !mr->null_digits || !mr->null_described) {
+    SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+    MultiRowReset(mr);
+    return;
+  }
+  mr->nslots = k * ncols;
+  for (int64_t i = 0; i < mr->nslots; i++) ArrowBufferInit(&mr->slots[i].wbuf);
+  mr->rows = k;
+  mr->full.hstmt = hstmt;
+  mr->full.rows = k;
+  mr->active = true;
+}
+
+// The prepared statement for a group of exactly `n` rows, or NULL if it cannot be had.
+// The tail statement is cached because consecutive batches of the same shape leave the
+// same remainder.
+static SQLHSTMT MultiRowGroupFor(struct MultiRowInsert* mr, int64_t n) {
+  if (n == mr->full.rows) return mr->full.hstmt;
+  if (mr->tail.hstmt && mr->tail.rows == n) return mr->tail.hstmt;
+  if (mr->tail.hstmt) {
+    SQLFreeHandle(SQL_HANDLE_STMT, mr->tail.hstmt);
+    mr->tail.hstmt = NULL;
+    mr->tail.rows = 0;
+  }
+  SQLHSTMT hstmt =
+      MultiRowPrepare(mr->stmt->conn, mr->stmt->ingest_into, mr->ncols, n, mr->insert_all);
+  if (!hstmt) return NULL;
+  mr->tail.hstmt = hstmt;
+  mr->tail.rows = n;
+  return hstmt;
+}
+
+// Halve the row-group count and re-prepare, for a driver that takes the K-row statement
+// at SQLPrepare and then refuses it at SQLExecute.  clickhouse-odbc does exactly that
+// above a few dozen row-groups.  Returns false when there is nothing smaller left to try.
+static bool MultiRowNarrow(struct MultiRowInsert* mr) {
+  struct OdbcConnection* conn = mr->stmt->conn;
+  int64_t k = mr->rows / 2;
+  SQLHSTMT hstmt = NULL;
+  while (k >= 2) {
+    hstmt = MultiRowPrepare(conn, mr->stmt->ingest_into, mr->ncols, k, mr->insert_all);
+    if (hstmt) break;
+    k /= 2;
+  }
+  if (!hstmt) return false;
+  if (mr->full.hstmt) SQLFreeHandle(SQL_HANDLE_STMT, mr->full.hstmt);
+  if (mr->tail.hstmt) SQLFreeHandle(SQL_HANDLE_STMT, mr->tail.hstmt);
+  mr->tail.hstmt = NULL;
+  mr->tail.rows = 0;
+  mr->full.hstmt = hstmt;
+  mr->full.rows = k;
+  mr->rows = k;  // the slot array was sized for the larger K, so it still fits
+  conn->multirow_max_params = k * mr->ncols;
+  // The describe cache belongs to the handle that is gone.
+  memset(mr->null_described, 0, (size_t)mr->ncols * sizeof(*mr->null_described));
+  return true;
+}
+
+// Type a NULL parameter of column `col` the way BindAndExecuteRow does, but asking the
+// driver only once per column instead of once per NULL.
+static void MultiRowNullType(struct MultiRowInsert* mr, SQLHSTMT hstmt, int64_t col,
+                             struct ParamSlot* p) {
+  const struct OdbcReaderOptions* opts = &mr->stmt->reader_opts;
+  if (!opts->no_describe_param && mr->null_described[col] == 0) {
+    SQLSMALLINT dtype = 0, ddigits = 0, dnullable = 0;
+    SQLULEN dsize = 0;  // zeroed: a 32-bit-SQLLEN driver writes only the low half
+    mr->null_described[col] = -1;
+    if (SQL_SUCCEEDED(SQLDescribeParam(hstmt, (SQLUSMALLINT)(col + 1), &dtype, &dsize, &ddigits,
+                                       &dnullable)) &&
+        dtype != 0 && dtype != SQL_UNKNOWN_TYPE) {
+      dsize = OdbcReadULen(&dsize, opts->sqllen_32bit);
+      mr->null_type[col] = dtype;
+      mr->null_size[col] = dsize ? dsize : 1;
+      mr->null_digits[col] = ddigits;
+      mr->null_described[col] = 1;
+    }
+  }
+  if (mr->null_described[col] == 1) {
+    p->sql_type = mr->null_type[col];
+    p->column_size = mr->null_size[col];
+    p->decimal_digits = mr->null_digits[col];
+  }
+  p->c_type = SQL_C_DEFAULT;
+  p->data = NULL;
+  p->buffer_length = 0;
+}
+
+// Bind rows [row0, row0 + n) into `hstmt`'s n row-groups and execute once.
+static AdbcStatusCode MultiRowExecGroup(struct MultiRowInsert* mr, SQLHSTMT hstmt,
+                                        const struct ArrowSchemaView* svs,
+                                        const struct ArrowArrayView* view, int64_t row0, int64_t n,
+                                        int64_t* total, struct AdbcError* error) {
+  const struct OdbcReaderOptions* opts = &mr->stmt->reader_opts;
+  const int64_t ncols = mr->ncols;
+  SQLFreeStmt(hstmt, SQL_CLOSE);
+  for (int64_t r = 0; r < n; r++) {
+    for (int64_t c = 0; c < ncols; c++) {
+      struct ParamSlot* p = &mr->slots[r * ncols + c];
+      RAISE_ADBC(SlotFromArrow(p, &svs[c], view->children[c], row0 + r, opts, error));
+      if (p->indicator == SQL_NULL_DATA) MultiRowNullType(mr, hstmt, c, p);
+      p->bound_indicator = 0;
+      OdbcIndicatorSet(&p->bound_indicator, 0, p->indicator, opts->sqllen_32bit);
+      if (!SQL_SUCCEEDED(SQLBindParameter(hstmt, (SQLUSMALLINT)(r * ncols + c + 1),
+                                          SQL_PARAM_INPUT, p->c_type, p->sql_type, p->column_size,
+                                          p->decimal_digits, (SQLPOINTER)p->data, p->buffer_length,
+                                          &p->bound_indicator))) {
+        return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLBindParameter", error);
+      }
+    }
+  }
+  SQLRETURN ret = SQLExecute(hstmt);
+  if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) {
+    return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecute", error);
+  }
+  // An INSERT that did not raise has inserted every row-group it was given, so the group
+  // size is the row count -- and it is a better one than the driver's: DuckDB answers
+  // SQLRowCount with 1 for a multi-row INSERT however many row-groups it carried, and
+  // clickhouse-odbc answers -1.  (Only the INSERT that bulk ingest generates reaches
+  // here; there is no WHERE clause or conflict rule that could apply fewer.)
+  SQLSMALLINT nres = 0;
+  *total += n;
+  SQLNumResultCols(hstmt, &nres);
+  if (nres > 0) SQLFreeStmt(hstmt, SQL_CLOSE);
+  return ADBC_STATUS_OK;
+}
+
+/// Ingest as much of one Arrow batch as whole row-groups can carry.
+///
+/// Rows [row0, row0 + nrows) are the ones on offer.  *rows_done receives how many
+/// leading rows of those went in; the caller applies the rest (a single trailing row, or
+/// everything if the setup did not take) by its other paths.
+/// *fell_back is set when the server turned out to reject the multi-row form at execute
+/// time and nothing at all had been applied yet, so the caller may safely replay the
+/// whole batch; the connection remembers the refusal and never asks again.
+static AdbcStatusCode MultiRowExecuteBatch(struct MultiRowInsert* mr,
+                                           const struct ArrowSchemaView* svs,
+                                           const struct ArrowArrayView* view, int64_t row0,
+                                           int64_t nrows, bool virgin, int64_t* rows_done,
+                                           int64_t* total, bool* fell_back,
+                                           struct AdbcError* error) {
+  int64_t row = 0;
+  while (nrows - row >= 2) {
+    int64_t n = nrows - row;
+    if (n > mr->rows) n = mr->rows;
+    SQLHSTMT hstmt = MultiRowGroupFor(mr, n);
+    if (!hstmt) break;  // no statement for this remainder: the caller finishes the batch
+    AdbcStatusCode status = MultiRowExecGroup(mr, hstmt, svs, view, row0 + row, n, total, error);
+    if (status != ADBC_STATUS_OK) {
+      if (!virgin || row != 0) return status;
+      // Nothing has been applied anywhere yet, so this is still a probe.  A driver can
+      // accept the K-row statement at SQLPrepare and refuse it at SQLExecute -- most
+      // often because K parameters is more than it will carry -- so halve K and ask
+      // again before giving the form up.
+      if (error && error->release) error->release(error);
+      if (MultiRowNarrow(mr)) continue;
+      // Nothing smaller works either: drop to the paths that already do, and let the
+      // caller replay the batch.  If the refusal was a data error rather than a size
+      // one, the row-at-a-time path reports it with the offending row's diagnostics.
+      mr->stmt->conn->multirow_unsupported = true;
+      mr->active = false;
+      *fell_back = true;
+      return ADBC_STATUS_OK;
+    }
+    row += n;
+  }
+  *rows_done = row;
+  return ADBC_STATUS_OK;
+}
+
 static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affected,
                                   struct AdbcError* error) {
   SQLHSTMT hstmt = stmt->ref->hstmt;
@@ -1248,11 +1627,24 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
 
   // Array binding only helps for multi-row, non-result-producing executions.
   bool use_array = stmt->array_binding && ncols > 0;
+  // Bulk ingest can instead pack K rows into one INSERT ... VALUES (...),(...), which
+  // needs nothing of the driver beyond ordinary parameters -- so it works on the five
+  // drivers whose parameter arrays are unusable, and is faster than arrays on the ones
+  // where they work.
+  struct MultiRowInsert mr;
+  MultiRowInit(&mr, stmt, ncols);
+  // Ahead of parameter arrays, not behind them: on every server measured, one INSERT
+  // carrying K row-groups beats the same rows submitted as an array (PostgreSQL 221k
+  // rows/s against 97k, SQL Server 157k against 85k, Oracle 40k against 1.8k, MariaDB
+  // 224k against 211k).  A driver whose arrays really are faster opts out with
+  // prefer_param_arrays; arrays also remain the path for anything the probe rules out.
+  const bool multirow_first = mr.enabled && !(use_array && stmt->reader_opts.prefer_param_arrays);
   // This function is only reached when the statement returns no rows, so there is
   // never an open result set to keep alive across the commit.
   struct OdbcAutoTxn txn;
   OdbcAutoTxnInit(&txn, stmt->conn);
   int64_t seen = 0;
+  bool applied = false;  // has anything at all reached the server yet?
 
   for (;;) {
     struct ArrowArray batch;
@@ -1270,21 +1662,52 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
       batch.release(&batch);
       break;
     }
+    // Prepare the multi-row INSERT before the transaction opens: its SQLPrepare is the
+    // probe that decides whether this server has the form at all, and a statement
+    // refused inside a transaction aborts the transaction on some servers.
+    if (multirow_first && !mr.ready && batch.length > 1) MultiRowSetup(&mr);
     // Once more than one row is in play, one commit for the lot beats one per row.
     seen += batch.length;
     if (seen > 1) OdbcAutoTxnBegin(&txn);
     int64_t row = 0;
-    if (use_array && batch.length > 1) {
+    if (multirow_first && mr.active && batch.length > 1) {
+      int64_t done = 0;
+      bool fell_back = false;
+      status = MultiRowExecuteBatch(&mr, svs, &view, 0, batch.length, !applied, &done, &total,
+                                    &fell_back, error);
+      row = done;
+      if (fell_back) {
+        // The probe applied nothing.  Start the transaction over so the replay below
+        // runs on a clean one (PostgreSQL aborts a transaction on any error).
+        OdbcAutoTxnEnd(&txn, false, NULL);
+        if (seen > 1) OdbcAutoTxnBegin(&txn);
+      }
+    }
+    if (use_array && row == 0 && batch.length > 1 && status == ADBC_STATUS_OK) {
       int64_t done = 0;
       status = ExecuteBatchArray(stmt, svs, &view, ncols, batch.length, &use_array, &done, &total,
                                  error);
       row = done;
     }
+    // Parameter arrays gave up part way through the batch (or turned out not to work at
+    // all): a multi-row INSERT still beats one execute per row for what is left.
+    if (mr.enabled && !mr.ready && batch.length - row > 1 && status == ADBC_STATUS_OK) {
+      MultiRowSetup(&mr);
+    }
+    if (mr.active && batch.length - row > 1 && status == ADBC_STATUS_OK) {
+      int64_t done = 0;
+      bool fell_back = false;
+      status = MultiRowExecuteBatch(&mr, svs, &view, row, batch.length - row,
+                                    !applied && row == 0, &done, &total, &fell_back, error);
+      row += done;
+    }
+    if (row > 0) applied = true;
     for (; row < batch.length && status == ADBC_STATUS_OK; row++) {
       SQLSMALLINT nres = 0;
       status = BindAndExecuteRow(hstmt, stmt->prepared, stmt->query, slots, svs, &view, ncols, row,
                                  &stmt->reader_opts, &nres, error);
       if (status != ADBC_STATUS_OK) break;
+      applied = true;
       SQLLEN count = OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
       if (count > 0) total += count;
       if (nres > 0) SQLCloseCursor(hstmt);
@@ -1298,6 +1721,7 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
     AdbcStatusCode txn_status = OdbcAutoTxnEnd(&txn, status == ADBC_STATUS_OK, error);
     if (status == ADBC_STATUS_OK) status = txn_status;
   }
+  MultiRowReset(&mr);
   ArrowArrayViewReset(&view);
   free(svs);
   if (schema.release) schema.release(&schema);
@@ -2015,15 +2439,21 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
     return status;
   }
 
-  // INSERT INTO t ("a", "b") VALUES (?, ?)
-  InternalAdbcStringBuilderAppend(&sb, "INSERT INTO ");
+  // t ("a", "b") -- everything an INSERT repeats per row-group in the multi-row form.
   AppendQualifiedName(&sb, q, stmt->ingest_catalog, stmt->ingest_schema, stmt->ingest_table);
   InternalAdbcStringBuilderAppend(&sb, " (");
   for (int64_t i = 0; i < schema.n_children; i++) {
     const char* name = schema.children[i]->name ? schema.children[i]->name : "";
     InternalAdbcStringBuilderAppend(&sb, "%s%s%s%s", i ? ", " : "", q, name, q);
   }
-  InternalAdbcStringBuilderAppend(&sb, ") VALUES (");
+  InternalAdbcStringBuilderAppend(&sb, ")");
+  free(stmt->ingest_into);
+  stmt->ingest_into = sb.buffer ? strdup(sb.buffer) : NULL;
+
+  // INSERT INTO t ("a", "b") VALUES (?, ?)
+  sb.size = 0;
+  InternalAdbcStringBuilderAppend(&sb, "INSERT INTO %s VALUES (",
+                                  stmt->ingest_into ? stmt->ingest_into : "");
   for (int64_t i = 0; i < schema.n_children; i++) InternalAdbcStringBuilderAppend(&sb, i ? ", ?" : "?");
   InternalAdbcStringBuilderAppend(&sb, ")");
   schema.release(&schema);
@@ -2032,5 +2462,10 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
   stmt->query = strdup(sb.buffer);
   InternalAdbcStringBuilderReset(&sb);
   stmt->prepared = false;
-  return OdbcStatementExecuteBound(stmt, NULL, rows_affected, error);
+  AdbcStatusCode ingest_status = OdbcStatementExecuteBound(stmt, NULL, rows_affected, error);
+  // The multi-row rewrite is scoped to this one ingest: a later ExecuteQuery on the same
+  // statement must never see it.
+  free(stmt->ingest_into);
+  stmt->ingest_into = NULL;
+  return ingest_status;
 }

@@ -500,12 +500,52 @@ Options (set on the statement):
 
 | key | meaning |
 |---|---|
-| `adbc.odbc.array_binding` | `true` (default) — binds each Arrow batch as a column-wise ODBC parameter array, so bulk ingest and `executemany` issue one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE`, or that cannot account for every parameter set they were handed, fall back automatically; DuckDB and clickhouse-odbc, whose parameter arrays silently drop values, default to `false` and can be forced back on with this option. Reported rows-affected is identical in both modes. |
+| `adbc.odbc.rows_per_insert` | rows of parameters per `INSERT` for **bulk ingest** — `0` (default) picks a group size automatically, `1` turns the rewrite off, any other value asks for that many. Instead of executing `INSERT INTO t VALUES (?,?)` once per row, ingest prepares `INSERT INTO t VALUES (?,?),(?,?),…` with K row-groups and binds K rows' worth of ordinary parameters per execute, which divides the round trips by K. See [Multi-row INSERT batching](#multi-row-insert-batching). |
+| `adbc.odbc.array_binding` | `true` (default) — binds each Arrow batch as a column-wise ODBC parameter array, so `executemany` (and ingest on a driver where arrays are the faster of the two) issues one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE`, or that cannot account for every parameter set they were handed, fall back automatically; DuckDB and clickhouse-odbc, whose parameter arrays silently drop values, default to `false` and can be forced back on with this option. Reported rows-affected is identical in both modes. |
 
 Bulk ingest and `executemany` also batch their commits: when the connection is in
 autocommit and more than one row is bound, the driver turns autocommit off for the
 duration and commits once at the end (rolling back if the execute fails), instead of
 paying a commit per row. A transaction the caller opened themselves is left alone.
+
+### Multi-row INSERT batching
+
+`adbc_ingest` builds its own `INSERT`, so it can pack K rows into one statement:
+
+```sql
+INSERT INTO t ("a", "b") VALUES (?, ?), (?, ?), (?, ?), …   -- K row-groups
+```
+
+K rows' worth of scalar parameters go in per `SQLExecute`, over the same
+`SQLBindParameter` calls and the same per-driver parameter handling as one row at a
+time — no parameter arrays are involved, so it works on every driver that can bind
+ordinary parameters. It is what makes ingest fast on the drivers whose parameter
+arrays are unusable (DuckDB, MonetDB, clickhouse-odbc, QuestDB via psqlodbc) and on
+the ones where an array is no cheaper than a loop (MySQL Connector/ODBC), and it is
+faster than arrays on most of the drivers where arrays do work — so it is the default
+for ingest, with parameter arrays kept ahead of it only for MariaDB Connector/ODBC,
+whose arrays go out as a single `COM_STMT_BULK_EXECUTE`.
+
+Only the `INSERT` that bulk ingest generates is ever rewritten. A query you wrote is
+executed as written, whatever is bound to it.
+
+K is chosen from a parameter budget (2000 parameters, at most 1000 row-groups — SQL
+Server's limits are 2100 and 1000) and clipped by the driver's `SQL_MAX_STATEMENT_LEN`.
+ODBC has no "maximum parameters" question to ask, so the real ceiling is *probed*: a
+`SQLPrepare` (or, for a driver that only objects later, the first `SQLExecute`) that is
+refused halves K and asks again, and the answer is remembered on the connection. A
+server with no multi-row `VALUES` at all is found the same way — by a two-row
+`SQLPrepare` before anything is written — and ingest simply carries on as before:
+
+| server | what happens |
+|---|---|
+| Oracle | `VALUES (…),(…)` is `ORA-00933`, so the probe re-asks with `INSERT ALL INTO t VALUES (…) INTO t VALUES (…) SELECT 1 FROM dual` and uses that |
+| SQLite | 2000 parameters is over the limit of a 999-variable build; K halves until it prepares |
+| ClickHouse | clickhouse-odbc prepares 500 row-groups and then refuses to execute them; K halves to 125 |
+| Firebird (OdbcFb) | no multi-row `VALUES` and no parameters inside a `UNION ALL`, so the probe fails and ingest stays on one `INSERT` per row |
+
+A failure part way through is unchanged by any of this: the whole ingest is one
+transaction, so it commits completely or leaves nothing behind.
 
 ## Use from C#
 

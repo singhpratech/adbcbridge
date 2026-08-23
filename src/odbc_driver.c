@@ -480,6 +480,15 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
         txn == SQL_TC_NONE) {
       conn->reader_opts.txn_capable = false;
     }
+    // How long a statement the driver will take, for the multi-row INSERT ingest path.
+    // ODBC has no "maximum parameters" info type at all and most drivers answer 0 =
+    // unknown even for this one, so it is an upper bound where it is given and nothing
+    // where it is not; the real ceiling is probed (see MultiRowSetup).
+    SQLUINTEGER stmt_len = 0;
+    if (SQL_SUCCEEDED(
+            SQLGetInfo(conn->hdbc, SQL_MAX_STATEMENT_LEN, &stmt_len, sizeof(stmt_len), &n))) {
+      conn->reader_opts.max_statement_len = (int64_t)stmt_len;
+    }
   }
 
   SQLCHAR name[256] = {0};
@@ -561,6 +570,12 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     conn->reader_opts.fractional_time_max_digits = 9;
   }
   if (strstr((const char*)name, "maodbc")) {
+    // The one driver whose parameter arrays beat a multi-row INSERT: maodbc sends a whole
+    // bound array as a single COM_STMT_BULK_EXECUTE, which the server applies natively.
+    // Interleaved 20,000-row ingests here: arrays 103k rows/s median against 72k for the
+    // multi-row form, so keep arrays ahead of it (the multi-row form is still what runs
+    // when the caller turns array binding off).
+    conn->reader_opts.prefer_param_arrays = true;
     // MariaDB Connector/ODBC reports SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER but
     // ignores SQLSetPos(SQL_POSITION): SQLGetData answers for the first row of the rowset
     // and returns SQL_NO_DATA for every other row, so re-reading a clipped value where it
@@ -671,6 +686,11 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;
+    // Oracle has no multi-row VALUES clause ("INSERT INTO t VALUES (1),(2)" is ORA-00933,
+    // "SQL command not properly ended"); its spelling of the same thing is INSERT ALL.
+    // Only consulted once the plain form has actually been refused, so a future Oracle
+    // that grows one would simply use it.
+    conn->reader_opts.multirow_insert_all = true;
   }
   if (strstr((const char*)name, "db2")) {
     // IBM's CLI driver ("libdb2.a") speaks DRDA to Db2 *and* to Informix, whose DRDA
@@ -1256,6 +1276,7 @@ static AdbcStatusCode OdbcStatementRelease(struct AdbcStatement* statement,
   free(stmt->ingest_catalog);
   free(stmt->ingest_schema);
   free(stmt->ingest_mode);
+  free(stmt->ingest_into);
   free(stmt);
   statement->private_data = NULL;
   return ADBC_STATUS_OK;
@@ -1273,6 +1294,8 @@ static AdbcStatusCode OdbcStatementSetSqlQuery(struct AdbcStatement* statement, 
   stmt->executed = false;
   free(stmt->ingest_table);
   stmt->ingest_table = NULL;
+  free(stmt->ingest_into);
+  stmt->ingest_into = NULL;
   return ADBC_STATUS_OK;
 }
 
@@ -1310,6 +1333,18 @@ static AdbcStatusCode OdbcStatementSetOption(struct AdbcStatement* statement, co
     return ADBC_STATUS_OK;
   } else if (strcmp(key, ADBC_INGEST_OPTION_TEMPORARY) == 0) {
     stmt->ingest_temporary = strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0;
+    return ADBC_STATUS_OK;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_ROWS_PER_INSERT) == 0) {
+    char* end = NULL;
+    long long v = strtoll(value, &end, 10);
+    if (end == value || (end && *end) || v < 0 || v > INT32_MAX) {
+      InternalAdbcSetError(error,
+                           "Invalid value \"%s\" for %s (expected 0 for automatic, 1 to "
+                           "disable, or a row count)",
+                           value, key);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    stmt->rows_per_insert = (int64_t)v;
     return ADBC_STATUS_OK;
   } else if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) {
     if (strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) {  // "true"
@@ -1539,6 +1574,7 @@ static AdbcStatusCode OdbcStatementGetOptionInt(struct AdbcStatement* statement,
   if (stmt->proxy) return OdbcProxyStatementGetOptionInt(stmt->proxy, key, value, error);
   if (strcmp(key, ADBC_ODBC_OPTION_BATCH_SIZE) == 0) { *value = stmt->reader_opts.batch_size; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) { *value = stmt->array_binding ? 1 : 0; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_ROWS_PER_INSERT) == 0) { *value = stmt->rows_per_insert; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = stmt->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }
   InternalAdbcSetError(error, "Unknown statement option %s", key);
   return ADBC_STATUS_NOT_FOUND;
