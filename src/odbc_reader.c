@@ -335,7 +335,7 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       c->kind = FETCH_BINARY; c->c_type = SQL_C_BINARY;
       c->elem_size = (SQLLEN)c->column_size;
       if (c->column_size == 0 || c->elem_size > opts->max_bind_bytes ||
-          c->sql_type == SQL_LONGVARBINARY) {
+          (c->sql_type == SQL_LONGVARBINARY && !opts->getdata_repair)) {
         c->bound = false;
       }
       break;
@@ -345,7 +345,7 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       c->kind = FETCH_WCHAR; c->c_type = SQL_C_WCHAR;
       c->elem_size = ((SQLLEN)c->column_size + 1) * (SQLLEN)sizeof(SQLWCHAR);
       if (c->column_size == 0 || c->elem_size > opts->max_bind_bytes ||
-          c->sql_type == SQL_WLONGVARCHAR) {
+          (c->sql_type == SQL_WLONGVARCHAR && !opts->getdata_repair)) {
         c->bound = false;
       }
       break;
@@ -358,7 +358,7 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       // column_size is in characters; UTF-8 may need up to 4 bytes each.
       c->elem_size = (SQLLEN)c->column_size * 4 + 1;
       if (c->column_size == 0 || c->elem_size > opts->max_bind_bytes ||
-          c->sql_type == SQL_LONGVARCHAR) {
+          (c->sql_type == SQL_LONGVARCHAR && !opts->getdata_repair)) {
         c->bound = false;
       }
       break;
@@ -618,14 +618,11 @@ static bool ParseTimestampUtcMicros(const char* s, size_t len, int64_t* out) {
   return true;
 }
 
-// Append a UTF-16 buffer (n units) to a utf8 string array.  Surrogate pairs
-// become 4-byte sequences (non-BMP characters such as emoji); an unpaired
-// surrogate becomes U+FFFD so the output is always valid UTF-8.
-static ArrowErrorCode AppendUtf16(struct ArrowArray* arr, const SQLWCHAR* w, size_t n,
-                                  struct ArrowBuffer* scratch) {
-  scratch->size_bytes = 0;
-  NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(scratch, (int64_t)n * 4 + 1));
-  uint8_t* o = scratch->data;
+// Transcode a UTF-16 buffer (n units) into `o`, returning the number of bytes
+// written.  Surrogate pairs become 4-byte sequences (non-BMP characters such as
+// emoji); an unpaired surrogate becomes U+FFFD so the output is always valid
+// UTF-8.  `o` must have room for `Utf16Utf8MaxBytes(n)` bytes.
+static size_t Utf16ToUtf8(const SQLWCHAR* w, size_t n, uint8_t* o) {
   size_t k = 0;
   for (size_t i = 0; i < n; i++) {
     uint32_t cp = (uint16_t)w[i];
@@ -656,7 +653,20 @@ static ArrowErrorCode AppendUtf16(struct ArrowArray* arr, const SQLWCHAR* w, siz
       o[k++] = (uint8_t)(0x80 | (cp & 0x3F));
     }
   }
-  struct ArrowStringView sv = {(const char*)o, (int64_t)k};
+  return k;
+}
+
+// Worst case UTF-8 expansion of n UTF-16 code units: a BMP unit (2 bytes) can
+// reach 3 bytes, a surrogate pair (4 bytes) stays 4, so never more than 3n.
+static inline int64_t Utf16Utf8MaxBytes(int64_t units) { return units * 3; }
+
+// Append a UTF-16 buffer (n units) to a utf8 string array, via `scratch`.
+static ArrowErrorCode AppendUtf16(struct ArrowArray* arr, const SQLWCHAR* w, size_t n,
+                                  struct ArrowBuffer* scratch) {
+  scratch->size_bytes = 0;
+  NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(scratch, (int64_t)n * 3 + 1));
+  size_t k = Utf16ToUtf8(w, n, scratch->data);
+  struct ArrowStringView sv = {(const char*)scratch->data, (int64_t)k};
   return ArrowArrayAppendString(arr, sv);
 }
 
@@ -712,6 +722,7 @@ struct OdbcReader {
   SQLUSMALLINT* row_status;
   bool done;
   bool bound;
+  bool all_bound;  // every column is SQLBindCol'd => rowsets convert column-at-a-time
   struct ArrowBuffer scratch;  // for SQLGetData chunks / utf16 conversion
   struct AdbcError error;
   char error_message[1024];
@@ -723,6 +734,7 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
   for (SQLSMALLINT i = 0; i < r->ncols; i++) {
     if (!r->cols[i].bound) all_bound = false;
   }
+  r->all_bound = all_bound;
   r->rows_per_fetch = all_bound ? (SQLULEN)r->opts.batch_size : 1;
   if (r->rows_per_fetch < 1) r->rows_per_fetch = 1;
   if (r->opts.min_buffer_rows > 0 && all_bound) {
@@ -766,6 +778,35 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
                SQL_HANDLE_STMT, hstmt, "SQLBindCol", error);
   }
   r->bound = true;
+  return ADBC_STATUS_OK;
+}
+
+// Bytes of a bound value the buffer can actually hold (the driver reserves room for
+// a terminator in the character types).
+static inline size_t BoundValueCap(const struct OdbcColumn* c) {
+  return (size_t)c->elem_size - (c->c_type == SQL_C_CHAR      ? 1
+                                 : c->c_type == SQL_C_WCHAR ? sizeof(SQLWCHAR)
+                                                            : 0);
+}
+
+// Did the driver have more data for this value than the bound buffer could hold?
+// Only the variable-length C types can report this.
+static inline bool BoundValueTruncated(const struct OdbcColumn* c, SQLLEN ind) {
+  if (c->c_type != SQL_C_CHAR && c->c_type != SQL_C_WCHAR && c->c_type != SQL_C_BINARY) {
+    return false;
+  }
+  if (ind == SQL_NULL_DATA) return false;
+  return ind == SQL_NO_TOTAL || ind < 0 || (size_t)ind > BoundValueCap(c);
+}
+
+// Make `row` of the current rowset the row SQLGetData reads from.  A one-row rowset
+// is already positioned, so this is a no-op there.
+static AdbcStatusCode PositionOnRow(struct OdbcReader* r, SQLULEN row,
+                                    struct AdbcError* error) {
+  if (r->rows_per_fetch <= 1) return ADBC_STATUS_OK;
+  ODBC_CHECK(SQLSetPos(r->ref->hstmt, (SQLSETPOSIROW)(row + 1), SQL_POSITION,
+                       SQL_LOCK_NO_CHANGE),
+             SQL_HANDLE_STMT, r->ref->hstmt, "SQLSetPos(SQL_POSITION)", error);
   return ADBC_STATUS_OK;
 }
 
@@ -827,14 +868,21 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
     SQLLEN ind = c->indicators[row];
     is_null = (ind == SQL_NULL_DATA);
     data = (const uint8_t*)c->buffer + (size_t)row * (size_t)c->elem_size;
-    if (ind == SQL_NO_TOTAL || ind < 0) {
+    if (BoundValueTruncated(c, ind)) {
+      if (r->opts.getdata_repair) {
+        // The driver had more data than the bound buffer could hold.  Re-read the
+        // whole value with SQLGetData rather than silently returning a prefix.
+        RAISE_ADBC(PositionOnRow(r, row, error));
+        RAISE_ADBC(GetDataLong(r, i, &is_null, error));
+        data = r->scratch.data;
+        len = (size_t)r->scratch.size_bytes;
+      } else {
+        len = (ind == SQL_NO_TOTAL || ind < 0) ? 0 : BoundValueCap(c);
+      }
+    } else if (ind == SQL_NO_TOTAL || ind < 0) {
       len = 0;
     } else {
       len = (size_t)ind;
-      // Truncated value (data longer than bound buffer) - clamp.
-      size_t cap = (size_t)c->elem_size - (c->c_type == SQL_C_CHAR ? 1
-                                          : c->c_type == SQL_C_WCHAR ? sizeof(SQLWCHAR) : 0);
-      if (len > cap) len = cap;
     }
   } else {
     RAISE_ADBC(GetDataLong(r, i, &is_null, error));
@@ -944,6 +992,255 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
   return ADBC_STATUS_OK;
 }
 
+// ---------------------------------------------------------------------------
+// Bulk (column-at-a-time) conversion of a whole ODBC rowset
+//
+// A bound column's rowset buffer is already a contiguous C array, so a whole
+// rowset can be converted with one pass per column rather than one nanoarrow
+// append call per value.  nanoarrow only materialises a validity bitmap once a
+// null is appended, so a rowset with no nulls costs a reserve plus a memcpy (or
+// one tight conversion loop) per column and touches no bitmap at all.
+
+// Every kind handled by MemcpyWidth() copies the ODBC rowset buffer straight
+// into the Arrow data buffer, which is only correct if the C types match.
+_Static_assert(sizeof(SQLSCHAR) == 1, "SQLSCHAR must be 1 byte");
+_Static_assert(sizeof(SQLSMALLINT) == 2, "SQLSMALLINT must be 2 bytes");
+_Static_assert(sizeof(SQLUSMALLINT) == 2, "SQLUSMALLINT must be 2 bytes");
+_Static_assert(sizeof(SQLINTEGER) == 4, "SQLINTEGER must be 4 bytes");
+_Static_assert(sizeof(SQLUINTEGER) == 4, "SQLUINTEGER must be 4 bytes");
+_Static_assert(sizeof(SQLBIGINT) == 8, "SQLBIGINT must be 8 bytes");
+_Static_assert(sizeof(SQLUBIGINT) == 8, "SQLUBIGINT must be 8 bytes");
+_Static_assert(sizeof(SQLREAL) == 4, "SQLREAL must be 4 bytes");
+_Static_assert(sizeof(SQLDOUBLE) == 8, "SQLDOUBLE must be 8 bytes");
+
+static inline int64_t BytesForBits(int64_t bits) { return (bits >> 3) + ((bits & 7) != 0); }
+
+// Arrow element width for the kinds whose bound ODBC buffer already has the
+// exact Arrow memory layout; 0 for kinds that need per-value conversion.
+static int MemcpyWidth(const struct OdbcColumn* c) {
+  switch (c->kind) {
+    case FETCH_I8:
+    case FETCH_U8: return 1;
+    case FETCH_I16:
+    case FETCH_U16: return 2;
+    case FETCH_I32:
+    case FETCH_U32:
+    case FETCH_F32: return 4;
+    case FETCH_I64:
+    case FETCH_U64:
+    case FETCH_F64: return 8;
+    default: return 0;
+  }
+}
+
+// Arrow element width of a fixed-width column, for reserving a batch up front.
+static int FixedArrowWidth(const struct OdbcColumn* c) {
+  int w = MemcpyWidth(c);
+  if (w) return w;
+  switch (c->kind) {
+    case FETCH_DATE:
+    case FETCH_TIME: return 4;
+    case FETCH_TIMESTAMP:
+    case FETCH_TIMESTAMP_TZ:
+    case FETCH_TIME64: return 8;
+    case FETCH_DECIMAL: return 16;
+    default: return 0;
+  }
+}
+
+// Byte length of the value in row `ind`, with the same truncation clamp
+// AppendValue() applies.  Callers handle SQL_NULL_DATA separately.
+static inline size_t BoundValueLen(const struct OdbcColumn* c, SQLLEN ind) {
+  if (ind == SQL_NO_TOTAL || ind < 0) return 0;
+  size_t len = (size_t)ind;
+  size_t cap = (size_t)c->elem_size - (c->c_type == SQL_C_CHAR      ? 1
+                                       : c->c_type == SQL_C_WCHAR ? sizeof(SQLWCHAR)
+                                                                  : 0);
+  return len > cap ? cap : len;
+}
+
+// Append n validity bits for a rowset.  Mirrors nanoarrow's laziness: an array
+// that has seen no null keeps its bitmap unallocated, which is what lets a
+// null-free result set skip the bitmap entirely.
+static ArrowErrorCode BulkValidity(struct ArrowArray* arr, const SQLLEN* ind, int64_t n,
+                                   int64_t nulls) {
+  struct ArrowBitmap* bitmap = ArrowArrayValidityBitmap(arr);
+  if (nulls == 0 && bitmap->buffer.data == NULL) return NANOARROW_OK;
+  if (bitmap->buffer.data == NULL) {
+    NANOARROW_RETURN_NOT_OK(ArrowBitmapReserve(bitmap, arr->length + n));
+    ArrowBitmapAppendUnsafe(bitmap, 1, arr->length);
+  } else {
+    NANOARROW_RETURN_NOT_OK(ArrowBitmapReserve(bitmap, n));
+  }
+  int64_t i = 0;
+  while (i < n) {
+    uint8_t valid = ind[i] != SQL_NULL_DATA;
+    int64_t j = i + 1;
+    while (j < n && (uint8_t)(ind[j] != SQL_NULL_DATA) == valid) j++;
+    ArrowBitmapAppendUnsafe(bitmap, valid, j - i);
+    i = j;
+  }
+  arr->null_count += nulls;
+  return NANOARROW_OK;
+}
+
+// Convert `nrows` rows of one bound column into `arr`.  Returns
+// ADBC_STATUS_NOT_IMPLEMENTED when the caller should use the per-value path.
+static AdbcStatusCode BulkAppendColumn(struct OdbcReader* r, SQLSMALLINT i, SQLULEN nrows,
+                                       struct ArrowArray* arr, struct AdbcError* error) {
+  struct OdbcColumn* c = &r->cols[i];
+  const int64_t n = (int64_t)nrows;
+  const SQLLEN* ind = c->indicators;
+  const uint8_t* base = (const uint8_t*)c->buffer;
+  const size_t stride = (size_t)c->elem_size;
+  const int64_t len0 = arr->length;
+  const int width = MemcpyWidth(c);
+
+  switch (c->kind) {
+    case FETCH_I8: case FETCH_I16: case FETCH_I32: case FETCH_I64:
+    case FETCH_U8: case FETCH_U16: case FETCH_U32: case FETCH_U64:
+    case FETCH_F32: case FETCH_F64:
+    case FETCH_BOOL: case FETCH_BOOL_STR:
+    case FETCH_CHAR: case FETCH_BINARY: case FETCH_WCHAR:
+    case FETCH_DATE: case FETCH_TIME: case FETCH_TIMESTAMP:
+      break;
+    default:
+      // FETCH_DECIMAL / FETCH_TIME64 / FETCH_TIMESTAMP_TZ parse text per value;
+      // the parse dominates, so there is nothing for a bulk path to save.
+      return ADBC_STATUS_NOT_IMPLEMENTED;
+  }
+
+  int64_t nulls = 0;
+  for (int64_t row = 0; row < n; row++) nulls += (ind[row] == SQL_NULL_DATA);
+  if (c->c_type == SQL_C_CHAR || c->c_type == SQL_C_WCHAR || c->c_type == SQL_C_BINARY) {
+    for (int64_t row = 0; row < n; row++) {
+      if (BoundValueTruncated(c, ind[row])) return ADBC_STATUS_NOT_IMPLEMENTED;
+    }
+  }
+
+  if (width > 0) {
+    if (stride != (size_t)width) return ADBC_STATUS_NOT_IMPLEMENTED;
+    struct ArrowBuffer* dat = ArrowArrayBuffer(arr, 1);
+    CHECK_NA(INTERNAL, ArrowBufferReserve(dat, n * width), error);
+    memcpy(dat->data + dat->size_bytes, base, (size_t)n * (size_t)width);
+    dat->size_bytes += n * width;
+  } else if (c->kind == FETCH_DATE || c->kind == FETCH_TIME) {
+    struct ArrowBuffer* dat = ArrowArrayBuffer(arr, 1);
+    CHECK_NA(INTERNAL, ArrowBufferReserve(dat, n * 4), error);
+    int32_t* o = (int32_t*)(dat->data + dat->size_bytes);
+    if (c->kind == FETCH_DATE) {
+      for (int64_t row = 0; row < n; row++) {
+        if (ind[row] == SQL_NULL_DATA) { o[row] = 0; continue; }
+        const DATE_STRUCT* d = (const DATE_STRUCT*)(base + (size_t)row * stride);
+        o[row] = (int32_t)DaysFromCivil(d->year, d->month, d->day);
+      }
+    } else {
+      for (int64_t row = 0; row < n; row++) {
+        if (ind[row] == SQL_NULL_DATA) { o[row] = 0; continue; }
+        const TIME_STRUCT* t = (const TIME_STRUCT*)(base + (size_t)row * stride);
+        o[row] = (int32_t)(t->hour * 3600 + t->minute * 60 + t->second);
+      }
+    }
+    dat->size_bytes += n * 4;
+  } else if (c->kind == FETCH_TIMESTAMP) {
+    struct ArrowBuffer* dat = ArrowArrayBuffer(arr, 1);
+    CHECK_NA(INTERNAL, ArrowBufferReserve(dat, n * 8), error);
+    int64_t* o = (int64_t*)(dat->data + dat->size_bytes);
+    const bool nano = c->unit == NANOARROW_TIME_UNIT_NANO;
+    for (int64_t row = 0; row < n; row++) {
+      if (ind[row] == SQL_NULL_DATA) { o[row] = 0; continue; }
+      const TIMESTAMP_STRUCT* t = (const TIMESTAMP_STRUCT*)(base + (size_t)row * stride);
+      int64_t secs = DaysFromCivil(t->year, t->month, t->day) * 86400 + t->hour * 3600 +
+                     t->minute * 60 + t->second;
+      o[row] = nano ? secs * 1000000000LL + (int64_t)t->fraction
+                    : secs * 1000000LL + (int64_t)t->fraction / 1000;
+    }
+    dat->size_bytes += n * 8;
+  } else if (c->kind == FETCH_BOOL || c->kind == FETCH_BOOL_STR) {
+    struct ArrowBuffer* dat = ArrowArrayBuffer(arr, 1);
+    int64_t need = BytesForBits(len0 + n);
+    if (need > dat->size_bytes) {
+      CHECK_NA(INTERNAL, ArrowBufferAppendFill(dat, 0, need - dat->size_bytes), error);
+    }
+    for (int64_t row = 0; row < n; row++) {
+      uint8_t v = 0;
+      if (ind[row] != SQL_NULL_DATA) {
+        const uint8_t* p = base + (size_t)row * stride;
+        if (c->kind == FETCH_BOOL) {
+          v = *p != 0;
+        } else if (BoundValueLen(c, ind[row]) > 0) {
+          char ch = (char)*p;
+          v = (ch == 't' || ch == 'T' || ch == '1' || ch == 'y' || ch == 'Y');
+        }
+      }
+      ArrowBitSetTo(dat->data, len0 + row, v);
+    }
+  } else {
+    // FETCH_CHAR / FETCH_BINARY / FETCH_WCHAR: one offsets entry and a memcpy
+    // (or transcode) per value, with the batch's data buffer sized from the
+    // indicator array in a single pass first.
+    struct ArrowBuffer* off = ArrowArrayBuffer(arr, 1);
+    struct ArrowBuffer* dat = ArrowArrayBuffer(arr, 2);
+    int64_t src_bytes = 0;
+    for (int64_t row = 0; row < n; row++) {
+      if (ind[row] != SQL_NULL_DATA) src_bytes += (int64_t)BoundValueLen(c, ind[row]);
+    }
+    int64_t max_bytes = c->kind == FETCH_WCHAR
+                            ? Utf16Utf8MaxBytes(src_bytes / (int64_t)sizeof(SQLWCHAR))
+                            : src_bytes;
+    const int32_t start = ((const int32_t*)off->data)[len0];
+    // Leave a >2GiB batch to the per-value path, which reports EOVERFLOW.
+    if ((int64_t)start + max_bytes > INT32_MAX) return ADBC_STATUS_NOT_IMPLEMENTED;
+    CHECK_NA(INTERNAL, ArrowBufferReserve(off, n * 4), error);
+    CHECK_NA(INTERNAL, ArrowBufferReserve(dat, max_bytes), error);
+    int32_t* o = (int32_t*)(off->data + off->size_bytes);
+    uint8_t* d = dat->data + dat->size_bytes;
+    int32_t at = start;
+    for (int64_t row = 0; row < n; row++) {
+      size_t len = ind[row] == SQL_NULL_DATA ? 0 : BoundValueLen(c, ind[row]);
+      if (len > 0) {
+        const uint8_t* p = base + (size_t)row * stride;
+        size_t wrote;
+        if (c->kind == FETCH_WCHAR) {
+          wrote = Utf16ToUtf8((const SQLWCHAR*)p, len / sizeof(SQLWCHAR), d);
+        } else {
+          memcpy(d, p, len);
+          wrote = len;
+        }
+        d += wrote;
+        at += (int32_t)wrote;
+      }
+      o[row] = at;
+    }
+    off->size_bytes += n * 4;
+    dat->size_bytes = d - dat->data;
+  }
+
+  CHECK_NA(INTERNAL, BulkValidity(arr, ind, n, nulls), error);
+  arr->length = len0 + n;
+  return ADBC_STATUS_OK;
+}
+
+// Reserve each column's fixed-size buffers for a whole batch, so no column has
+// to walk a realloc chain while it fills.  A failed reserve has to be propagated
+// rather than ignored: ArrowBufferReserve() zeroes the buffer's size on ENOMEM,
+// which would drop the leading 0 that ArrowArrayStartAppending() put in an
+// offsets buffer.
+static ArrowErrorCode ReserveBatch(struct OdbcReader* r, struct ArrowArray* batch) {
+  for (SQLSMALLINT i = 0; i < r->ncols; i++) {
+    struct ArrowArray* arr = batch->children[i];
+    int width = FixedArrowWidth(&r->cols[i]);
+    if (width > 0) {
+      NANOARROW_RETURN_NOT_OK(
+          ArrowBufferReserve(ArrowArrayBuffer(arr, 1), r->opts.batch_size * width));
+    } else if (arr->n_buffers == 3) {
+      NANOARROW_RETURN_NOT_OK(
+          ArrowBufferReserve(ArrowArrayBuffer(arr, 1), r->opts.batch_size * 4));
+    }
+  }
+  return NANOARROW_OK;
+}
+
 static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* out,
                                       struct AdbcError* error) {
   SQLHSTMT hstmt = r->ref->hstmt;
@@ -953,6 +1250,7 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
   batch.release = NULL;
   CHECK_NA(INTERNAL, ArrowArrayInitFromSchema(&batch, &r->schema, NULL), error);
   CHECK_NA(INTERNAL, ArrowArrayStartAppending(&batch), error);
+  CHECK_NA(INTERNAL, ReserveBatch(r, &batch), error);
 
   int64_t total = 0;
   AdbcStatusCode status = ADBC_STATUS_OK;
@@ -967,19 +1265,51 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
       status = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLFetch", error);
       break;
     }
-    for (SQLULEN row = 0; row < r->rows_fetched && status == ADBC_STATUS_OK; row++) {
-      if (r->row_status[row] == SQL_ROW_NOROW) continue;
-      if (r->row_status[row] == SQL_ROW_ERROR) {
-        InternalAdbcSetError(error, "[ODBC] row %lu reported SQL_ROW_ERROR",
-                             (unsigned long)row);
-        status = ADBC_STATUS_IO;
-        break;
+    // Column-at-a-time conversion needs every row of the rowset to be usable; a
+    // rowset with skipped or failed rows falls back to the row-at-a-time path.
+    bool bulk = r->rows_fetched > 0;
+    for (SQLULEN row = 0; bulk && row < r->rows_fetched; row++) {
+      SQLUSMALLINT st = r->row_status[row];
+      if (st == SQL_ROW_NOROW || st == SQL_ROW_ERROR) bulk = false;
+    }
+    if (bulk) {
+      // Bound columns: one pass per column over the whole rowset.
+      for (SQLSMALLINT i = 0; i < r->ncols && status == ADBC_STATUS_OK; i++) {
+        if (!r->cols[i].bound) continue;
+        status = BulkAppendColumn(r, i, r->rows_fetched, batch.children[i], error);
+        if (status == ADBC_STATUS_NOT_IMPLEMENTED) {
+          status = ADBC_STATUS_OK;
+          for (SQLULEN row = 0; row < r->rows_fetched && status == ADBC_STATUS_OK; row++) {
+            status = AppendValue(r, i, row, batch.children[i], error);
+          }
+        }
       }
-      for (SQLSMALLINT i = 0; i < r->ncols; i++) {
-        status = AppendValue(r, i, row, batch.children[i], error);
-        if (status != ADBC_STATUS_OK) break;
+      // Unbound columns: SQLGetData, which must be issued row by row and in
+      // increasing column order.  DescribeColumns() has already put every unbound
+      // column after every bound one.
+      if (!r->all_bound) {
+        for (SQLULEN row = 0; row < r->rows_fetched && status == ADBC_STATUS_OK; row++) {
+          for (SQLSMALLINT i = 0; i < r->ncols && status == ADBC_STATUS_OK; i++) {
+            if (r->cols[i].bound) continue;
+            status = AppendValue(r, i, row, batch.children[i], error);
+          }
+        }
       }
-      total++;
+      if (status == ADBC_STATUS_OK) total += (int64_t)r->rows_fetched;
+    } else {
+      for (SQLULEN row = 0; row < r->rows_fetched && status == ADBC_STATUS_OK; row++) {
+        if (r->row_status[row] == SQL_ROW_NOROW) continue;
+        if (r->row_status[row] == SQL_ROW_ERROR) {
+          InternalAdbcSetError(error, "[ODBC] row %lu reported SQL_ROW_ERROR",
+                               (unsigned long)row);
+          status = ADBC_STATUS_IO;
+          break;
+        }
+        for (SQLSMALLINT i = 0; i < r->ncols && status == ADBC_STATUS_OK; i++) {
+          status = AppendValue(r, i, row, batch.children[i], error);
+        }
+        total++;
+      }
     }
     if (status != ADBC_STATUS_OK) break;
     if (r->rows_per_fetch == 1 && total >= r->opts.batch_size) break;

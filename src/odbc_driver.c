@@ -208,10 +208,20 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
   return ADBC_STATUS_NOT_IMPLEMENTED;
 }
 
-// Per-driver workarounds, keyed on SQL_DRIVER_NAME.
+// Per-driver workarounds, keyed on SQL_DRIVER_NAME, plus the capability probes the
+// reader needs.
 static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   SQLCHAR name[256] = {0};
   SQLSMALLINT len = 0;
+
+  // Can SQLGetData re-read a bound column of an arbitrary row of a block cursor?  If
+  // so the reader can bind long columns and repair only the truncated values.
+  SQLUINTEGER gd = 0;
+  if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_GETDATA_EXTENSIONS, &gd, sizeof(gd), NULL))) {
+    const SQLUINTEGER need = SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER;
+    conn->reader_opts.getdata_repair = (gd & need) == need;
+  }
+
   if (!SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DRIVER_NAME, name, sizeof(name), &len))) return;
   for (SQLSMALLINT i = 0; i < len && i < (SQLSMALLINT)sizeof(name); i++) {
     if (name[i] >= 'A' && name[i] <= 'Z') name[i] = (SQLCHAR)(name[i] - 'A' + 'a');
@@ -546,6 +556,8 @@ static AdbcStatusCode OdbcStatementSetSqlQuery(struct AdbcStatement* statement, 
   free(stmt->query);
   stmt->query = strdup(query);
   stmt->prepared = false;
+  stmt->prepare_requested = false;
+  stmt->executed = false;
   free(stmt->ingest_table);
   stmt->ingest_table = NULL;
   return ADBC_STATUS_OK;
@@ -653,6 +665,25 @@ AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt,
   return ADBC_STATUS_OK;
 }
 
+// Issue the deferred SQLPrepare.
+static AdbcStatusCode OdbcStatementDoPrepare(struct OdbcStatement* stmt,
+                                             struct AdbcError* error) {
+  if (stmt->prepared) return ADBC_STATUS_OK;
+  RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
+  ODBC_CHECK(SQLPrepare(stmt->ref->hstmt, (SQLCHAR*)stmt->query, SQL_NTS), SQL_HANDLE_STMT,
+             stmt->ref->hstmt, "SQLPrepare", error);
+  stmt->prepared = true;
+  return ADBC_STATUS_OK;
+}
+
+// SQLPrepare is deferred rather than issued here.  A prepare costs a full round trip
+// on a client/server driver, and it buys nothing for the very common
+// prepare-then-execute-once-with-no-parameters shape that DBAPI clients emit for every
+// query: SQLExecDirect does the same work in one round trip instead of two.  The
+// prepare is issued as soon as something actually needs it -- parameters get bound
+// (src/odbc_bind.c), the result schema is asked for, or the statement is executed a
+// second time, which is when a real prepared statement starts paying for itself.
+// Syntax errors therefore surface from the execute rather than from here.
 static AdbcStatusCode OdbcStatementPrepare(struct AdbcStatement* statement,
                                            struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
@@ -662,9 +693,7 @@ static AdbcStatusCode OdbcStatementPrepare(struct AdbcStatement* statement,
     return ADBC_STATUS_INVALID_STATE;
   }
   RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
-  ODBC_CHECK(SQLPrepare(stmt->ref->hstmt, (SQLCHAR*)stmt->query, SQL_NTS), SQL_HANDLE_STMT,
-             stmt->ref->hstmt, "SQLPrepare", error);
-  stmt->prepared = true;
+  stmt->prepare_requested = true;
   return ADBC_STATUS_OK;
 }
 
@@ -686,7 +715,13 @@ static AdbcStatusCode OdbcStatementExecuteQuery(struct AdbcStatement* statement,
     return ADBC_STATUS_INVALID_STATE;
   }
   if (stmt->has_bind) return OdbcStatementExecuteBound(stmt, out, rows_affected, error);
+  // Executing the same query again is the point at which a prepared statement starts
+  // to pay off, so promote the deferred prepare now.
+  if (stmt->prepare_requested && stmt->executed && !stmt->prepared) {
+    RAISE_ADBC(OdbcStatementDoPrepare(stmt, error));
+  }
   RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
+  stmt->executed = true;
   SQLHSTMT hstmt = stmt->ref->hstmt;
 
   SQLRETURN ret;
@@ -734,7 +769,11 @@ static AdbcStatusCode OdbcStatementExecuteSchema(struct AdbcStatement* statement
                                                  struct AdbcError* error) {
   struct OdbcStatement* stmt = (struct OdbcStatement*)statement->private_data;
   if (!stmt) return ADBC_STATUS_INVALID_STATE;
-  if (!stmt->prepared) RAISE_ADBC(OdbcStatementPrepare(statement, error));
+  if (!stmt->query) {
+    InternalAdbcSetError(error, "Must call StatementSetSqlQuery first");
+    return ADBC_STATUS_INVALID_STATE;
+  }
+  RAISE_ADBC(OdbcStatementDoPrepare(stmt, error));
   return OdbcDescribeResultSchema(stmt->ref->hstmt, &stmt->reader_opts, schema, error);
 }
 
