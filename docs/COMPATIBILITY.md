@@ -45,7 +45,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | RisingWave | psqlodbc | `risingwavelabs/risingwave` | queued |
 | Materialize | psqlodbc | `materialize/materialized` | queued |
 | openGauss | psqlodbc | `enmotech/opengauss` | queued |
-| libSQL server | psqlodbc (PG wire) | `ghcr.io/tursodatabase/libsql-server` | queued |
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |
 | TiDB | MySQL Connector/ODBC | `pingcap/tidb` | queued |
 | Dolt | MySQL Connector/ODBC | `dolthub/dolt-sql-server` | queued |
@@ -91,5 +90,6 @@ Not verified; expected to work on the generic path.
 | Database / driver | Why |
 |---|---|
 | H2 2.4 (PG mode) + psqlodbc | psqlodbc's connect handshake sends `SET DateStyle = 'ISO';SET extra_float_digits = 2;show transaction_isolation`, and H2's parser rejects the last two in every `MODE` (no `SHOW`, and `SET` takes only H2's own setting names). `SQLDriverConnect` therefore fails with `42001` and adbcbridge never gets a handle, so no quirk can apply. H2 has no ODBC driver of its own. See `tests/compat/README.md` for the wire-level repro |
+| libSQL server (`sqld`) | No ODBC route at all. It was queued on the assumption that sqld still had the PostgreSQL wire listener `psqlodbc` could drive, but `SQLD_PG_LISTEN_ADDR` is silently ignored: sqld serves only its own HTTP/JSON protocol (Hrana) and gRPC, nothing listens on 5432, and a PG startup packet gets `ECONNRESET`. `--pg-listen-addr` is absent from `sqld --help` and no `pgwire` string is in the binary, in `latest` (0.24.33) and in `v0.22.0`, the oldest tag the registry carries — the code was dropped upstream before that. There is no libSQL ODBC driver, and sqliteodbc opens local files, not a remote sqld. See `tests/compat/README.md` |
 | Elasticsearch SQL ODBC | Windows-only driver |
 | Microsoft Text/Excel ODBC | Windows-only; on Linux read CSV/Parquet/Excel through DuckDB's ODBC driver instead |
