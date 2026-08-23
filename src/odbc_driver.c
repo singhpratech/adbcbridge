@@ -668,6 +668,19 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // zero-row SELECT instead.
     conn->reader_opts.no_sql_columns = true;
   }
+  if (strstr((const char*)name, "taos_odbc")) {
+    // TDengine's own ODBC driver (SQL_DRIVER_NAME "libtaos_odbc.so").  It describes a
+    // TIMESTAMP column as SQL_TYPE_TIMESTAMP -- with TIMESTAMP_AS_IS=1, which the
+    // matrix entry sets -- but implements no TIMESTAMP_STRUCT conversion for it:
+    // SQLBindCol answers "Column converstion to `SQL_C_TYPE_TIMESTAMP[0x5d/93]` not
+    // implemented yet" and the whole result set fails.  Its text form is the ISO-8601
+    // the timestamp reader already parses.
+    conn->reader_opts.timestamp_as_text = true;
+    // Same table, same story for a boolean parameter: SQL_C_BIT -> SQL_BIT is "not
+    // implemented yet" and the only route into a TDengine BOOL column is an integer
+    // described as SQL_TINYINT.
+    conn->reader_opts.bool_param_as_tinyint = true;
+  }
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;

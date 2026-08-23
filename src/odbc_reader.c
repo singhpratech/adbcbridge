@@ -191,6 +191,7 @@ enum OdbcFetchKind {
   FETCH_TIME64,   // SQL_C_CHAR "HH:MM:SS[.frac]" -> time64[us|ns]
   FETCH_TIMESTAMP,// TIMESTAMP_STRUCT -> timestamp[s|ms|us|ns]
   FETCH_TIMESTAMP_TZ,  // SQL_C_CHAR ISO-8601 with offset -> timestamp[us, UTC]
+  FETCH_TIMESTAMP_TEXT,// SQL_C_CHAR "YYYY-MM-DD hh:mm:ss[.frac]" -> timestamp[us]
   FETCH_DECIMAL,  // SQL_C_CHAR -> decimal128
   FETCH_BOOL_STR, // SQL_C_CHAR ('t'/'1'/'true') -> bool (PostgreSQL, DuckDB report bool as char)
 };
@@ -476,6 +477,15 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
         UseTextBuffer(c, opts, 80);
         break;
       }
+      if (opts->timestamp_as_text) {
+        // The driver has no TIMESTAMP_STRUCT for this column (see timestamp_as_text):
+        // take its text form, which is the same ISO-8601 the tz case parses, minus the
+        // offset -- so the value stays local and the Arrow type carries no timezone.
+        c->kind = FETCH_TIMESTAMP_TEXT;
+        c->unit = NANOARROW_TIME_UNIT_MICRO;
+        UseTextBuffer(c, opts, 80);
+        break;
+      }
       c->kind = FETCH_TIMESTAMP; c->c_type = SQL_C_TYPE_TIMESTAMP;
       c->elem_size = sizeof(TIMESTAMP_STRUCT);
       c->unit = TimestampUnitForColumn(c->decimal_digits, c->column_size);
@@ -636,6 +646,7 @@ static AdbcStatusCode BuildSchema(const struct OdbcColumn* cols, SQLSMALLINT n,
                  error);
         goto named;
       case FETCH_TIMESTAMP:
+      case FETCH_TIMESTAMP_TEXT:
         CHECK_NA(INTERNAL,
                  ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIMESTAMP, c->unit, NULL),
                  error);
@@ -1252,7 +1263,11 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
       CHECK_NA(INTERNAL, ArrowArrayAppendInt(arr, v), error);
       break;
     }
-    case FETCH_TIMESTAMP_TZ: {
+    case FETCH_TIMESTAMP_TZ:
+    case FETCH_TIMESTAMP_TEXT: {
+      // Same parser for both: a text timestamp without an offset is already local, so
+      // it lands unshifted in a naive timestamp[us] (FETCH_TIMESTAMP_TEXT), while one
+      // that carries an offset is normalised to UTC (FETCH_TIMESTAMP_TZ).
       int64_t v = 0;
       if (!ParseTimestampUtcMicros((const char*)data, len, &v)) {
         InternalAdbcSetError(error, "Could not parse timestamp value '%.*s' for column %s",
@@ -1346,6 +1361,7 @@ static int FixedArrowWidth(const struct OdbcColumn* c) {
     case FETCH_TIME: return 4;
     case FETCH_TIMESTAMP:
     case FETCH_TIMESTAMP_TZ:
+    case FETCH_TIMESTAMP_TEXT:
     case FETCH_TIME64: return 8;
     case FETCH_DECIMAL: return 16;
     default: return 0;

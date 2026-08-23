@@ -153,6 +153,13 @@ struct OdbcReaderOptions {
   bool refetch_repair;
   // Driver quirk: bind boolean parameters as integers (DuckDB rejects SQL_BIT params).
   bool bool_param_as_int;
+  // Driver quirk: bind boolean parameters as an integer described as SQL_TINYINT, not
+  // SQL_INTEGER.  TDengine's taos-odbc looks a parameter conversion up by the exact
+  // (C type, SQL type, column type) triple and lists exactly one route into a BOOL
+  // column, SQL_C_SBIGINT described as SQL_TINYINT: SQL_BIT and SQL_INTEGER are both
+  // "not implemented yet", and its VARCHAR route parses the text with strtoll, so the
+  // "true"/"false" of bool_param_as_varchar is refused too.
+  bool bool_param_as_tinyint;
   // Driver quirk: bind boolean parameters as the words "true"/"false" in a VARCHAR.
   // QuestDB's PostgreSQL wire protocol parses a boolean parameter only from those two
   // words, while psqlodbc sends an SQL_BIT parameter as "1"/"0" -- which QuestDB stores
@@ -216,6 +223,18 @@ struct OdbcReaderOptions {
   bool wchar_as_utf8;
   // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
   bool no_describe_param;
+  // Driver quirk: the driver describes a column as SQL_TYPE_TIMESTAMP but has no
+  // TIMESTAMP_STRUCT conversion for it -- TDengine's taos-odbc fails SQLBindCol with
+  // "Column converstion to `SQL_C_TYPE_TIMESTAMP` not implemented yet" (its bound
+  // conversions are the numeric C types, SQL_C_CHAR, SQL_C_WCHAR and SQL_C_BINARY).
+  // Read such a column as text and parse it, as the timestamp-with-timezone columns are
+  // already read: the Arrow type stays a naive timestamp[us], and the column keeps its
+  // place in the block cursor instead of dropping the whole result set to SQLGetData.
+  //   The same driver property applies to parameters -- taos-odbc has no
+  // SQL_C_TYPE_TIMESTAMP parameter conversion either -- so a timestamp parameter is
+  // bound as "YYYY-MM-DD HH:MM:SS[.ffffff]" SQL_VARCHAR text instead, which is what the
+  // sub-second TIME path already does for every driver.
+  bool timestamp_as_text;
   // Driver quirk: never call SQLColumns -- its result set cannot be fetched.  The Arrow
   // Flight SQL ODBC driver returns SQL_SUCCESS from SQLColumns and describes all 18
   // result columns, then segfaults inside the first SQLFetch on that cursor, with no
