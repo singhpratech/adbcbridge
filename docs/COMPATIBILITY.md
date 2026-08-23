@@ -44,6 +44,7 @@ from the second table to the first.
 | OpenLink Virtuoso 7.2 | Virtuoso ODBC (`virtodbc.so`) | PASS | ODBC-native server; no `SQL_C_WCHAR` (UTF-8 narrow path), no `SQL_C_SBIGINT`, date parameter arrays repeat row 0; no `BOOLEAN` type; ingest 11.9k rows/s, fetch 1.04M rows/s |
 | openGauss 6.0 | psqlodbc (PG wire) | PASS | no quirks: a PostgreSQL 9.2 fork, driven by the `postgres` entry's types unchanged; server-side setup only (`CAP_SYS_NICE` for the MOT engine's `mbind()`, `max_process_memory` >= 2 GB, and a role created after start-up because the initial user cannot log in remotely); ingest 9.5k rows/s (36.9k with array binding), fetch 1.30M rows/s |
 | IBM Informix 15.0.1 | Db2 clidriver (DRDA) | PASS | same `libdb2.so` as Db2, keyed on `SQL_DBMS_NAME`: no `SQL_C_WCHAR` params (UTF-8 narrow path), no `SQL_C_BIT` params; 32-bit `SQLLEN`; `BYTE` described as IBM's `SQL_BLOB` (-98); server side: `GL_USEGLU=1` for 4-byte UTF-8, `DELIMIDENT=y` for quoted identifiers, `FRACTION(5)` timestamps; ingest 15.6k rows/s (130k array), fetch 751k rows/s |
+| Arrow Flight SQL (sqlflite 1.5.5 / DuckDB 1.1.1) | Flight SQL ODBC (Dremio, open source) | PASS (read) | driver has no `SQLBindParameter` at all, so no writes; `SQLColumns` segfaults on the first `SQLFetch`, so `GetObjects` describes a zero-row SELECT instead (`no_sql_columns`); every `DECIMAL` described as (19,0); fetch 1.32M rows/s |
 | Microsoft Access | MDB Tools | PASS (read) | driver has no DML |
 | Materialize 26.38 | psqlodbc (PG wire) | PASS | streaming warehouse; PostgreSQL SQL layer, so no driver quirks -- but no `SAVEPOINT`, so psqlodbc needs `Protocol=7.4-0` for an ingest big enough to split into a second batch; `NUMERIC` is 39 digits, past decimal128, so it reads back as an exact string; also ingests into and reads back an incrementally maintained `MATERIALIZED VIEW`; ingest 6.5k rows/s (array binding), fetch 248k rows/s |
 | MatrixOne 4.2 (MySQL 8.0.30 wire) | MySQL Connector/ODBC (MySQL wire) | PASS | `mysql_native_password` only, so the connector needs `PLUGIN_DIR`; a table without a PRIMARY KEY gets a hidden `__mo_fake_pk_col` that `SQLColumns` reports; a parameter bound into a `BIT` column aborts the server, so ingest sends booleans as `TINYINT`; describes a TEXT column as 5 characters (driver fix: bind a no-declared-length column at `long_bind_bytes`); ingest 4.4k rows/s, fetch 2.05M rows/s |
@@ -59,7 +60,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | Apache Ignite | ignite-odbc | `apacheignite/ignite` | queued |
 | Vertica CE | Vertica ODBC | `vertica/vertica-ce` | queued |
 | OpenSearch | opensearch-sql-odbc | `opensearchproject/opensearch` | queued |
-| Arrow Flight SQL (any server) | Flight SQL ODBC (Dremio, open source) | `voltrondata/sqlflite` | queued |
 | Apache Doris | MySQL Connector/ODBC | `apache/doris` | queued (large) |
 | StarRocks | MySQL Connector/ODBC | `starrocks/allin1-ubuntu` | queued (large) |
 | Exasol | Exasol ODBC | `exasol/docker-db` | needs privileged container + 4 GB |

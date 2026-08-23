@@ -660,6 +660,14 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // ingest DDL has to fall back to portable type names.
     conn->reader_opts.ansi_ddl_type_names = true;
   }
+  if (strstr((const char*)name, "arrow flight")) {
+    // The Arrow Flight SQL ODBC driver (SQL_DRIVER_NAME "Arrow Flight ODBC Driver"), the
+    // one ODBC driver for any Arrow Flight SQL server.  Its SQLColumns builds a result
+    // set and describes it, then segfaults inside the first SQLFetch on it -- with no
+    // bound columns at all -- so GetObjects has to skip SQLColumns and describe a
+    // zero-row SELECT instead.
+    conn->reader_opts.no_sql_columns = true;
+  }
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;

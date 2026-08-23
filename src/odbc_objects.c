@@ -273,6 +273,12 @@ static AdbcStatusCode AppendColumnsViaDescribe(struct OdbcConnection* conn,
 static AdbcStatusCode AppendColumns(struct OdbcConnection* conn, struct ArrowArray* cols_list,
                                     const struct TableRow* t, const char* column_name,
                                     struct AdbcError* error) {
+  // no_sql_columns: this driver's SQLColumns result set cannot be fetched at all, so
+  // there is no return code to fall back on -- the call has to be skipped outright and
+  // the describe fallback used unconditionally.  See OdbcDetectQuirks().
+  if (conn->reader_opts.no_sql_columns) {
+    return AppendColumnsViaDescribe(conn, cols_list, t, column_name, error);
+  }
   struct ArrowArray* c = cols_list->children[0];
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,

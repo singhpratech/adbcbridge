@@ -21,6 +21,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MATRIXONE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INFORMIX_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, COLUMNSTORE_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, FLIGHTSQL_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -45,6 +46,12 @@ EXTRA_ROWS = pa.table({
                    datetime.date(2024, 2, 1), datetime.date(2024, 3, 1)], pa.date32()),
     "e": pa.array([True, None, False, True], pa.bool_()),
 })
+# The Arrow Flight SQL ODBC driver implements no SQLBindParameter at all, so the
+# `flightsql` entry cannot load adbc_t the way every other entry does -- with a
+# parameterised INSERT.  It builds the table with literal SQL in `setup` instead, from
+# this column list, which is also what the entry declares as its `ddl`.
+FLIGHTSQL_COLS = ("(i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP,"
+                  " n DECIMAL(10,3), bo BOOLEAN)")
 DBS = {
     "sqlite": dict(
         env="SQLITE_ODBC_DRIVER", conn="Driver={drv};Database=" + os.path.join(TMP, "m.db") + ";",
@@ -478,6 +485,60 @@ DBS = {
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s NVARCHAR(50), b VARBINARY(10),"
             " d DATE, ts DATETIME, n DECIMAL(10,3), bo SMALLINT)",
         bool_type="int16"),
+    "flightsql": dict(
+        # Arrow Flight SQL.  The server here is voltrondata/sqlflite (DuckDB behind a
+        # Flight SQL service) and the driver is the Arrow Flight SQL ODBC driver Dremio
+        # publishes -- the only ODBC driver for the protocol, so everything below is the
+        # driver's doing rather than any one server's.  useEncryption=false matches the
+        # container's TLS_ENABLED=0; sqlflite's default user name is `sqlflite_username`
+        # and SQLFLITE_PASSWORD sets the password.  See tests/compat/README.md.
+        env="FLIGHTSQL_ODBC_DRIVER",
+        conn="Driver={drv};Host=127.0.0.1;Port=31337;UID=sqlflite_username;PWD=adbc;"
+             "useEncryption=false;",
+        # read_only: the driver has no SQLBindParameter -- it answers HYC00 "Unsupported
+        # function" on a *virgin* statement handle, before any SQL is seen -- so nothing
+        # that binds a parameter can go through it: not the parameterised INSERT the other
+        # entries load adbc_t with, and not adbc_ingest.  (SQLRowCount answers -1 for a
+        # literal INSERT too, so there would be no ingested row count to check either.)
+        # SQLExecDirect of literal SQL does work, so `setup` builds the two tables the read
+        # side of the workload needs and that whole read side then runs unchanged.
+        read_only=True,
+        params=False,  # same reason: the parameterised SELECT runs as a literal
+        # The driver describes every SQL_DECIMAL column as precision 19, scale 0 whatever
+        # was declared -- DECIMAL(10,3) and a 12.345 literal both come back as (19, 0) --
+        # while sending the digits themselves in full.  Taken at face value that scale
+        # rounds 12.345 to 12, so this entry reads decimals as their exact text instead,
+        # as the `databend` entry does for the same reason.
+        db_kwargs={"adbc.odbc.decimal_as_string": "true"}, decimal_type="string",
+        ddl="CREATE TABLE adbc_t " + FLIGHTSQL_COLS,
+        # Replayed on every connection (bench/matrix_bench.py opens several), hence
+        # CREATE OR REPLACE: each statement is idempotent on its own.
+        setup=[
+            "CREATE OR REPLACE TABLE adbc_t " + FLIGHTSQL_COLS,
+            # The literal spelling of ROW1/ROW2 below.  DuckDB reads '\\x01\\x02'::BLOB as
+            # the two bytes, the same value the other entries bind as a parameter.
+            "INSERT INTO adbc_t VALUES"
+            " (1, 1.5, 'héllo 🚀', '\\x01\\x02'::BLOB, DATE '2024-02-29',"
+            " TIMESTAMP '2024-02-29 13:45:10.123456', 12.345, true),"
+            " (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+            # adbc_big, the table check_big() reads and the one bench/matrix_bench.py
+            # times a fetch of on a read_only entry -- so it is sized for the benchmark
+            # rather than for the assertion.  DuckDB materialises it from range() in a
+            # couple of milliseconds, so rebuilding it per connection costs nothing.
+            "CREATE OR REPLACE TABLE adbc_big AS SELECT i AS a, 'r' || i AS b,"
+            " i::DOUBLE AS c, (DATE '1970-01-01' + i::INTEGER) AS d, (i % 2 = 0) AS e"
+            " FROM range(0, 100000) t(i)",
+        ],
+        big_rows=100000,
+        extra=[
+            # The image ships TPC-H at scale factor 0.01, whose row counts are fixed by
+            # the spec.  Reading it exercises the Flight SQL data path -- DoGet on the
+            # ticket the query handed back -- over result sets wider and longer than the
+            # two tables `setup` makes.
+            ("SELECT count(*) FROM lineitem", (60175,)),
+            ("SELECT count(*) FROM orders o JOIN customer c ON o.o_custkey = c.c_custkey",
+             (15000,)),
+        ]),
     "access": dict(
         env="ACCESS_ODBC_DRIVER", conn="Driver={drv};DBQ=" + os.path.join(TMP, "access.mdb") + ";",
         # No server: MDB Tools opens an .mdb file. It is read-only (it executes no DDL and
