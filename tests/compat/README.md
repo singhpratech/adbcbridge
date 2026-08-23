@@ -375,6 +375,44 @@ at ~78,000 rows/s.
 docker rm -f adbcbridge-databend
 ```
 
+## Percona Server 8.4
+
+Percona Server is a drop-in replacement for MySQL: same wire protocol, same client
+libraries, same SQL, so the MySQL Connector/ODBC build used for the `mysql` entry drives
+it unchanged and no new driver has to be downloaded.
+
+Server (or use the `percona` service in `docker-compose.yml`, which is in the `extra`
+profile so a plain `up -d` leaves it alone):
+
+```sh
+docker run -d --name adbcbridge-percona --memory=2g -p 127.0.0.1:13312:3306 \
+  -e MYSQL_ROOT_PASSWORD=adbc -e MYSQL_DATABASE=adbc \
+  -e MYSQL_USER=adbc -e MYSQL_PASSWORD=adbc percona/percona-server:8.4
+```
+
+It is ready when `docker logs adbcbridge-percona` reports `ready for connections` on
+port 3306 (a few seconds; the entrypoint initialises the data directory on first start).
+
+Run the entry — same driver, same `LD_PRELOAD` as MySQL (see the MySQL 8 section above
+for why `libstdc++` has to be preloaded under pyarrow):
+
+```sh
+export PERCONA_ODBC_DRIVER=$MYSQL_ODBC_DRIVER  # the MySQL Connector/ODBC libmyodbc9w.so
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+python tests/compat/test_matrix.py percona
+# percona   PASS  (MySQL (via ODBC) 8.4.11-11)
+```
+
+Entry notes: identical to the `mysql` entry apart from the port. `ANSI_QUOTES` goes into
+`sql_mode` (the entry's `setup`) for the double-quoted identifiers `adbc_ingest` emits,
+and `BOOLEAN` is `TINYINT(1)`, reported as `SQL_TINYINT`, so `bo` is expected as `int8`.
+No tolerance flags beyond that and no driver quirk in `src/`: the emoji round-trip,
+microsecond `DATETIME(6)`, `DECIMAL(10,3)`, `VARBINARY`, NULL parameters, affected-row
+counts, the 5000-row batched read and `GetObjects` all pass as they do on MySQL. Percona
+reports itself to `SQLGetInfo` as `MySQL` (the version string `8.4.11-11` is what
+identifies the fork), so `adbc_get_info` names MySQL, not Percona.
+
 ## MonetDB
 
 Server (Dec2025-SP3, 11.55.x) on `127.0.0.1:15000`, database `adbc`, user `monetdb`:
