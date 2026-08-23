@@ -87,3 +87,15 @@ services:
     profiles: ["extra"]
     mem_limit: 2g
     ports: ["127.0.0.1:14000:4000"]
+  # Dolt ("git for data"): MySQL wire protocol, driven by MySQL Connector/ODBC.
+  # Under the "extra" profile, so a plain `up -d` does not start it:
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d dolt
+  # DOLT_ROOT_HOST=% is required: the image's root account is root@localhost otherwise,
+  # which a client coming in through the published port cannot match.  The "adbc"
+  # database is not created by an env var here -- see README.md for the one-line
+  # `dolt sql -q` that creates it.
+  dolt:
+    image: dolthub/dolt-sql-server:latest
+    profiles: ["extra"]
+    environment: { DOLT_ROOT_HOST: "%" }
+    ports: ["127.0.0.1:13310:3306"]

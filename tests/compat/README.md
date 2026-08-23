@@ -11,9 +11,17 @@ ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so python tests/compat/test_matr
 ```
 
 The connection string of an entry can be overridden with `<NAME>_CONN`
-(e.g. `MYSQL_CONN=...`). The file-based entries need no server at all: `sqlite` and
+(e.g. `MYSQL_CONN=...`). Inside it, `{drv}` expands to the driver library and `{drvdir}`
+to the directory holding it. The file-based entries need no server at all: `sqlite` and
 `duckdb` create their database in a temp dir, and `access` reads a checked-in `.mdb`
 fixture.
+
+Services under the `extra` compose profile are not started by a plain `up -d`; name the
+profile to bring one up:
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d dolt
+```
 
 ## IBM Db2 12.1
 
@@ -143,6 +151,86 @@ the drivers report as `SQL_TINYINT`, so the entry expects `int8` for the `bo` co
 other tolerance flags are needed and no driver quirk is required in `src/`: both drivers
 pass every assertion, including the emoji round-trip, microsecond timestamps,
 `DECIMAL(10,3)`, NULL parameters, affected-row counts and the 5000-row batched read.
+
+## Dolt
+
+[Dolt](https://github.com/dolthub/dolt) is a version-controlled SQL database — a Git-like
+commit graph over tables — that serves the MySQL wire protocol, so the same MySQL
+Connector/ODBC drives it (see the MySQL section above for the driver download and the
+`LD_PRELOAD` pyarrow needs).  It is behind the `extra` compose profile, so a plain
+`up -d` does not start it.
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d dolt
+# or, standalone:
+docker run -d --name adbcbridge-dolt --memory=2g -e DOLT_ROOT_HOST=% \
+  -p 127.0.0.1:13310:3306 dolthub/dolt-sql-server
+```
+
+`DOLT_ROOT_HOST=%` is not optional. The image creates `root@localhost` by default, and a
+client arriving through the published port is not `localhost` to the server, so without it
+every connection fails with `Access denied for user 'root'`.
+
+Then create the database — the image has no `MYSQL_DATABASE`-style env var, and `dolt sql`
+inside the container talks to the running server:
+
+```sh
+docker exec adbcbridge-dolt dolt sql -q "CREATE DATABASE IF NOT EXISTS adbc"
+```
+
+### Run the entry
+
+```sh
+export DOLT_ODBC_DRIVER=/tmp/dbs/mysql/mysql-connector-odbc-9.4.0-linux-glibc2.28-x86-64bit/lib/libmyodbc9w.so
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+python tests/compat/test_matrix.py dolt
+# dolt      PASS  (MySQL (via ODBC) 8.0.33)
+```
+
+### The `PLUGIN_DIR` in the connection string
+
+Dolt authenticates with `mysql_native_password` and offers nothing else — asked for
+`caching_sha2_password` it accepts the `ALTER USER` but then closes the handshake with
+`No authentication methods available for authentication`. MySQL Connector/ODBC 9.x, in
+turn, no longer links `mysql_native_password` in; it ships as a loadable plugin, and the
+compiled-in search path is `/usr/local/mysql/lib/plugin`, which an unpacked (non-root)
+tarball does not populate. The result is:
+
+```
+Authentication plugin 'mysql_native_password' cannot be loaded:
+/usr/local/mysql/lib/plugin/mysql_native_password.so: cannot open shared object file
+```
+
+The tarball does ship the plugin, in `lib/plugin/` beside the driver library, so the entry
+points `PLUGIN_DIR` at it. To keep a machine-specific path out of the repo, the connection
+string uses `{drvdir}` — a second placeholder alongside `{drv}`, expanding to the directory
+holding the driver library — so the entry reads
+`…;User=root;PLUGIN_DIR={drvdir}/plugin;`. A driver installed somewhere whose plugins live
+elsewhere can override the whole string with `DOLT_CONN`.
+
+This is a packaging mismatch between the two, not a bug in either, and nothing in `src/`
+works around it: it is a connection option.
+
+### Notes
+
+Dolt needed no driver quirk and no tolerance flag beyond the two the MySQL entry already
+carries (`bool_type="int8"` for `TINYINT(1)`, and `ANSI_QUOTES` in `sql_mode` for the
+double-quoted identifiers `adbc_ingest` emits). `VARBINARY(10)`, `DATE`, `DATETIME(6)`,
+`DECIMAL(10,3)`, the emoji round-trip, NULL parameters, affected-row counts and the
+5000-row batched read all pass unchanged.
+
+One thing worth recording because it is easy to misread as a driver bug: under **pyodbc**,
+a `datetime` bound as a parameter reaches a Dolt `DATETIME(6)` column truncated to one
+fractional digit (`13:45:10.123456` → `13:45:10.1`), while the same value inserted as a SQL
+literal round-trips exactly. Dolt describes every `DATETIME` column as scale 0 (`SQLColumns`
+returns a NULL `DECIMAL_DIGITS`), and pyodbc's own parameter binding follows that. adbcbridge
+binds timestamps with an explicit scale, so it stores and reads back the full microseconds
+and the matrix assertion passes — the benchmark's pyodbc column is the only place the
+truncation is visible.
+
 ## MonetDB
 
 Server (Dec2025-SP3, 11.55.x) on `127.0.0.1:15000`, database `adbc`, user `monetdb`:

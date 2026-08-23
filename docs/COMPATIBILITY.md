@@ -22,6 +22,7 @@ from the second table to the first.
 | PostgreSQL 16 | psqlodbc | PASS | native delegation to `adbc_driver_postgresql` when installed |
 | MariaDB 11 | MariaDB Connector/ODBC | PASS | |
 | MySQL 8.4 | MySQL Connector/ODBC | PASS | driver executes parameter arrays row by row |
+| Dolt 2.3.1 (MySQL 8.0.33 wire) | MySQL Connector/ODBC | PASS | `mysql_native_password` only, so the connector needs `PLUGIN_DIR` |
 | SQL Server 2022 | msodbcsql 18 | PASS | |
 | Oracle 23ai Free | Instant Client ODBC | PASS | no `SQL_C_SBIGINT` |
 | IBM Db2 12.1 | Db2 clidriver | PASS | 32-bit `SQLLEN` |
@@ -48,7 +49,6 @@ Run root-free on a developer box: free Docker image + freely downloadable Linux 
 | openGauss | psqlodbc | `enmotech/opengauss` | queued |
 | libSQL server | psqlodbc (PG wire) | `ghcr.io/tursodatabase/libsql-server` | queued |
 | Google Cloud Spanner (emulator) | psqlodbc via PGAdapter | `gcr.io/cloud-spanner-emulator/emulator` | queued |
-| Dolt | MySQL Connector/ODBC | `dolthub/dolt-sql-server` | queued |
 | Percona Server | MySQL Connector/ODBC | `percona` | queued |
 | Databend | MySQL Connector/ODBC | `datafuselabs/databend` | queued |
 | MatrixOne | MySQL Connector/ODBC | `matrixorigin/matrixone` | queued |

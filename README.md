@@ -119,6 +119,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | Oracle 23ai Free | Instant Client ODBC 23 | PASS (set `NLS_LANG=.AL32UTF8` for non-ASCII; 64-bit ints sent as numeric text — driver lacks `SQL_C_SBIGINT`) |
 | ClickHouse 26 | clickhouse-odbc 1.5 | PASS (NULL params need `SQLDescribeParam`; no affected-row counts; `Nullable()` DDL wrapper on ingest; no usable parameter arrays) |
 | MySQL 8.4 | MySQL Connector/ODBC 9.4 (and MariaDB Connector/ODBC 3.1) | PASS |
+| Dolt 2.3.1 (MySQL 8.0.33 wire protocol) | MySQL Connector/ODBC 9.4 | PASS (no driver quirks; Dolt offers only `mysql_native_password`, which Connector/ODBC 9.x loads as a plugin — the entry points `PLUGIN_DIR` at the tarball's own `lib/plugin`) |
 | CockroachDB 26.3 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; declare a PRIMARY KEY or the synthesised hidden `rowid` shows up in `GetObjects`) |
 | YugabyteDB 2026.1 (YSQL) | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; YSQL is PostgreSQL 15, and its internal row id is a system column so `GetObjects` is unaffected) |
 | TiDB 7.5 | MySQL Connector/ODBC 9.4 (MySQL wire protocol) | PASS (no quirks; run from the tarball it needs `PLUGIN_DIR=` for the `mysql_native_password` client plugin TiDB's root account uses) |
