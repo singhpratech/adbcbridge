@@ -47,6 +47,19 @@ services:
     profiles: ["extra"]
     environment: { JAVA_OPTS: "-Xms256m -Xmx768m" }
     ports: ["127.0.0.1:18812:8812", "127.0.0.1:19000:9000"]
+  # Citus: the citus extension on top of stock PostgreSQL (this image is PostgreSQL 18
+  # + citus 14), sharding tables across a cluster.  In the "extra" profile, so a plain
+  # `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d citus
+  # The single container is coordinator and worker at once; the matrix entry's `setup`
+  # registers it in pg_dist_node so create_distributed_table() has somewhere to put
+  # shards.  Port 15436 keeps it clear of the other PostgreSQL-wire entries.
+  citus:
+    profiles: ["extra"]
+    image: citusdata/citus:latest
+    environment: { POSTGRES_USER: adbc, POSTGRES_PASSWORD: adbc, POSTGRES_DB: adbc }
+    mem_limit: 2g
+    ports: ["127.0.0.1:15436:5432"]
   cockroachdb:
     image: cockroachdb/cockroach:latest
     command: start-single-node --insecure --cache=128MiB --max-sql-memory=128MiB

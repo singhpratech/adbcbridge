@@ -837,6 +837,130 @@ docker compose -f tests/compat/docker-compose.yml down timescaledb
 docker stop adbcbridge-timescale && docker rm adbcbridge-timescale
 ```
 
+## Citus 14 (PostgreSQL 18 + citus)
+
+Citus is the `citus` extension on top of stock PostgreSQL — it shards a table across a
+cluster and plans queries over the shards — so it speaks the PostgreSQL wire protocol and
+the same `psqlodbc` build used for the `postgres` entry drives it. There is no Citus ODBC
+driver.
+
+### Get the ODBC driver without root
+
+```sh
+mkdir -p /tmp/adbc-drivers && cd /tmp/adbc-drivers
+apt-get download odbc-postgresql
+dpkg-deb -x odbc-postgresql_*.deb pgodbc
+export CITUS_ODBC_DRIVER=$PWD/pgodbc/usr/lib/x86_64-linux-gnu/odbc/psqlodbcw.so
+export LD_LIBRARY_PATH=$PWD/pgodbc/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+```
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d citus
+# or standalone:
+docker run -d --name adbcbridge-citus --memory=2g -p 127.0.0.1:15436:5432 \
+  -e POSTGRES_USER=adbc -e POSTGRES_PASSWORD=adbc -e POSTGRES_DB=adbc \
+  citusdata/citus:latest
+```
+
+The port is `15436` so the entry can run alongside the other PostgreSQL-wire entries.
+The image already sets `shared_preload_libraries = citus` and creates the extension in
+`POSTGRES_DB`. It is ready when this succeeds:
+
+```sh
+docker exec adbcbridge-citus psql -U adbc -d adbc \
+  -c "SELECT extversion FROM pg_extension WHERE extname = 'citus'"
+```
+
+### One container, a one-node cluster
+
+A fresh `citusdata/citus` container has an **empty `pg_dist_node`**: it is a PostgreSQL
+server with the extension loaded, not yet a cluster, and `create_distributed_table()`
+fails on it with
+
+```
+ERROR:  replication_factor (1) exceeds number of worker nodes (0)
+HINT:  Add more worker nodes or try again with a lower replication factor.
+```
+
+Two idempotent calls turn the single container into a one-node cluster that is its own
+worker, and the entry's `setup` makes them:
+
+```sql
+SELECT citus_set_coordinator_host('localhost', 5432);                     -- register in pg_dist_node
+SELECT citus_set_node_property('localhost', 5432, 'shouldhaveshards', true);
+```
+
+The second one is the load-bearing half: `citus_set_coordinator_host()` alone adds the
+node with `shouldhaveshards = false`, so the cluster still has nowhere to put a shard.
+They have to be idempotent because `bench/matrix_bench.py` replays `setup` on every
+connection it opens.
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  .venv/bin/python tests/compat/test_matrix.py citus
+# citus     PASS  (PostgreSQL (via ODBC) 18.0.4)
+```
+
+### What the entry tests beyond `postgres`
+
+The standard workload alone would make this a duplicate of the `postgres` entry, so the
+entry's `extra` steps (see the TimescaleDB section for what `extra` is) exercise the
+reason to run Citus at all — a **hash-distributed table**:
+
+```sql
+CREATE TABLE "adbc_dist" ("a" BIGINT NOT NULL, "b" VARCHAR(20), "c" DOUBLE PRECISION,
+                          "d" DATE, "e" BOOLEAN);
+SELECT create_distributed_table('adbc_dist', 'a');
+SELECT partmethod FROM pg_dist_partition WHERE logicalrelid = 'adbc_dist'::regclass;  -- 'h'
+-- ingest 4 rows through adbc_ingest(mode="append"), then:
+SELECT count(DISTINCT get_shard_id_for_distribution_column('adbc_dist', "a")) > 1
+  FROM "adbc_dist";                                   -- true: the rows are spread over shards
+SELECT count(*), sum("a") FROM "adbc_dist";           -- (4, 10), merged from the shards
+```
+
+`create_distributed_table()` splits the table into 32 shards (`citus.shard_count`), each
+a real table of its own; `adbc_ingest` appends into the distributed table with the same
+`INSERT` path it uses for a plain table, and Citus routes every row to the shard its
+distribution column hashes to. The `> 1` check is what proves the rows went through that
+machinery rather than into one local table, and the aggregate proves the read path works
+on a plan that fans out to the shards and merges on the coordinator.
+
+Two things are load-bearing:
+
+* **`"a" BIGINT NOT NULL`.** `"a"` is the distribution column, and Citus will not accept
+  a NULL there.
+* **The main `adbc_t` table stays a plain table.** Its second row is NULL in every column
+  but `i`, so it has no column that could serve as a distribution column, and the standard
+  checks (`GetObjects`, `GetTableSchema`, batched reads) are meant to run against an
+  ordinary table anyway.
+
+Shards are named after the table with the shard id appended (`adbc_dist_102040`, …), so
+they never collide with the `adbc_t`/`adbc_ing` names the standard workload filters on in
+`GetObjects`.
+
+### Notes
+
+The entry needs **no tolerance flags and no driver quirk**: everything the plain
+PostgreSQL entry passes, Citus passes identically. `GetInfo` reports the PostgreSQL server
+version (`18.0.4` for `citusdata/citus:latest`, which runs PostgreSQL 18.4 with citus
+14.1); the extension version is only visible via `pg_extension`, exactly as for
+TimescaleDB.
+
+The entry is re-runnable: its first `extra` step is `DROP TABLE IF EXISTS`, which drops
+the distributed table and all of its shards.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down citus
+# or, if started standalone:
+docker rm -f adbcbridge-citus
+```
+
 ## CrateDB 6
 
 CrateDB is a distributed SQL database on top of Lucene. It speaks the PostgreSQL wire
