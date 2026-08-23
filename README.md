@@ -80,11 +80,54 @@ Options (set on the database):
 | `adbc.odbc.max_bind_bytes` | max bound buffer per value before falling back to `SQLGetData` (default 32768) |
 | `adbc.odbc.decimal_as_string` | `true` to return DECIMAL/NUMERIC as strings |
 
+## Use from Rust
+
+```toml
+# Cargo.toml
+[dependencies]
+adbc_core = "0.24"
+adbc_driver_manager = "0.24"
+arrow-array = "59"
+```
+
+```rust
+use adbc_core::options::{AdbcVersion, OptionDatabase};
+use adbc_core::{Connection, Database, Driver, Statement};
+use adbc_driver_manager::ManagedDriver;
+
+let mut driver = ManagedDriver::load_dynamic_from_filename(
+    "/path/to/libadbc_driver_odbc.so",
+    Some(b"AdbcDriverInit"),
+    AdbcVersion::V110,
+)?;
+
+let uri = "Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so;Database=my.db;";
+let database = driver.new_database_with_opts([(OptionDatabase::Uri, uri.into())])?;
+let mut connection = database.new_connection()?;
+
+let mut statement = connection.new_statement()?;
+statement.set_sql_query("SELECT * FROM my_table")?;
+for batch in statement.execute()? {
+    let batch = batch?;               // arrow_array::RecordBatch
+    println!("{} rows", batch.num_rows());
+}
+```
+
+Parameters are bound as a `RecordBatch`, one column per `?` and one row per
+execution: `statement.prepare()?; statement.bind(params)?;` then `execute()` or
+`execute_update()`. See `tests/rust/` for a runnable example.
+
 ## Test
 
 ```sh
 python -m venv .venv && .venv/bin/pip install adbc-driver-manager pyarrow
 SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_sqlite.py
+```
+
+The same smoke tests from Rust (see `tests/rust/README.md`):
+
+```sh
+cd tests/rust && SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so cargo test
 ```
 
 ## License
