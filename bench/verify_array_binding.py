@@ -134,6 +134,54 @@ with conn_for(db) as conn:
         assert cur.fetchone()[0] == "n7"
 print("ok  executemany + parameterized select")
 
+
+def dml_rowcounts(arr):
+    """Run a fixed UPDATE/DELETE script and collect every reported rowcount."""
+    db = os.path.join(tempfile.mkdtemp(), "dml.db")
+    counts = []
+    with conn_for(db) as conn:
+        with conn.cursor() as cur:
+            cur._stmt.set_options(**{OPT: "true" if arr else "false"})
+            cur.execute("CREATE TABLE t (a INTEGER, b TEXT)")
+            cur.executemany("INSERT INTO t VALUES (?, ?)",
+                            [(i, "x") for i in range(1000)])
+            counts.append(("insert", cur.rowcount))
+            # No parameter set matches anything: rows affected is 0, not 500.
+            cur.executemany("UPDATE t SET b = 'y' WHERE a = ?",
+                            [(10_000 + i,) for i in range(500)])
+            counts.append(("update-no-match", cur.rowcount))
+            cur.executemany("UPDATE t SET b = 'y' WHERE a = ?",
+                            [(i,) for i in range(200)])
+            counts.append(("update-match", cur.rowcount))
+            # Half the sets match, half do not.
+            cur.executemany("UPDATE t SET b = 'z' WHERE a = ?",
+                            [(i if i % 2 else 20_000 + i,) for i in range(400)])
+            counts.append(("update-half", cur.rowcount))
+            # One parameter value matches several rows each.
+            cur.executemany("UPDATE t SET b = 'w' WHERE a % 100 = ?",
+                            [(i,) for i in range(4)])
+            counts.append(("update-fanout", cur.rowcount))
+            cur.executemany("DELETE FROM t WHERE a = ?",
+                            [(30_000 + i,) for i in range(500)])
+            counts.append(("delete-no-match", cur.rowcount))
+            cur.executemany("DELETE FROM t WHERE a = ?", [(i,) for i in range(300)])
+            counts.append(("delete-match", cur.rowcount))
+            cur.execute("SELECT COUNT(*) FROM t")
+            counts.append(("remaining", cur.fetchone()[0]))
+    return counts
+
+
+ca, cr = dml_rowcounts(True), dml_rowcounts(False)
+assert ca == cr, (ca, cr)
+by_name = dict(ca)
+assert by_name["insert"] == 1000, ca
+assert by_name["update-no-match"] == 0, ca
+assert by_name["update-match"] == 200, ca
+assert by_name["delete-no-match"] == 0, ca
+assert by_name["delete-match"] == 300, ca
+assert by_name["remaining"] == 700, ca
+print("ok  executemany DML rowcount parity:", ca)
+
 # Explicitly disabling array binding must still work end to end.
 tmp = tempfile.mkdtemp()
 db = os.path.join(tmp, "off.db")

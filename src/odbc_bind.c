@@ -532,8 +532,20 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
       break;
     }
 
+    // SQLRowCount after a parameter-array execute reports rows affected across
+    // the whole chunk, which is exactly the number DB-API's rowcount wants: an
+    // UPDATE/DELETE whose parameter sets match nothing must report 0, not the
+    // number of sets submitted.  Only when the driver declines to answer (an
+    // error, or the "unavailable" -1) do we fall back to counting parameter
+    // sets, which is right for INSERT and the best guess otherwise.
     SQLLEN row_count = 0;
-    if (!SQL_SUCCEEDED(SQLRowCount(hstmt, &row_count))) row_count = 0;
+    bool have_row_count = true;
+    if (r == SQL_NO_DATA) {
+      row_count = 0;  // the statement affected no rows at all
+    } else if (!SQL_SUCCEEDED(SQLRowCount(hstmt, &row_count)) || row_count < 0) {
+      have_row_count = false;
+      row_count = 0;
+    }
     SQLSMALLINT nres = 0;
     SQLNumResultCols(hstmt, &nres);
     if (nres > 0) SQLFreeStmt(hstmt, SQL_CLOSE);
@@ -555,19 +567,21 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
         // The driver ignores SQL_ATTR_PARAMS_PROCESSED_PTR, so we could never
         // tell how many parameter sets a multi-row execute really applied.
         *use_array = false;
-        *total += row_count > 0 ? (int64_t)row_count : 1;
+        // Count the probe set the way the row-at-a-time path counts a row, so
+        // the two modes agree on the total.
+        *total += (int64_t)row_count;
         *rows_done = row + 1;  // the probe row itself did go in
         goto cleanup;
       }
     }
     if (done > n) done = n;
 
-    if (row_count > (SQLLEN)n) {
-      *total += (int64_t)row_count;  // the driver aggregates across parameter sets
+    if (have_row_count) {
+      *total += (int64_t)row_count;  // authoritative: rows affected by the chunk
     } else if (status_filled) {
       *total += applied;
     } else {
-      *total += done > 0 ? done : (row_count > 0 ? (int64_t)row_count : 0);
+      *total += done;
     }
     row += done;
     *rows_done = row;
