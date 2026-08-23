@@ -16,6 +16,49 @@ Python / R / Go / Rust / Java / C#
  Snowflake · Redshift · SQLite · anything with an ODBC driver
 ```
 
+## Quick start
+
+```sh
+./install.sh                                  # build + install into ~/.local, no root
+pip install adbc-driver-manager pyarrow
+```
+
+```python
+import adbc_driver_manager.dbapi as dbapi
+
+conn = dbapi.connect(driver="odbc", db_kwargs={"uri": "Driver=SQLite3;Database=my.db;"})
+with conn.cursor() as cur:
+    cur.execute("SELECT 42 AS answer")
+    print(cur.fetch_arrow_table())
+```
+
+`install.sh` puts the library in `~/.local/lib` and a driver manifest in
+`~/.config/adbc/drivers/odbc.toml`, which is a directory the ADBC driver
+manager already searches — so `driver="odbc"` resolves with nothing else set:
+no `ADBC_DRIVER_PATH`, no `LD_LIBRARY_PATH`. Re-running it is safe.
+
+`uri` is an ODBC connection string; `Driver=` takes either a registered ODBC
+driver name or the path to its `.so`.
+
+### Naming the driver from each language
+
+Once the manifest is installed, every ADBC binding loads it as `"odbc"`:
+
+| Language | How to name the driver |
+|---|---|
+| Python | `dbapi.connect(driver="odbc", db_kwargs={"uri": ...})` |
+| R | `adbc_driver("odbc")`, then `adbc_database_init(drv, uri = ...)` (`adbcdrivermanager`) |
+| Go | `drivermgr.Driver{}` → `NewDatabase(map[string]string{"driver": "odbc", "uri": ...})` |
+| Rust | `ManagedDriver::load_from_name("odbc", None, AdbcVersion::V110, LOAD_FLAG_DEFAULT, None)` |
+| Java | `JniDriver.PARAM_DRIVER.set(params, "odbc")` (`adbc-driver-jni`) |
+| C# | `AdbcDriverManager.FindLoadDriver("odbc")` (`Apache.Arrow.Adbc.DriverManager`) |
+
+Every one of these resolves a bare name through the same manifest search, so
+they all pick up the file `install.sh` wrote. In R you can also pass the name
+straight to `adbc_database_init("odbc", uri = ...)`; in Go the default load
+flags already enable the manifest search; in Rust and C# the load flags /
+`AdbcLoadFlags.Default` argument controls which directories are searched.
+
 ## Status
 
 Early (0.1.0). Working today:
@@ -81,6 +124,12 @@ cmake -S . -B build && cmake --build build
 
 ## Install
 
+For a no-root user install, use [`install.sh`](install.sh) (see
+[Quick start](#quick-start)); it wraps the CMake commands below with
+`PREFIX=~/.local` and the manifest going to the ADBC user config directory.
+`PREFIX`, `MANIFEST_DIR`, `BUILD_DIR`, `BUILD_TYPE` and `JOBS` override the
+defaults. Otherwise, install by hand:
+
 ```sh
 cmake --install build --prefix /usr/local
 ```
@@ -123,7 +172,7 @@ The driver manager looks for `odbc.toml` in, among others:
 |---|---|
 | `$ADBC_DRIVER_PATH` | colon-separated list of directories (`;`-separated on Windows) |
 | `<sys.prefix>/etc/adbc/drivers` | added by the Python driver manager inside a virtualenv: `cmake --install build --prefix "$VIRTUAL_ENV"` |
-| `~/.config/adbc/drivers` | per-user install: `-DADBCBRIDGE_MANIFEST_DIR="$HOME/.config/adbc/drivers"` (`$XDG_CONFIG_HOME/adbc/drivers` if set) |
+| `~/.config/adbc/drivers` | per-user install: what `./install.sh` uses (`$XDG_CONFIG_HOME/adbc/drivers` if set); by hand, `-DADBCBRIDGE_MANIFEST_DIR="$HOME/.config/adbc/drivers"` |
 | `/etc/adbc/drivers` | system-wide install: configure with `-DADBCBRIDGE_MANIFEST_DIR=/etc/adbc/drivers`, then `cmake --install build --prefix /usr` |
 
 On macOS the user/system directories are `~/Library/Application Support/ADBC/Drivers`
@@ -220,11 +269,19 @@ python -m venv .venv && .venv/bin/pip install adbc-driver-manager pyarrow
 SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_sqlite.py
 ```
 
+That the install itself is plug-and-play — install into a temp prefix, then
+load the driver by the name `odbc` — is covered by:
+
+```sh
+SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_plug_and_play.py
+```
+
 The same smoke tests from Rust (see `tests/rust/README.md`):
 
 ```sh
 cd tests/rust && SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so cargo test
 ```
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the build/test loop, the

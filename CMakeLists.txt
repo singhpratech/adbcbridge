@@ -130,8 +130,37 @@ if(ADBCBRIDGE_INSTALL_MANIFEST)
     string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" ADBCBRIDGE_MANIFEST_ARCH)
   endif()
 
+  # The driver manager appends an environment suffix to the tuple when the
+  # toolchain is MinGW or a non-glibc libc: it looks up "linux_amd64_musl", not
+  # "linux_amd64".  A manifest keyed without the suffix is simply never matched
+  # there, so `driver="odbc"` falls through to dlopen()ing unixODBC's own
+  # libodbc.so.  Detect musl exactly the way the driver manager does (glibc's
+  # features.h defines __USE_GNU under _GNU_SOURCE, musl's does not) so the two
+  # always agree -- including on the shared corner case that any other libc
+  # without __USE_GNU is also labelled "musl".
+  if(MINGW)
+    set(ADBCBRIDGE_MANIFEST_ENV "_mingw")
+  elseif(WIN32 OR APPLE OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(ADBCBRIDGE_MANIFEST_ENV "")
+  else()
+    include(CheckCSourceCompiles)
+    check_c_source_compiles("
+#define _GNU_SOURCE
+#include <features.h>
+#ifndef __USE_GNU
+#error no __USE_GNU: not glibc
+#endif
+int main(void) { return 0; }
+" ADBCBRIDGE_LIBC_IS_GLIBC)
+    if(ADBCBRIDGE_LIBC_IS_GLIBC)
+      set(ADBCBRIDGE_MANIFEST_ENV "")
+    else()
+      set(ADBCBRIDGE_MANIFEST_ENV "_musl")
+    endif()
+  endif()
+
   set(ADBCBRIDGE_MANIFEST_PLATFORM
-      "${ADBCBRIDGE_MANIFEST_OS}_${ADBCBRIDGE_MANIFEST_ARCH}")
+      "${ADBCBRIDGE_MANIFEST_OS}_${ADBCBRIDGE_MANIFEST_ARCH}${ADBCBRIDGE_MANIFEST_ENV}")
 
   # Where the shared library will live once installed, relative to the install
   # prefix.  On Windows the DLL goes to the runtime (bin) directory, elsewhere
