@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "odbc_delegate.h"
 #include "odbc_internal.h"
 
 // ---------------------------------------------------------------------------
@@ -32,7 +33,19 @@ struct OdbcDatabase {
   char* username;
   char* password;
   struct OdbcReaderOptions reader_opts;
+  struct OdbcDelegateOptions delegate;
 };
+
+static void OdbcDatabaseFree(struct OdbcDatabase* db) {
+  if (!db) return;
+  if (db->henv) SQLFreeHandle(SQL_HANDLE_ENV, db->henv);
+  free(db->connection_string);
+  free(db->dsn);
+  free(db->username);
+  free(db->password);
+  OdbcDelegateOptionsRelease(&db->delegate);
+  free(db);
+}
 
 static AdbcStatusCode SetString(char** dst, const char* value) {
   free(*dst);
@@ -48,6 +61,7 @@ static AdbcStatusCode OdbcDatabaseNew(struct AdbcDatabase* database, struct Adbc
   }
   db->reader_opts.batch_size = ADBC_ODBC_DEFAULT_BATCH_SIZE;
   db->reader_opts.max_bind_bytes = ADBC_ODBC_DEFAULT_MAX_BIND_BYTES;
+  OdbcDelegateOptionsInit(&db->delegate);
   database->private_data = db;
   return ADBC_STATUS_OK;
 }
@@ -56,6 +70,10 @@ static AdbcStatusCode OdbcDatabaseSetOption(struct AdbcDatabase* database, const
                                             const char* value, struct AdbcError* error) {
   struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
   if (!db) return ADBC_STATUS_INVALID_STATE;
+  AdbcStatusCode delegate_status = ADBC_STATUS_OK;
+  if (OdbcDelegateSetOption(&db->delegate, key, value, &delegate_status, error)) {
+    return delegate_status;
+  }
   if (strcmp(key, ADBC_OPTION_URI) == 0 || strcmp(key, ADBC_ODBC_OPTION_CONNECTION_STRING) == 0) {
     return SetString(&db->connection_string, value);
   } else if (strcmp(key, ADBC_ODBC_OPTION_DSN) == 0) {
@@ -98,6 +116,22 @@ static AdbcStatusCode OdbcDatabaseInit(struct AdbcDatabase* database, struct Adb
                          "\"");
     return ADBC_STATUS_INVALID_ARGUMENT;
   }
+
+  // If a native ADBC driver fits this target, hand the whole driver over to it
+  // and never open ODBC at all.  Any failure in "auto" mode falls through here
+  // with a note in adbc.odbc.delegate.last_error.
+  struct OdbcDelegateTarget target = {db->connection_string, db->dsn, db->username,
+                                      db->password};
+  bool delegated = false;
+  AdbcStatusCode delegate_status = OdbcDelegateTryInit(
+      database, OdbcDatabaseInit, &target, &db->delegate, &delegated, error);
+  if (delegated) {
+    // The native driver owns database->private_data (and the driver table) now.
+    OdbcDatabaseFree(db);
+    return delegate_status;
+  }
+  if (delegate_status != ADBC_STATUS_OK) return delegate_status;
+
   SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &db->henv);
   if (!SQL_SUCCEEDED(ret)) {
     InternalAdbcSetError(error, "SQLAllocHandle(SQL_HANDLE_ENV) failed");
@@ -112,12 +146,8 @@ static AdbcStatusCode OdbcDatabaseRelease(struct AdbcDatabase* database,
                                           struct AdbcError* error) {
   struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
   if (!db) return ADBC_STATUS_INVALID_STATE;
-  if (db->henv) SQLFreeHandle(SQL_HANDLE_ENV, db->henv);
-  free(db->connection_string);
-  free(db->dsn);
-  free(db->username);
-  free(db->password);
-  free(db);
+  (void)error;
+  OdbcDatabaseFree(db);
   database->private_data = NULL;
   return ADBC_STATUS_OK;
 }
@@ -126,8 +156,11 @@ static AdbcStatusCode OdbcDatabaseGetOption(struct AdbcDatabase* database, const
                                             char* value, size_t* length,
                                             struct AdbcError* error) {
   struct OdbcDatabase* db = (struct OdbcDatabase*)database->private_data;
+  if (!db) return ADBC_STATUS_INVALID_STATE;
   const char* v = NULL;
-  if (strcmp(key, ADBC_OPTION_URI) == 0) v = db->connection_string;
+  if (OdbcDelegateGetOption(&db->delegate, key, &v)) {
+    // fall through to the copy-out below
+  } else if (strcmp(key, ADBC_OPTION_URI) == 0) v = db->connection_string;
   else if (strcmp(key, ADBC_ODBC_OPTION_DSN) == 0) v = db->dsn;
   else if (strcmp(key, ADBC_OPTION_USERNAME) == 0) v = db->username;
   else {
@@ -477,7 +510,10 @@ static AdbcStatusCode OdbcConnectionGetOption(struct AdbcConnection* connection,
   const char* v = NULL;
   SQLCHAR buf[1024];
   SQLINTEGER outlen = 0;
-  if (strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
+  if (strcmp(key, ADBC_ODBC_OPTION_DELEGATED_TO) == 0) {
+    // Delegation replaces this driver wholesale, so if we are running, we are ODBC.
+    v = ADBC_ODBC_DELEGATED_TO_ODBC;
+  } else if (strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
     v = conn->autocommit ? ADBC_OPTION_VALUE_ENABLED : ADBC_OPTION_VALUE_DISABLED;
   } else if (strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0 && conn->connected) {
     ODBC_CHECK(SQLGetConnectAttr(conn->hdbc, SQL_ATTR_CURRENT_CATALOG, buf, sizeof(buf), &outlen),
@@ -779,6 +815,9 @@ AdbcStatusCode AdbcDriverOdbcInit(int version, void* raw_driver, struct AdbcErro
   struct AdbcDriver* driver = (struct AdbcDriver*)raw_driver;
   memset(driver, 0, version == ADBC_VERSION_1_0_0 ? ADBC_DRIVER_1_0_0_SIZE : ADBC_DRIVER_1_1_0_SIZE);
 
+  // Remembered so that native delegation knows how many bytes of the caller's
+  // function table it may overwrite.  Nothing else uses private_data.
+  driver->private_data = (void*)(intptr_t)version;
   driver->release = OdbcDriverRelease;
   driver->DatabaseInit = OdbcDatabaseInit;
   driver->DatabaseNew = OdbcDatabaseNew;

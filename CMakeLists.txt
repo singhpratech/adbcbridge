@@ -61,6 +61,7 @@ endif()
 
 add_library(adbc_driver_odbc SHARED
   src/odbc_driver.c
+  src/odbc_delegate.c
   src/odbc_reader.c
   src/odbc_objects.c
   src/odbc_bind.c
@@ -72,7 +73,10 @@ target_include_directories(adbc_driver_odbc
 target_compile_definitions(adbc_driver_odbc PRIVATE
   ADBC_EXPORTING
   NANOARROW_DLL=)
-target_link_libraries(adbc_driver_odbc PRIVATE ODBC::ODBC)
+# ${CMAKE_DL_LIBS}: native delegation resolves the ADBC driver manager
+# (AdbcLoadDriver) and unixODBC's odbc.ini reader with dlopen/dlsym rather
+# than linking them, which would make the dependency circular.
+target_link_libraries(adbc_driver_odbc PRIVATE ODBC::ODBC ${CMAKE_DL_LIBS})
 set_target_properties(adbc_driver_odbc PROPERTIES
   C_VISIBILITY_PRESET hidden
   PREFIX "lib"

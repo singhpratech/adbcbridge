@@ -72,6 +72,9 @@ Early (0.1.0). Working today:
   (SQLSTATE + native code)
 - Parameter binding (`Bind`/`BindStream`) and bulk ingest (`adbc.ingest.*`)
 - ADBC 1.0.0 and 1.1.0 ABI, discoverable by name through an ADBC driver manifest
+- [Native delegation](#native-delegation): where a native ADBC driver exists
+  (PostgreSQL, SQLite, DuckDB, …) the whole driver is handed over to it, so you
+  get native speed from the same install
 
 Planned: conformance suite, prebuilt binaries.
 
@@ -218,6 +221,72 @@ Options (set on the database):
 | `adbc.odbc.batch_size` | rows per Arrow batch (default 1024) |
 | `adbc.odbc.max_bind_bytes` | max bound buffer per value before falling back to `SQLGetData` (default 32768) |
 | `adbc.odbc.decimal_as_string` | `true` to return DECIMAL/NUMERIC as strings |
+| `adbc.odbc.delegate` | `auto` (default) / `never` / `always` — see [Native delegation](#native-delegation) |
+| `adbc.odbc.delegate.driver` | force a specific native driver (name, manifest, or path) |
+| `adbc.odbc.delegate.search_path` | extra directories to search for native drivers (`:`-separated) |
+| `adbc.odbc.delegate.last_error` | read-only: why delegation did not happen |
+| `adbc.odbc.delegated_to` | read-only: `odbc` when this driver is serving the connection |
+
+## Native delegation
+
+Native speed where a native ADBC driver exists, ODBC everywhere else, one
+install.
+
+Some databases already have a first-class ADBC driver: PostgreSQL, SQLite,
+DuckDB, Snowflake, BigQuery, Flight SQL. Those drivers talk the wire protocol
+and build Arrow directly, so they are faster than anything that has to go
+through ODBC's row-oriented API — 1,000,000 PostgreSQL rows take 0.42 s through
+`adbc_driver_postgresql` and 1.00 s through adbcbridge over psqlodbc.
+
+So adbcbridge gets out of the way. When `AdbcDatabaseInit` recognizes a target
+that a native driver handles, it loads that driver and hands the entire ADBC
+driver over to it: connections, statements, result sets and errors all come
+from the native driver, and adbcbridge is not in the data path at all.
+Delegated fetches measure the same as calling the native driver directly.
+
+| target | delegated to |
+|---|---|
+| `uri=postgresql://…` / `postgres://…` | `postgresql` |
+| `uri=sqlite:…`, `duckdb:…` | `sqlite`, `duckdb` |
+| `uri=snowflake://…`, `bigquery://…` | `snowflake`, `bigquery` |
+| `uri=grpc://…`, `grpc+tls://…` | `flightsql` |
+| `uri=Driver=…psqlodbcw.so;Server=…` | `postgresql` (URI rebuilt from `Server`/`Port`/`Database`/`Uid`/`Pwd`) |
+| `uri=Driver=…sqlite3odbc.so;Database=…` | `sqlite` (the `Database=` path) |
+| `dsn=…` | whatever the DSN's `Driver=` in `odbc.ini` maps to |
+| anything else (Db2, Oracle, SQL Server, Teradata, …) | nobody — ODBC, as before |
+
+Native drivers are resolved through the ADBC driver manager's own loader, so
+manifests (`<name>.toml`), `ADBC_DRIVER_PATH` and installed packages all work;
+Python wheel layouts (`site-packages/adbc_driver_postgresql/`) are searched too,
+and `adbc.odbc.delegate.search_path` adds directories of your own. adbcbridge
+never links against the driver manager — it resolves `AdbcLoadDriver` from
+whichever manager already loaded it.
+
+Delegation is a best-effort optimization. If no native driver is installed, if
+it cannot be loaded, or if it rejects the target, `auto` falls back to ODBC
+silently and records why in `adbc.odbc.delegate.last_error`. It also needs the
+ADBC driver manager: a program that `dlopen`s adbcbridge itself always gets the
+ODBC path.
+
+```python
+# Off, for this database:
+dbapi.connect(driver="odbc", db_kwargs={"uri": uri, "adbc.odbc.delegate": "never"})
+# Off, for a whole deployment:
+#   export ADBC_ODBC_DELEGATE=never   (ADBC_ODBC_DELEGATE_PATH adds search directories)
+# Required, so that a missing native driver is an error instead of a slow path:
+dbapi.connect(driver="odbc", db_kwargs={"uri": uri, "adbc.odbc.delegate": "always"})
+```
+
+Who served a connection is visible through `adbc_get_info()["driver_name"]`
+(`ADBC PostgreSQL Driver` vs `ADBC ODBC Driver (psqlodbcw.so)`). The option
+`adbc.odbc.delegated_to` answers `odbc` on the ODBC path; once a native driver
+has taken over, the option is the native driver's business and it will not know
+the key.
+
+Database options are translated for the native driver: `uri` (rebuilt from the
+ODBC keywords when needed), `username`/`password`, and any `adbc.*` option that
+is not `adbc.odbc.*` is passed through untouched. ODBC-specific options
+(`adbc.odbc.batch_size`, …) are meaningless to a native driver and are dropped.
 
 ## Python package
 
@@ -420,10 +489,22 @@ load the driver by the name `odbc` — is covered by:
 
 ```sh
 SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_plug_and_play.py
+```
+
 The Python package (`python/`) has its own pytest suite, which also runs
 against SQLite:
 
+```sh
 pip install -e python
+SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python -m pytest python/tests
+```
+
+Native delegation (each case skips when its native driver, ODBC driver or server
+is missing):
+
+```sh
+.venv/bin/pip install adbc-driver-postgresql adbc-driver-sqlite
+SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_delegate.py
 ```
 
 The same smoke tests from Rust (see `tests/rust/README.md`):
