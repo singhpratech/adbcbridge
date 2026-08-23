@@ -14,6 +14,14 @@
 
 #include "test_common.h"
 
+// odbc_objects.c quotes identifiers with the connection's quote character, a helper
+// that lives in odbc_driver.c; the fake driver has nothing to ask, so it is `"`.
+void OdbcQuoteChar(SQLHDBC hdbc, char* out) {
+  (void)hdbc;
+  out[0] = '"';
+  out[1] = '\0';
+}
+
 // ---------------------------------------------------------------------------
 // Fake ODBC driver
 
