@@ -414,6 +414,28 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
   return OdbcConnectionHeld(conn, key, error);
 }
 
+// Lowercased SELECT version() of the server behind the connection, or "" if it cannot
+// be had.  One driver can front many different servers -- psqlodbc drives every
+// PostgreSQL-wire backend and reports the same SQL_DRIVER_NAME and SQL_DBMS_NAME for
+// all of them -- and version() is the only thing that tells those apart.
+static void OdbcServerVersionString(SQLHDBC hdbc, char* out, size_t out_size) {
+  out[0] = '\0';
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return;
+  if (SQL_SUCCEEDED(SQLExecDirect(hstmt, (SQLCHAR*)"SELECT version()", SQL_NTS)) &&
+      SQL_SUCCEEDED(SQLFetch(hstmt))) {
+    SQLLEN ind = 0;
+    if (!SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_CHAR, out, (SQLLEN)out_size, &ind)) ||
+        ind == SQL_NULL_DATA) {
+      out[0] = '\0';
+    }
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+  for (char* c = out; *c; c++) {
+    if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
+  }
+}
+
 // Per-driver workarounds, keyed on SQL_DRIVER_NAME (or SQL_DBMS_NAME for a driver that
 // does not implement it), plus the capability probes the reader needs.
 static void OdbcDetectQuirks(struct OdbcConnection* conn) {
@@ -507,6 +529,32 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // set, reports one affected row and writes neither SQL_ATTR_PARAMS_PROCESSED_PTR nor
     // the parameter-status array -- seven bound rows insert one, silently.
     conn->reader_opts.no_param_arrays = true;
+  }
+  if (strstr((const char*)name, "psqlodbc")) {
+    // psqlodbc is the driver for every PostgreSQL-wire server (PostgreSQL itself,
+    // CockroachDB, YugabyteDB, TimescaleDB, QuestDB, ...), so its name says nothing
+    // about the server behind it and no quirk may be keyed on the name alone: it would
+    // fire on real PostgreSQL too.  Ask the server who it is instead -- one small query,
+    // and only for this one driver.
+    char version[256];
+    OdbcServerVersionString(conn->hdbc, version, sizeof(version));
+    if (strstr(version, "questdb")) {
+      // QuestDB speaks the PostgreSQL wire protocol over its own time-series engine and
+      // its own type system.  psqlodbc answers SQLGetTypeInfo with PostgreSQL's internal
+      // type names ("int8", "float8", "bool"), which QuestDB rejects with "unsupported
+      // column type"; it does accept the standard spellings (BIGINT, DOUBLE PRECISION,
+      // BOOLEAN).  And it parses a boolean parameter only from the words "true"/"false",
+      // while psqlodbc sends SQL_BIT as "1"/"0" -- stored as false, silently.
+      conn->reader_opts.ansi_ddl_type_names = true;
+      conn->reader_opts.bool_param_as_varchar = true;
+      // psqlodbc executes a parameter array by inlining the values into one
+      // "BEGIN;INSERT ...;INSERT ..." string, where every non-numeric value becomes a
+      // string literal ('\x0102' for bytes, '2024-02-29' for a date).  PostgreSQL types
+      // those literals from the target column; QuestDB does not convert them at all
+      // ("inconvertible types: STRING -> BINARY").  One execute per row instead, which
+      // psqlodbc sends as a typed PQexecPrepared.
+      conn->reader_opts.no_param_arrays = true;
+    }
   }
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.

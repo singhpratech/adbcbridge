@@ -114,6 +114,11 @@ struct OdbcReaderOptions {
   bool getdata_repair;
   // Driver quirk: bind boolean parameters as integers (DuckDB rejects SQL_BIT params).
   bool bool_param_as_int;
+  // Driver quirk: bind boolean parameters as the words "true"/"false" in a VARCHAR.
+  // QuestDB's PostgreSQL wire protocol parses a boolean parameter only from those two
+  // words, while psqlodbc sends an SQL_BIT parameter as "1"/"0" -- which QuestDB stores
+  // as false without a diagnostic, so every true silently becomes false.
+  bool bool_param_as_varchar;
   // Driver quirk: no SQL_C_SBIGINT parameter support (Oracle); send 64-bit ints as numeric text.
   bool bigint_param_as_string;
   // Driver quirk: bind decimal parameters as VARCHAR text instead of SQL_DECIMAL (DuckDB).
@@ -123,6 +128,14 @@ struct OdbcReaderOptions {
   bool null_param_as_varchar;
   // Driver quirk: DDL type wrapper for nullable columns, e.g. "Nullable(%s)" (ClickHouse).
   const char* nullable_type_format;
+  // Driver quirk: the names SQLGetTypeInfo reports are not names the server accepts in
+  // DDL, so bulk ingest spells its CREATE TABLE with portable SQL type names (BIGINT,
+  // DOUBLE PRECISION, BOOLEAN, ...) instead.  psqlodbc drives every PostgreSQL-wire
+  // server but answers SQLGetTypeInfo with PostgreSQL's own internal names ("int8",
+  // "float8", "bool", "numeric"); QuestDB, which has its own type system behind that
+  // wire protocol, rejects those with "unsupported column type" while accepting the
+  // standard spellings.
+  bool ansi_ddl_type_names;
   // Driver quirk: the ODBC driver was compiled with a 32-bit SQLLEN/SQLULEN while the
   // driver manager and this driver use 64-bit ones.  IBM's freely downloadable Db2
   // "clidriver" ships exactly such a libdb2.so on 64-bit Linux (the 64-bit-SQLLEN build

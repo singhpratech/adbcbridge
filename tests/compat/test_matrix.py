@@ -9,6 +9,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     DB2_ODBC_DRIVER, COCKROACH_ODBC_DRIVER, MONETDB_ODBC_DRIVER, FIREBIRD_ODBC_DRIVER,
     YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, CRATEDB_ODBC_DRIVER,
     ACCESS_ODBC_DRIVER
+    YUGABYTE_ODBC_DRIVER, TIMESCALE_ODBC_DRIVER, QUESTDB_ODBC_DRIVER, ACCESS_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -139,6 +140,28 @@ DBS = {
         # NUMERIC column over the wire, so psqlodbc falls back to its own default (28, 6)
         # instead of the declared (10, 3).
         binary_text="\\x0102", decimal_type="decimal128(28, 6)", ts_us=(123000,)),
+    "questdb": dict(
+        # QuestDB is a time-series database that speaks the PostgreSQL wire protocol, so
+        # the psqlodbc build used for the `postgres` entry drives it -- but only the wire
+        # protocol is PostgreSQL's.  The type system, the DDL parser and the catalog are
+        # QuestDB's own: STRING/BINARY are its names, VARCHAR takes no length, NUMERIC
+        # does not exist, and psqlodbc's own type names ("int8", "bool") are rejected on
+        # CREATE TABLE -- the driver detects that and spells ingest DDL in standard SQL
+        # types (adbc.odbc quirk `ansi_ddl_type_names`).
+        # Two settings in the connection string are psqlodbc's, not QuestDB's:
+        # BoolsAsChar=0, without which the driver reports every BOOLEAN as a VARCHAR(5)
+        # holding "1"/"0" instead of SQL_BIT; and Protocol=7.4-0, which turns off the
+        # per-statement SAVEPOINT psqlodbc wraps a repeated execute in -- QuestDB has no
+        # SAVEPOINT statement and fails the whole insert with "internal SAVEPOINT failed".
+        env="QUESTDB_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=18812;Database=qdb;Uid=admin;Pwd=quest;"
+             "BoolsAsChar=0;Protocol=7.4-0;",
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s STRING, b BINARY, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        # QuestDB does not report the declared precision of a DECIMAL over the wire, so
+        # psqlodbc describes it at its own maximum (28) with the column's scale.
+        decimal_type="decimal128(28, 3)",
+        # QuestDB's BOOLEAN has no NULL state (like Access YESNO): row 2's bo is false.
+        not_null=("bo",)),
     "firebird": dict(
         env="FIREBIRD_ODBC_DRIVER",
         conn="Driver={drv};DBNAME=inet://127.0.0.1:13050//var/lib/firebird/data/adbc.fdb;UID=adbc;PWD=adbc;CHARSET=UTF8;",

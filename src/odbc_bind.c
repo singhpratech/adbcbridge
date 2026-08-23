@@ -240,7 +240,14 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
       p->data = p->fixed.text; p->buffer_length = 0;
       break;
     case NANOARROW_TYPE_BOOL:
-      if (opts->bool_param_as_int) {
+      if (opts->bool_param_as_varchar) {
+        // QuestDB reads a boolean parameter only from the words "true"/"false".
+        const char* word = ArrowArrayViewGetIntUnsafe(av, row) ? "true" : "false";
+        const int n = snprintf(p->fixed.text, sizeof(p->fixed.text), "%s", word);
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = 5;
+        p->data = p->fixed.text; p->buffer_length = n + 1;
+        if (p->indicator != SQL_NULL_DATA) p->indicator = n;
+      } else if (opts->bool_param_as_int) {
         p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_INTEGER;
         p->fixed.i64 = ArrowArrayViewGetIntUnsafe(av, row) ? 1 : 0;
         p->data = &p->fixed.i64; p->buffer_length = sizeof(SQLBIGINT);
@@ -461,6 +468,8 @@ static AdbcStatusCode SlotFromArrow(struct ParamSlot* p, const struct ArrowSchem
 #define ARRAY_BIND_TIME_CHARS 24
 // Room for a 64-bit integer in decimal text plus sign and NUL.
 #define ARRAY_BIND_INT_CHARS 24
+// "true"/"false" plus a NUL (bool_param_as_varchar).
+#define ARRAY_BIND_BOOL_CHARS 6
 
 struct ArrayParam {
   SQLSMALLINT c_type;
@@ -597,7 +606,11 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
     case NANOARROW_TYPE_DOUBLE:
       p->c_type = SQL_C_DOUBLE; p->sql_type = SQL_DOUBLE; p->elem_size = 8; break;
     case NANOARROW_TYPE_BOOL:  // Arrow stores bits; ODBC wants one value each
-      if (opts->bool_param_as_int) {  // DuckDB rejects SQL_BIT parameters
+      if (opts->bool_param_as_varchar) {  // QuestDB parses only "true"/"false"
+        p->c_type = SQL_C_CHAR; p->sql_type = SQL_VARCHAR; p->column_size = 5;
+        p->elem_size = ARRAY_BIND_BOOL_CHARS;
+        p->needs_indicators = true;
+      } else if (opts->bool_param_as_int) {  // DuckDB rejects SQL_BIT parameters
         p->c_type = SQL_C_SBIGINT; p->sql_type = SQL_INTEGER; p->elem_size = sizeof(SQLBIGINT);
       } else {
         p->c_type = SQL_C_BIT; p->sql_type = SQL_BIT; p->elem_size = 1;
@@ -738,6 +751,11 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
         const int64_t b = ArrowArrayViewGetIntUnsafe(values, row) != 0;
         if (p->c_type == SQL_C_BIT) {
           *slot = (uint8_t)b;
+        } else if (p->c_type == SQL_C_CHAR) {  // bool_param_as_varchar
+          const char* word = b ? "true" : "false";
+          const size_t len = strlen(word);
+          memcpy(slot, word, len + 1);
+          if (ind) OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)len, q);
         } else {  // bool_param_as_int
           SQLBIGINT v = (SQLBIGINT)b;
           memcpy(slot, &v, sizeof(v));
@@ -1619,11 +1637,14 @@ struct TypeParams {
 };
 
 // Ask the driver for its name of one SQL type via SQLGetTypeInfo. Returns false if the
-// driver has no such type.
-static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, const struct TypeParams* tp, bool q,
-                        char* out, size_t out_size) {
+// driver has no such type -- or if ansi_ddl_type_names says the driver's names are not
+// the ones the server accepts, in which case every candidate is refused and the caller
+// falls through to its portable SQL fallback name.
+static bool TypeNameOne(SQLHDBC hdbc, const struct OdbcReaderOptions* opts, SQLSMALLINT sql_type,
+                        const struct TypeParams* tp, bool q, char* out, size_t out_size) {
   SQLHSTMT hstmt = NULL;
   bool done = false;
+  if (opts->ansi_ddl_type_names) return false;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
   if (SQL_SUCCEEDED(SQLGetTypeInfo(hstmt, sql_type)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
     char name[256] = {0}, params[256] = {0};
@@ -1666,11 +1687,11 @@ static bool TypeNameOne(SQLHDBC hdbc, SQLSMALLINT sql_type, const struct TypePar
 }
 
 // Try a chain of candidate SQL types (e.g. BIGINT, then NUMERIC(19,0) for Oracle).
-static void TypeNameFor(SQLHDBC hdbc, const SQLSMALLINT* candidates, int n,
-                        const struct TypeParams* tp, bool q, const char* fallback, char* out,
-                        size_t out_size) {
+static void TypeNameFor(SQLHDBC hdbc, const struct OdbcReaderOptions* opts,
+                        const SQLSMALLINT* candidates, int n, const struct TypeParams* tp, bool q,
+                        const char* fallback, char* out, size_t out_size) {
   for (int i = 0; i < n; i++) {
-    if (TypeNameOne(hdbc, candidates[i], tp, q, out, out_size)) return;
+    if (TypeNameOne(hdbc, opts, candidates[i], tp, q, out, out_size)) return;
   }
   snprintf(out, out_size, "%s", fallback);
 }
@@ -1692,9 +1713,10 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
     return ColumnTypeSql(hdbc, opts, &dsv, q, out, out_size, error);
   }
 #define TYPES(...) ((const SQLSMALLINT[]){__VA_ARGS__})
-#define CHAIN_P(params, fallback, ...)                                                    \
-  TypeNameFor(hdbc, TYPES(__VA_ARGS__), (int)(sizeof(TYPES(__VA_ARGS__)) / sizeof(SQLSMALLINT)), \
-              params, q, fallback, out, out_size)
+#define CHAIN_P(params, fallback, ...)                                                     \
+  TypeNameFor(hdbc, opts, TYPES(__VA_ARGS__),                                              \
+              (int)(sizeof(TYPES(__VA_ARGS__)) / sizeof(SQLSMALLINT)), params, q, fallback, \
+              out, out_size)
 #define CHAIN(fallback, ...) CHAIN_P(&(const struct TypeParams){0}, fallback, __VA_ARGS__)
   switch (sv->type) {
     case NANOARROW_TYPE_BOOL: CHAIN("BOOLEAN", SQL_BIT, SQL_TINYINT, SQL_SMALLINT); break;
@@ -1703,10 +1725,10 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
     case NANOARROW_TYPE_UINT16:
     case NANOARROW_TYPE_INT32: CHAIN("INTEGER", SQL_INTEGER, SQL_BIGINT); break;
     case NANOARROW_TYPE_UINT32: case NANOARROW_TYPE_INT64: case NANOARROW_TYPE_UINT64:
-      if (!TypeNameOne(hdbc, SQL_BIGINT, &(const struct TypeParams){0}, q, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_DECIMAL, &(const struct TypeParams){.precision = 19}, q, out,
+      if (!TypeNameOne(hdbc, opts, SQL_BIGINT, &(const struct TypeParams){0}, q, out, out_size) &&
+          !TypeNameOne(hdbc, opts, SQL_DECIMAL, &(const struct TypeParams){.precision = 19}, q, out,
                        out_size) &&
-          !TypeNameOne(hdbc, SQL_NUMERIC, &(const struct TypeParams){.precision = 19}, q, out,
+          !TypeNameOne(hdbc, opts, SQL_NUMERIC, &(const struct TypeParams){.precision = 19}, q, out,
                        out_size)) {
         snprintf(out, out_size, "BIGINT");
       }
@@ -1748,8 +1770,8 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
     case NANOARROW_TYPE_DECIMAL128: case NANOARROW_TYPE_DECIMAL256: {
       const struct TypeParams dec = {.precision = sv->decimal_precision,
                                      .scale = sv->decimal_scale};
-      if (!TypeNameOne(hdbc, SQL_DECIMAL, &dec, q, out, out_size) &&
-          !TypeNameOne(hdbc, SQL_NUMERIC, &dec, q, out, out_size)) {
+      if (!TypeNameOne(hdbc, opts, SQL_DECIMAL, &dec, q, out, out_size) &&
+          !TypeNameOne(hdbc, opts, SQL_NUMERIC, &dec, q, out, out_size)) {
         snprintf(out, out_size, "DECIMAL(%d,%d)", sv->decimal_precision, sv->decimal_scale);
       }
       break;

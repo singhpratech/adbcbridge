@@ -28,6 +28,16 @@ services:
     image: timescale/timescaledb:latest-pg16
     environment: { POSTGRES_USER: adbc, POSTGRES_PASSWORD: adbc, POSTGRES_DB: adbc }
     ports: ["127.0.0.1:15434:5432"]
+  # QuestDB: a time-series database that speaks the PostgreSQL wire protocol (8812);
+  # 9000 is its HTTP console and REST API.  It is in the "extra" profile, so a plain
+  # `up -d` leaves it alone -- start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d questdb
+  # JAVA_OPTS caps the JVM heap; left alone QuestDB sizes it from total host RAM.
+  questdb:
+    image: questdb/questdb
+    profiles: ["extra"]
+    environment: { JAVA_OPTS: "-Xms256m -Xmx768m" }
+    ports: ["127.0.0.1:18812:8812", "127.0.0.1:19000:9000"]
   cockroachdb:
     image: cockroachdb/cockroach:latest
     command: start-single-node --insecure --cache=128MiB --max-sql-memory=128MiB
