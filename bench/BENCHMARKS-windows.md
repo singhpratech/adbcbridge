@@ -1,21 +1,49 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks — Windows
 
-**Status: not yet measured — and, until 2026-08-24, not even built.** The `windows-latest`
-CI job had failed on every run since it was added; the first person to build on Windows
-found four MSVC-only defects (the Windows SDK's `sqltypes.h` needs `windows.h` first;
-`strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT` that only GCC and
-Clang tolerate; and `odbc_bind.c` using pthreads without the `_WIN32` guard the other
-files carry). All four are fixed on main. Two things the Windows build does *not* have,
-which every number in this file must be read against: the prefetch pipeline
-(`ADBC_ODBC_HAVE_PREFETCH`, compiled out on `_WIN32`) and the parallel-ingest worker pool
-(`adbc.odbc.ingest_connections` is clamped to 1). So `native_threshold.py` on Windows
-measures a materially different code path from the Linux rows, and a partitioned read on
+**Status: measured, one machine, one day — five databases and 24 of 25 language cells,
+campaign closed.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
+CI was reporting that to nobody. The first person to build on Windows found ten defects and
+all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
+`windows.h` first; `strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT`
+only GCC and Clang tolerate; `odbc_bind.c` using pthreads without the `_WIN32` guard), **two
+silent text corruptions in the driver** (statement text through the narrow ODBC entry points;
+character columns read through the ANSI code page), one x86 Release inlining failure in a
+test, and three harness defects (the Java classpath, the `python3` default, and the JVM
+writing the results file in Cp1252 — the third silent corruption). Three of the ten were one
+root cause in three disguises: a platform whose default narrow encoding is not UTF-8, met in
+the ODBC data path, in ODBC statement text, and in the JVM's stdout.
+
+Two things the Windows build does *not* have, which every number in this file must be read
+against: the prefetch pipeline (`ADBC_ODBC_HAVE_PREFETCH`, compiled out on `_WIN32`) and the
+parallel-ingest worker pool (`adbc.odbc.ingest_connections` is clamped to 1). So a Windows
+row measures a materially different code path from the Linux rows, and a partitioned read on
 a 4-core laptop is not a comparison at all. A Win32 port of both (SRWLOCK +
 CONDITION_VARIABLE + `_beginthreadex`) is the first Windows roadmap item.
 
-The tables below are empty on purpose. Fill them from a real machine and replace this
-paragraph with the host description.
+## Why the Windows column stops at five
+
+Five of 46 pass on Windows: SQLite, DuckDB, SQL Server 2025, PostgreSQL 16, MySQL 8.4 — all
+native installs, no containers. The other 41 are recorded in `docs/COMPATIBILITY.md` with
+the reason each did not run, and the reasons are three:
+
+- **No container runtime.** 36 entries run from Docker images; Docker Desktop on this box
+  needs WSL2, which needs administrator rights and a reboot, and the user declined. Every one
+  of the PostgreSQL-wire (13) and MySQL-wire (10) entries among them reaches Windows through
+  psqlodbc or MySQL Connector/ODBC — the two client drivers the PostgreSQL and MySQL passes
+  exercised. That is the argument for stopping, stated as an argument and not a measurement:
+  the Windows-specific risk found today lived entirely in the driver manager's client side
+  (narrow-versus-wide entry points, code-page conversion, `SQLLEN` width), one PostgreSQL was
+  enough to expose the worst of it, and a second PostgreSQL-wire server through the same
+  psqlodbc would exercise the same client path against server behaviour already established
+  on Linux. Server-side differences (a wire server that rejects a psqlodbc handshake, as YDB
+  does with 18.x) are not Windows-specific and are recorded on Linux and macOS. The 13
+  entries whose vendor driver was never installed on Windows are a real gap, and are marked
+  as one.
+- **MariaDB Connector/ODBC** is only obtainable through a browser download page; the MSI was
+  not fetched, so MariaDB and ColumnStore are not run.
+- **Firebird** needs an administrator to bootstrap its security database; **Access** needs a
+  64-bit ACE driver that will not install beside 32-bit Office (both recorded above).
 
 ## Host — first human run, 2026-08-24, main @ 199f40e
 
