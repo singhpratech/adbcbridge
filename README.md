@@ -78,6 +78,30 @@ Early (0.1.0). Working today:
 
 Planned: conformance suite, prebuilt binaries.
 
+## Machines behind the numbers
+
+Every figure in this repository was measured on one of three ordinary machines — no
+cloud instances, no dedicated benchmark hosts — and the files say which. Read the
+numbers with these in mind:
+
+| | Linux (reference host) | macOS | Windows |
+|---|---|---|---|
+| Machine | laptop, Intel Core i9-13900HK, 14 cores / 20 threads, 31 GiB | Apple M4 Max, 16 cores, 64 GB, arm64 | laptop, Intel Core i7-8550U, 4 cores / 8 threads, 7.7 GB |
+| OS | Linux Mint 22.3, kernel 7.0 | macOS 26.5.2 | Windows 11 Pro 24H2 |
+| Driver manager | unixODBC 2.3.12 | unixODBC 2.3.12 from source (iODBC from source for iODBC-only vendor drivers) | the OS's own (odbc32), ANSI code page 1252 |
+| Compiler | gcc 13.3 | Apple clang 21 | MSVC 19.44 (VS 2022 Build Tools) |
+| Databases | 46 of 46, Docker containers on the same machine (the full fleet often idling alongside) | 46 of 46 results: 33 pass, servers in Docker Desktop, some amd64 images under emulation | 5 pass, native installs; no container runtime |
+| Load during runs | never idle: ~23 GiB of other work resident, 1-minute load typically 2–5, CPU governor `powersave` after a reboot | 1-minute load 2.4–10.5, recorded per entry | one server at a time, thermally limited, 26% run-to-run variance measured |
+| What the build lacks | — | — | prefetch pipeline and parallel ingest (pthreads, compiled out on `_WIN32`) |
+
+What this means for the headline figures: the PostgreSQL-vs-native ratio (1.2–1.5× fetch)
+holds on the Linux host when it is quiet and drops to 0.97× with 46 containers idling and
+0.60× on the M4 Max; per-language rates agree within a band on each machine but are not
+comparable across machines; and Windows rows measure a materially different code path
+(no prefetch, no fan-out) on a 4-core mobile CPU. Each benchmark file opens with the
+exact host state of its runs (`bench/BENCHMARKS.md`, `bench/BENCHMARKS-macos.md`,
+`bench/BENCHMARKS-windows.md`).
+
 ## Performance
 
 1,000,000 rows `(int, double, varchar(20), date)` from SQLite, median of 5 (`bench/BENCHMARKS.md`):
