@@ -1109,10 +1109,17 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   }
   if (sizeof(SQLWCHAR) >= 4 && strstr((const char*)name, "myodbc") != NULL) {
     // MySQL Connector/ODBC built for iODBC (its macOS 26.x package links libiodbcinst)
-    // exchanges UTF-16 code units in iODBC's four-byte SQLWCHAR: a non-BMP character is
-    // a surrogate pair of two units, not one code point.  Encode bound wide parameters
-    // the same way; the reader combines pairs whatever the width.
+    // is inconsistent about iODBC's four-byte SQLWCHAR.  Reading, it writes UTF-16 code
+    // units into the four-byte slots (a non-BMP character as a surrogate pair of two
+    // units), which the reader combines whatever the width.  Writing, a SQL_C_WCHAR
+    // parameter in four-byte units with a correct byte length comes out of the
+    // connector's own inlining (NO_SSPS) as garbage past the first few characters --
+    // even plain ASCII -- and the server drops the connection on invalid UTF-8.  Its
+    // narrow path is clean UTF-8 both ways (measured: the full compat workload,
+    // 'héllo 🚀' included), so this connector takes the SQL_C_CHAR route on a
+    // four-byte build.  The pairs flag stays set for anything that still goes wide.
     conn->reader_opts.wide_utf16_pairs = true;
+    conn->reader_opts.wchar_as_utf8 = true;
   }
   if (!conn->reader_opts.sqllen_32bit_forced) {
     // IBM Db2's freely downloadable CLI driver package ("linuxx64_odbc_cli.tar.gz")
