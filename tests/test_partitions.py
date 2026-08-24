@@ -211,6 +211,237 @@ def test_partitions_of_an_empty_table(owner):
 
 
 # --------------------------------------------------------------------------
+# the key-range split
+#
+# The strategy that carries the servers with no `ctid` at all -- CockroachDB,
+# YugabyteDB and the rest of the PostgreSQL-wire family -- can be exercised on stock
+# PostgreSQL too, because a *declaratively partitioned parent* has no heap of its own.
+# `pg_relation_size` reports 0 blocks for it, so the ctid strategy declines, and what
+# is left is exactly the path those servers take: leading primary-key column, MIN/MAX,
+# half-open ranges.  Which also means these tables gain partitioned reads on plain
+# PostgreSQL, where before they got one partition.
+
+
+def make_range_partitioned(conn, name, rows, key="id", cuts=(), extra_pk=None,
+                          step=1, base=1):
+    """A partitioned parent with a primary key and no heap of its own.
+
+    `step`/`base` place the keys, so that a test can ask for a sparse key space or a
+    negative one; `extra_pk` makes the primary key composite, which is the only way a
+    primary key's *leading* column can hold duplicate values.
+    """
+    pk = "%s, %s" % (key, extra_pk) if extra_pk else key
+    execute(conn, "DROP TABLE IF EXISTS %s CASCADE" % name)
+    execute(conn, "CREATE TABLE %s (id bigint NOT NULL, grp bigint NOT NULL, "
+                  "val double precision, txt varchar(32), dt date, PRIMARY KEY (%s)) "
+                  "PARTITION BY RANGE (%s)" % (name, pk, key))
+    bounds = [None] + list(cuts) + [None]
+    for i in range(len(bounds) - 1):
+        lo = "MINVALUE" if bounds[i] is None else str(bounds[i])
+        hi = "MAXVALUE" if bounds[i + 1] is None else str(bounds[i + 1])
+        execute(conn, "CREATE TABLE %s_p%d PARTITION OF %s FOR VALUES FROM (%s) TO (%s)"
+                      % (name, i, name, lo, hi))
+    if rows:
+        execute(conn,
+                "INSERT INTO %s SELECT %d::bigint + (g - 1)::bigint * %d::bigint, "
+                "g %% 7, g * 1.5, "
+                "'row-' || lpad(g::text, 12, '0'), DATE '2020-01-01' + (g %% 3000) "
+                "FROM generate_series(1, %d) g" % (name, base, step, rows))
+    return name
+
+
+def assert_key_range_split(conn, sql, nparts, expect_descriptors=None):
+    """Split, check the predicate really is a key range, and check the rows add up."""
+    expected = fingerprint(read_all(conn, sql))
+    descriptors, _, _ = partitions_of(conn, sql, nparts)
+    if expect_descriptors is not None:
+        assert len(descriptors) == expect_descriptors
+    if len(descriptors) > 1:
+        # The point of this path: no `ctid` anywhere, a plain comparison on the key.
+        for d in descriptors:
+            text = d.decode("utf-8", "replace")
+            assert "ctid" not in text, text
+            assert "WHERE" in text, text
+    got = pyarrow.concat_tables([to_table(conn.read_partition(d)) for d in descriptors])
+    assert fingerprint(got) == expected
+    return descriptors
+
+
+@pytest.mark.parametrize("nparts", [1, 2, 3, 4, 8, 16])
+@pytest.mark.parametrize("rows", [0, 1, 3, 1000, 50000])
+def test_key_range_partitions_reproduce_the_whole_result(owner, nparts, rows):
+    """Every partition count over every table size, on the heapless path."""
+    name = make_range_partitioned(owner, "part_kr_%d" % rows, rows, cuts=(20001,))
+    assert_key_range_split(owner, "SELECT id, val, txt, dt FROM %s" % name, nparts)
+
+
+def test_key_range_with_fewer_rows_than_partitions(owner):
+    """Sixteen partitions asked for over three keys: no empty slices, no lost rows.
+
+    Three keys 1..3 leave a span of two, and a span of two is two slices: the first is
+    unbounded below and open at its top, so it needs a boundary strictly above the
+    lowest key, which leaves span-many boundaries to hand out.  Asking for more than
+    that would only manufacture slices that read nothing.
+    """
+    name = make_range_partitioned(owner, "part_kr_few", 3, cuts=(20001,))
+    sql = "SELECT id, val, txt, dt FROM %s" % name
+    descriptors = assert_key_range_split(owner, sql, 16)
+    assert len(descriptors) == 2
+    for d in descriptors:
+        assert to_table(owner.read_partition(d)).num_rows > 0
+
+
+def test_key_range_when_min_equals_max(owner):
+    """One key value is nothing to cut: one partition, and it is the original query."""
+    name = make_range_partitioned(owner, "part_kr_one", 1, cuts=(20001,))
+    sql = "SELECT id, val, txt, dt FROM %s" % name
+    descriptors, _, _ = partitions_of(owner, sql, 8)
+    assert len(descriptors) == 1
+    assert descriptors[0].endswith(sql.encode())
+
+
+def test_key_range_with_duplicate_values_on_the_boundaries(owner):
+    """Many rows sharing a key value must land in one slice, not two and not none.
+
+    The leading column of a *composite* primary key is the case where this can happen:
+    `grp` here takes seven values over sixty thousand rows, so several thousand rows
+    sit on each candidate boundary.  A closed-interval split would double them; a split
+    that skipped the boundary would lose them.
+    """
+    name = make_range_partitioned(owner, "part_kr_dup", 60000, key="grp",
+                                  extra_pk="id", cuts=(4,))
+    sql = "SELECT id, val, txt, dt FROM %s" % name
+    for nparts in (2, 3, 4, 7, 8, 16):
+        assert_key_range_split(owner, sql, nparts)
+
+
+def test_key_range_over_sparse_and_negative_keys(owner):
+    """A key space with big gaps and values below zero is still covered exactly."""
+    name = make_range_partitioned(owner, "part_kr_sparse", 20000,
+                                  base=-5_000_000_000, step=1_000_000, cuts=(0,))
+    sql = "SELECT id, val, txt, dt FROM %s" % name
+    for nparts in (2, 4, 8):
+        assert_key_range_split(owner, sql, nparts)
+
+
+def test_key_range_partitions_read_concurrently_on_other_connections(owner):
+    """The descriptors are self-contained on this path too."""
+    name = make_range_partitioned(owner, "part_kr_conc", 40000, cuts=(20001,))
+    sql = "SELECT id, val, txt, dt FROM %s" % name
+    expected = fingerprint(read_all(owner, sql))
+    descriptors, _, _ = partitions_of(owner, sql, 8)
+    assert len(descriptors) == 8
+    shuffled = list(descriptors)
+    random.Random(20260824).shuffle(shuffled)
+
+    def worker(descriptor):
+        db, conn = connect()
+        try:
+            return to_table(conn.read_partition(descriptor))
+        finally:
+            conn.close()
+            db.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(shuffled)) as pool:
+        tables = list(pool.map(worker, shuffled))
+    assert fingerprint(pyarrow.concat_tables(tables)) == expected
+
+
+def test_key_range_survives_rows_inserted_past_the_extent(owner):
+    """The extent is a snapshot; the outermost slices are unbounded so it can be stale.
+
+    Rows arriving above the MAX (or below the MIN) that the split was computed from
+    still belong to a slice, because the first slice has no lower bound and the last no
+    upper one.  Nothing else in the design would keep them.
+    """
+    name = make_range_partitioned(owner, "part_kr_grow", 20000, cuts=(20001,))
+    sql = "SELECT id, val, txt, dt FROM %s" % name
+    descriptors, _, _ = partitions_of(owner, sql, 4)
+    assert len(descriptors) == 4
+    execute(owner, "INSERT INTO %s SELECT g, 0, 1.0, 'late', DATE '2020-01-01' "
+                   "FROM generate_series(900000, 900100) g" % name)
+    execute(owner, "INSERT INTO %s SELECT g, 0, 1.0, 'early', DATE '2020-01-01' "
+                   "FROM generate_series(-500, -400) g" % name)
+    got = pyarrow.concat_tables([to_table(owner.read_partition(d)) for d in descriptors])
+    assert fingerprint(got) == fingerprint(read_all(owner, sql))
+
+
+# --------------------------------------------------------------------------
+# what the key-range split refuses, so that it never guesses a column
+
+
+@pytest.mark.parametrize("ddl,why", [
+    ("CREATE TABLE part_kr_no (id bigint NOT NULL, val double precision, "
+     "txt varchar(32), dt date) PARTITION BY RANGE (id)",
+     "no primary key at all"),
+    ("CREATE TABLE part_kr_no (id varchar(32) NOT NULL, val double precision, "
+     "txt varchar(32), dt date, PRIMARY KEY (id)) PARTITION BY RANGE (id)",
+     "the key is text, so boundaries cannot be computed exactly"),
+    ("CREATE TABLE part_kr_no (id numeric(20,4) NOT NULL, val double precision, "
+     "txt varchar(32), dt date, PRIMARY KEY (id)) PARTITION BY RANGE (id)",
+     "the key is numeric, not an integer type"),
+    ("CREATE TABLE part_kr_no (id date NOT NULL, val double precision, "
+     "txt varchar(32), dt date, PRIMARY KEY (id)) PARTITION BY RANGE (id)",
+     "the key is a date, not an integer type"),
+])
+def test_key_range_declines_rather_than_guesses(owner, ddl, why):
+    """No suitable key means one partition -- never a column picked on a hunch."""
+    execute(owner, "DROP TABLE IF EXISTS part_kr_no CASCADE")
+    execute(owner, ddl)
+    execute(owner, "CREATE TABLE part_kr_no_p0 PARTITION OF part_kr_no "
+                   "FOR VALUES FROM (MINVALUE) TO (MAXVALUE)")
+    sql = "SELECT id, val, txt, dt FROM part_kr_no"
+    descriptors, _, _ = partitions_of(owner, sql, 8)
+    assert len(descriptors) == 1, why
+    assert descriptors[0].endswith(sql.encode())
+    execute(owner, "DROP TABLE part_kr_no CASCADE")
+
+
+def test_key_range_declines_a_unique_index_that_is_not_the_primary_key(owner):
+    """A unique index is indexed and ordered, but it is not what SQLPrimaryKeys reports.
+
+    Widening the rule to "any unique index" would mean choosing between several of
+    them, and the choice is not one the catalog makes for us -- so the driver does not
+    make it either.
+    """
+    execute(owner, "DROP TABLE IF EXISTS part_kr_uniq CASCADE")
+    execute(owner, "CREATE TABLE part_kr_uniq (id bigint NOT NULL, val double precision, "
+                   "txt varchar(32), dt date) PARTITION BY RANGE (id)")
+    execute(owner, "CREATE TABLE part_kr_uniq_p0 PARTITION OF part_kr_uniq "
+                   "FOR VALUES FROM (MINVALUE) TO (MAXVALUE)")
+    execute(owner, "CREATE UNIQUE INDEX part_kr_uniq_ix ON part_kr_uniq (id)")
+    execute(owner, "INSERT INTO part_kr_uniq SELECT g, g * 1.5, 'x', DATE '2020-01-01' "
+                   "FROM generate_series(1, 5000) g")
+    sql = "SELECT id, val, txt, dt FROM part_kr_uniq"
+    descriptors, _, _ = partitions_of(owner, sql, 8)
+    assert len(descriptors) == 1
+    execute(owner, "DROP TABLE part_kr_uniq CASCADE")
+
+
+def test_ctid_still_wins_where_there_is_a_heap(owner):
+    """A plain table with a primary key must still take the ctid path, not the key one.
+
+    The heap split needs no index, is balanced in bytes rather than key values and
+    reads sequentially, so it stays first wherever it applies.  This is what stops the
+    new strategy from quietly changing what PostgreSQL has been doing all along.
+    """
+    execute(owner, "DROP TABLE IF EXISTS part_both")
+    execute(owner, "CREATE TABLE part_both (id bigint PRIMARY KEY, val double precision, "
+                   "txt varchar(32), dt date)")
+    execute(owner, "INSERT INTO part_both SELECT g, g * 1.5, 'row-' || g, "
+                   "DATE '2020-01-01' + (g % 300) FROM generate_series(1, 40000) g")
+    sql = "SELECT id, val, txt, dt FROM part_both"
+    expected = fingerprint(read_all(owner, sql))
+    descriptors, _, _ = partitions_of(owner, sql, 4)
+    assert len(descriptors) == 4
+    for d in descriptors:
+        assert b"ctid" in d
+    got = pyarrow.concat_tables([to_table(owner.read_partition(d)) for d in descriptors])
+    assert fingerprint(got) == expected
+    execute(owner, "DROP TABLE part_both")
+
+
+# --------------------------------------------------------------------------
 # descriptors are self-contained
 
 

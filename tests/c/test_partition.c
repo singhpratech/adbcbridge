@@ -22,7 +22,9 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
   InternalAdbcSetError(error, "%s failed", context);
   return ADBC_STATUS_IO;
 }
-struct OdbcHandleRef* OdbcHandleRefNew(SQLHSTMT hstmt) { return NULL; }
+struct OdbcHandleRef* OdbcHandleRefNew(SQLHSTMT hstmt) {
+  return NULL;
+}
 void OdbcHandleRefRelease(struct OdbcHandleRef* ref) {}
 AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt, struct AdbcError* error) {
   return ADBC_STATUS_INVALID_STATE;
@@ -126,55 +128,250 @@ static void TestNotSplittable(void) {
 
 // --- how many slices a table gets -------------------------------------------
 
-static void TestPartitionCount(void) {
-  // Automatic: one partition per ODBC_PARTITION_AUTO_BLOCKS blocks, capped.
-  CHECK_I64(ResolvePartitionCount(0, 1), 1);
-  CHECK_I64(ResolvePartitionCount(0, ODBC_PARTITION_AUTO_BLOCKS - 1), 1);
-  CHECK_I64(ResolvePartitionCount(0, ODBC_PARTITION_AUTO_BLOCKS * 3), 3);
-  CHECK_I64(ResolvePartitionCount(0, ODBC_PARTITION_AUTO_BLOCKS * 1000),
-            ODBC_PARTITION_AUTO_MAX);
-
-  // Explicit counts are honoured...
-  CHECK_I64(ResolvePartitionCount(4, 100000), 4);
-  CHECK_I64(ResolvePartitionCount(64, 100000), 64);
-  // ... up to the hard ceiling ...
-  CHECK_I64(ResolvePartitionCount(100000, 1000000), ODBC_PARTITION_MAX);
-  // ... and never past one block per slice, which is the finest the ctid split goes.
-  CHECK_I64(ResolvePartitionCount(8, 3), 3);
-  CHECK_I64(ResolvePartitionCount(8, 1), 1);
-  // A degenerate size still yields a usable count rather than zero or a negative.
-  CHECK_I64(ResolvePartitionCount(0, 0), 1);
-  CHECK_I64(ResolvePartitionCount(4, 0), 1);
-  // A negative count means the same as 0: let the driver choose.  The option parser
-  // never lets one through, so this is only about not misbehaving if one ever did.
-  CHECK_I64(ResolvePartitionCount(-1, 100000), ODBC_PARTITION_AUTO_MAX);
+// A split of `units` values wide, as the ctid strategy would describe a heap of that
+// many blocks: extent [0, units] and one automatic partition per AUTO_BLOCKS blocks.
+static struct OdbcSplit CtidSplit(int64_t blocks) {
+  struct OdbcSplit split;
+  memset(&split, 0, sizeof(split));
+  split.kind = ODBC_SPLIT_CTID;
+  snprintf(split.expr, sizeof(split.expr), "ctid");
+  split.lo = 0;
+  split.hi = blocks;
+  split.auto_partitions = blocks / ODBC_PARTITION_AUTO_BLOCKS;
+  return split;
 }
 
-// --- the ctid boundaries cover the heap exactly ------------------------------
+// A key-range split over the inclusive key extent [lo, hi], with no server row
+// estimate -- so the automatic count comes from the key span, as ChooseSplit does.
+static struct OdbcSplit KeySplit(int64_t lo, int64_t hi) {
+  struct OdbcSplit split;
+  memset(&split, 0, sizeof(split));
+  split.kind = ODBC_SPLIT_KEY_RANGE;
+  snprintf(split.expr, sizeof(split.expr), "\"id\"");
+  split.lo = lo;
+  split.hi = hi;
+  const uint64_t span = (uint64_t)hi - (uint64_t)lo;
+  const uint64_t values = span == UINT64_MAX ? UINT64_MAX : span + 1;
+  const uint64_t want = values / ODBC_PARTITION_AUTO_ROWS;
+  split.auto_partitions =
+      want > (uint64_t)ODBC_PARTITION_AUTO_MAX ? ODBC_PARTITION_AUTO_MAX : (int64_t)want;
+  return split;
+}
 
-// The property the whole design rests on: for any block count and any slice count, the
-// half-open [lo, hi) ranges the loop in OdbcStatementExecutePartitionsOdbc builds are
-// contiguous, non-overlapping, and span every block.  Recomputed here with the same
-// arithmetic so a change to that expression has to change this too.
+static int64_t CountForCtid(int64_t requested, int64_t blocks) {
+  struct OdbcSplit split = CtidSplit(blocks);
+  return ResolvePartitionCount(requested, &split);
+}
+
+static int64_t CountForKey(int64_t requested, int64_t lo, int64_t hi) {
+  struct OdbcSplit split = KeySplit(lo, hi);
+  return ResolvePartitionCount(requested, &split);
+}
+
+static void TestPartitionCount(void) {
+  // Automatic: one partition per ODBC_PARTITION_AUTO_BLOCKS blocks, capped.
+  CHECK_I64(CountForCtid(0, 1), 1);
+  CHECK_I64(CountForCtid(0, ODBC_PARTITION_AUTO_BLOCKS - 1), 1);
+  CHECK_I64(CountForCtid(0, ODBC_PARTITION_AUTO_BLOCKS * 3), 3);
+  CHECK_I64(CountForCtid(0, ODBC_PARTITION_AUTO_BLOCKS * 1000), ODBC_PARTITION_AUTO_MAX);
+
+  // Explicit counts are honoured...
+  CHECK_I64(CountForCtid(4, 100000), 4);
+  CHECK_I64(CountForCtid(64, 100000), 64);
+  // ... up to the hard ceiling ...
+  CHECK_I64(CountForCtid(100000, 1000000), ODBC_PARTITION_MAX);
+  // ... and never past one block per slice, which is the finest the ctid split goes.
+  CHECK_I64(CountForCtid(8, 3), 3);
+  CHECK_I64(CountForCtid(8, 1), 1);
+  // A degenerate size still yields a usable count rather than zero or a negative.
+  CHECK_I64(CountForCtid(0, 0), 1);
+  CHECK_I64(CountForCtid(4, 0), 1);
+  // A negative count means the same as 0: let the driver choose.  The option parser
+  // never lets one through, so this is only about not misbehaving if one ever did.
+  CHECK_I64(CountForCtid(-1, 100000), ODBC_PARTITION_AUTO_MAX);
+
+  // The key-range split counts in key values instead, but obeys the same rules.
+  CHECK_I64(CountForKey(0, 1, 1000), 1);  // too narrow to bother
+  CHECK_I64(CountForKey(0, 1, 3 * ODBC_PARTITION_AUTO_ROWS), 3);
+  CHECK_I64(CountForKey(0, 1, 1000 * ODBC_PARTITION_AUTO_ROWS), ODBC_PARTITION_AUTO_MAX);
+  CHECK_I64(CountForKey(8, 1, 1000000), 8);
+  // min == max: one key value, nothing to cut, however many were asked for.
+  CHECK_I64(CountForKey(8, 42, 42), 1);
+  // Fewer distinct key values than partitions: one value per slice, no empty slices.
+  CHECK_I64(CountForKey(8, 10, 13), 3);
+  // Negative keys, and a span that covers the entire int64 range, must not overflow
+  // into a nonsense count.
+  CHECK_I64(CountForKey(8, -1000000, 1000000), 8);
+  CHECK_I64(CountForKey(8, INT64_MIN, INT64_MAX), 8);
+  CHECK_I64(CountForKey(0, INT64_MIN, INT64_MAX), ODBC_PARTITION_AUTO_MAX);
+}
+
+// --- the boundaries cover the whole domain exactly ---------------------------
+
+// The property the whole design rests on, for every strategy: for any extent and any
+// slice count, the half-open [boundary k, boundary k+1) ranges the loop in
+// OdbcStatementExecutePartitionsOdbc builds are contiguous, non-overlapping, and span
+// the extent -- with slice 0 unbounded below and slice n-1 unbounded above, so the
+// union is the whole domain of the expression whatever the extent was.
+static void CheckBoundariesCover(int64_t lo, int64_t hi, int64_t n) {
+  CHECK_TRUE(n >= 1);
+  if (n == 1) return;  // one slice carries the query verbatim
+  int64_t prev = SplitBoundary(lo, hi, n, 1);
+  // Slice 0 is (-inf, prev) and must contain at least the lowest key.
+  CHECK_TRUE(prev > lo);
+  for (int64_t k = 2; k <= n - 1; k++) {
+    const int64_t b = SplitBoundary(lo, hi, n, k);
+    CHECK_TRUE(b > prev);  // strictly increasing: no gap, no overlap, no empty slice
+    prev = b;
+  }
+  // Slice n-1 is [prev, +inf) and must contain at least the highest key.
+  CHECK_TRUE(prev <= hi);
+}
+
 static void TestBoundariesCoverEveryBlock(void) {
   const int64_t sizes[] = {1, 2, 7, 8334, 83334, 1000003};
   const int64_t counts[] = {1, 2, 3, 4, 8, 16, 256};
   for (size_t si = 0; si < sizeof(sizes) / sizeof(sizes[0]); si++) {
     for (size_t ci = 0; ci < sizeof(counts) / sizeof(counts[0]); ci++) {
       const int64_t blocks = sizes[si];
-      const int64_t n = ResolvePartitionCount(counts[ci], blocks);
+      const int64_t n = CountForCtid(counts[ci], blocks);
       CHECK_TRUE(n >= 1 && n <= blocks);
-      int64_t prev_hi = 0;
-      for (int64_t k = 0; k < n; k++) {
-        const int64_t lo = blocks * k / n;
-        const int64_t hi = blocks * (k + 1) / n;
-        CHECK_I64(lo, prev_hi);   // no gap, no overlap with the previous slice
-        CHECK_TRUE(lo < hi);      // and every slice owns at least one block
-        prev_hi = hi;
-      }
-      CHECK_I64(prev_hi, blocks);  // ... and together they reach the end of the heap
+      CheckBoundariesCover(0, blocks, n);
+      // The ctid boundaries must still be exactly the block cuts they always were.
+      for (int64_t k = 1; k < n; k++) { CHECK_I64(SplitBoundary(0, blocks, n, k), blocks * k / n); }
     }
   }
+}
+
+// The same property over key extents, including negative keys, a single key value, and
+// the widest extent an int64 key can have -- which is where naive `(hi - lo) * k / n`
+// arithmetic would overflow and hand back boundaries that are not even monotonic.
+static void TestKeyBoundariesCoverEveryValue(void) {
+  const int64_t extents[][2] = {
+      {1, 1},
+      {0, 1},
+      {1, 1000000},
+      {-500, 500},
+      {-1000000, -1},
+      {INT64_MIN, 0},
+      {0, INT64_MAX},
+      {INT64_MIN, INT64_MAX},
+      {INT64_MIN, INT64_MIN + 3},
+      {INT64_MAX - 3, INT64_MAX},
+  };
+  const int64_t counts[] = {1, 2, 3, 4, 8, 16, 256};
+  for (size_t ei = 0; ei < sizeof(extents) / sizeof(extents[0]); ei++) {
+    for (size_t ci = 0; ci < sizeof(counts) / sizeof(counts[0]); ci++) {
+      const int64_t lo = extents[ei][0], hi = extents[ei][1];
+      const int64_t n = CountForKey(counts[ci], lo, hi);
+      CheckBoundariesCover(lo, hi, n);
+    }
+  }
+}
+
+// The YugabyteDB tablet-hash split is the key-range machinery over a fixed domain, so
+// it only has to be checked to stay inside the uint16 the hash actually produces.
+static void TestYbHashBoundaries(void) {
+  const int64_t counts[] = {2, 3, 4, 8, 16, 256};
+  for (size_t ci = 0; ci < sizeof(counts) / sizeof(counts[0]); ci++) {
+    const int64_t n = counts[ci];
+    CheckBoundariesCover(0, 65535, n);
+    for (int64_t k = 1; k < n; k++) {
+      const int64_t b = SplitBoundary(0, 65535, n, k);
+      CHECK_TRUE(b > 0 && b <= 65535);
+    }
+  }
+}
+
+// --- the table reference splits into ODBC catalog arguments ------------------
+
+static void CheckTableRef(const char* ref, const char* cat, const char* sch, const char* tbl) {
+  struct OdbcTableRef out;
+  if (!SplitTableRef(ref, strlen(ref), &out)) {
+    fprintf(stderr, "FAIL %s:%d: expected to split table ref \"%s\"\n", __FILE__, __LINE__, ref);
+    adbc_test_failures++;
+    return;
+  }
+  CHECK_STR(out.catalog, strlen(out.catalog), cat);
+  CHECK_STR(out.schema, strlen(out.schema), sch);
+  CHECK_STR(out.table, strlen(out.table), tbl);
+}
+
+static void CheckBadTableRef(const char* ref) {
+  struct OdbcTableRef out;
+  if (SplitTableRef(ref, strlen(ref), &out)) {
+    fprintf(stderr, "FAIL %s:%d: expected NOT to split table ref \"%s\"\n", __FILE__, __LINE__,
+            ref);
+    adbc_test_failures++;
+  }
+}
+
+static void TestSplitTableRef(void) {
+  // One, two or three parts, right-aligned onto table / schema.table / cat.schema.table.
+  CheckTableRef("bench", "", "", "bench");
+  CheckTableRef("public.bench", "", "public", "bench");
+  CheckTableRef("adbc.public.bench", "adbc", "public", "bench");
+  // Degenerate references have no catalog arguments to make, so they are refused
+  // rather than turned into a lookup that could match the wrong table.
+  CheckBadTableRef("");
+  CheckBadTableRef(".");
+  CheckBadTableRef("a.");
+  CheckBadTableRef(".a");
+  CheckBadTableRef("a..b");
+  CheckBadTableRef("a.b.c.d");
+}
+
+// --- only names that need no escaping are ever put into SQL ------------------
+
+static void TestSafeIdentifier(void) {
+  CHECK_TRUE(IsSafeIdentifier("id"));
+  CHECK_TRUE(IsSafeIdentifier("order_id"));
+  CHECK_TRUE(IsSafeIdentifier("Id2$"));
+  CHECK_TRUE(IsSafeIdentifier("\xc3\xa9t\xc3\xa9"));  // UTF-8 is left alone
+  // Everything that could close a quoted identifier or a string literal, or comment
+  // the rest of the statement out, must be refused -- the SQL is built with snprintf
+  // and escapes nothing, so this predicate is what makes that safe.
+  CHECK_TRUE(!IsSafeIdentifier(""));
+  CHECK_TRUE(!IsSafeIdentifier("a\"b"));
+  CHECK_TRUE(!IsSafeIdentifier("a'b"));
+  CHECK_TRUE(!IsSafeIdentifier("a`b"));
+  CHECK_TRUE(!IsSafeIdentifier("a\\b"));
+  CHECK_TRUE(!IsSafeIdentifier("a b"));
+  CHECK_TRUE(!IsSafeIdentifier("a-b"));
+  CHECK_TRUE(!IsSafeIdentifier("a;b"));
+  CHECK_TRUE(!IsSafeIdentifier("a.b"));
+  CHECK_TRUE(!IsSafeIdentifier("a\nb"));
+  CHECK_TRUE(!IsSafeIdentifier("a)b"));
+}
+
+// --- boundary literals are spelled for the strategy that made them -----------
+
+static void TestWriteBound(void) {
+  struct OdbcSplit ctid = CtidSplit(1000);
+  struct OdbcSplit key = KeySplit(0, 1000);
+  char buf[64];
+  CHECK_TRUE(WriteBound(&ctid, buf, sizeof(buf), 42));
+  CHECK_STR(buf, strlen(buf), "'(42,0)'::tid");
+  CHECK_TRUE(WriteBound(&key, buf, sizeof(buf), 42));
+  CHECK_STR(buf, strlen(buf), "42");
+  CHECK_TRUE(WriteBound(&key, buf, sizeof(buf), INT64_MIN));
+  CHECK_STR(buf, strlen(buf), "-9223372036854775808");
+  // A buffer that cannot hold the literal is a refusal, never a truncated predicate.
+  CHECK_TRUE(!WriteBound(&key, buf, 4, INT64_MIN));
+}
+
+// --- identifiers are quoted the way the driver asks for ----------------------
+
+static void TestQuotedIdent(void) {
+  char buf[32];
+  CHECK_TRUE(WriteQuotedIdent(buf, sizeof(buf), '"', "id"));
+  CHECK_STR(buf, strlen(buf), "\"id\"");
+  CHECK_TRUE(WriteQuotedIdent(buf, sizeof(buf), '`', "id"));
+  CHECK_STR(buf, strlen(buf), "`id`");
+  // A driver with no identifier quoting gets the bare name.
+  CHECK_TRUE(WriteQuotedIdent(buf, sizeof(buf), '\0', "id"));
+  CHECK_STR(buf, strlen(buf), "id");
+  CHECK_TRUE(!WriteQuotedIdent(buf, 3, '"', "id"));
 }
 
 // --- descriptors round-trip through their wire format ------------------------
@@ -203,6 +400,12 @@ int main(void) {
   TestNotSplittable();
   TestPartitionCount();
   TestBoundariesCoverEveryBlock();
+  TestKeyBoundariesCoverEveryValue();
+  TestYbHashBoundaries();
+  TestSplitTableRef();
+  TestSafeIdentifier();
+  TestWriteBound();
+  TestQuotedIdent();
   TestDescriptorRoundTrip();
   if (adbc_test_failures) {
     fprintf(stderr, "%d failure(s)\n", adbc_test_failures);
