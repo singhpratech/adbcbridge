@@ -3,8 +3,8 @@
 
 **Status: measured, one machine, one day — five databases and 24 of 25 language cells,
 campaign closed.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
-CI was reporting that to nobody. The first person to build on Windows found ten defects and
-all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
+CI was reporting that to nobody. The first person to build on Windows found ten defects across the repository — driver,
+tests and benchmark harnesses — and all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
 `windows.h` first; `strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT`
 only GCC and Clang tolerate; `odbc_bind.c` using pthreads without the `_WIN32` guard), **two
 silent text corruptions in the driver** (statement text through the narrow ODBC entry points;
@@ -20,6 +20,23 @@ parallel-ingest worker pool (`adbc.odbc.ingest_connections` is clamped to 1). So
 row measures a materially different code path from the Linux rows, and a partitioned read on
 a 4-core laptop is not a comparison at all. A Win32 port of both (SRWLOCK +
 CONDITION_VARIABLE + `_beginthreadex`) is the first Windows roadmap item.
+
+## Verified at the shipped state — main @ b5d2791
+
+Clean build directory, x64 Release, MSVC 19.44.35228, CMake 4.4.2, Windows SDK 10.0.26100;
+Windows 11 Pro build 26200, i7-8550U (4C/8T), 7.7 GB; Python 3.12.10 x64, adbc-driver-manager
+1.12.0, pyarrow 25.0.1, pyodbc 5.3.0; drivers SQLite3 ODBC Driver, PostgreSQL Unicode(x64)
+psqlodbc 18.00.0002, MySQL ODBC 8.4 Unicode Driver; servers native, not containers.
+
+```
+cmake --build          exit 0, zero warnings
+ctest -C Release       100% tests passed out of 7
+tests/test_windows_text.py   11 passed, 0 failed
+tests/test_sqlite.py         exit 0 (MULTIROW INGEST OK)
+compat sqlite    PASS  (SQLite (via ODBC) 3.43.2)
+compat postgres  PASS  (PostgreSQL (via ODBC) 16.15.0)
+compat mysql     PASS  (MySQL (via ODBC) 8.4.9)
+```
 
 ## Why the Windows column stops at five
 

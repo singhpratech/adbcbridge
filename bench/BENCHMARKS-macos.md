@@ -330,8 +330,8 @@ arm64-native. Load 3–7. Python columns are `matrix_bench.py` (10,000 / 100,000
 | greptimedb | **FAIL** at `SQLDriverConnect`: `[42S02] (1146) [ma-3.2.9] (TableNotFound): Table not found: greptime.public.dual` — the same probe; identical through pyodbc | | | | |
 | columnstore | PASS (`MariaDB (via ODBC) 11.01.000001`) — provisioning and user by hand, `columnstore.cnf` mounted from `/private/tmp` | 44,197 | 42,263 | 107,253 (89,203) | 4,188 |
 | mongodbbi | PASS (`MySQL (via ODBC) 05.07.000012`; read-only) — mongosqld 2.14.30 linux-arm64 build inside the `mongo:7` arm64 container (no macOS build of 2.14.x) | 39,271 | — | — | — |
-| doris | **FAIL** at `SQLExecute` — exact diagnostic being captured (BE alive; 2.27 GiB / 6 GiB) | | | | |
-| starrocks | **FAIL** at `SQLExecute` — exact diagnostic being captured (BE alive; 1.09 GiB / 5 GiB) | | | | |
+| doris | **FAIL** at `SQLExecute`: `[HY000] (1105) [ma-3.2.9][5.7.99] NullPointerException, msg: null` — Doris 2.1.0 NPEs on MariaDB Connector/ODBC's server-side prepared INSERT; with the connector's `PREPONCLIENT=1` the VARBINARY parameter is inlined as `_binary '<raw bytes>'`, which Doris rejects as a syntax error. Single-row parameterised INSERTs of int/varchar/date through pyodbc work. MySQL Connector/ODBC's `NO_SSPS=1` path, which passes on Linux, has no libmaodbc equivalent (BE alive; 2.27 GiB / 6 GiB) | | | | |
+| starrocks | **FAIL** at `SQLExecute`: `[HY000] (1064) [ma-3.2.9][8.0.33] Getting syntax error at line 1, column 59 … Unexpected input ''''` — column 59 is the connector's inlined `_binary ''` literal, identical with and without `PREPONCLIENT=1`. Same cause as Doris: the binary-literal / prepared path of MariaDB Connector/ODBC, where MySQL Connector/ODBC with `NO_SSPS=1` passes on Linux (BE alive; 1.09 GiB / 5 GiB) | | | | |
 | oceanbase | PASS (`MySQL (via ODBC) 05.07.000025`) — `MODE=SLIM`, boot in 40 s, 4.3 GiB / 6 GiB peak | 45,282 | 43,170 | 106,711 (102,495) | 3,435 |
 
 The one number to read from this table: **every MySQL-wire server fetches at 39–47k rows/s
@@ -340,6 +340,8 @@ servers on Linux. The bridge's own path is the same on both platforms; what diff
 client library — MariaDB Connector/ODBC on the Mac (MySQL's connector has no arm64 macOS
 build), MySQL Connector/ODBC on Linux — and pyodbc hitting the same ceiling puts it in the
 connector's fetch path. Ingest through the same connector runs 86–208k rows/s, 20–60× pyodbc.
+
+That closes the macOS campaign: **33 pass, 8 fail (4 driver abort-on-error, 2 connector `DUAL` probe, 2 connector binary-literal/prepared path), 4 no driver for this OS, 1 server not runnable here** — 46, one result each, every non-pass with its first error.
 
 Also closed here: `ydb` on psqlodbc 16.00.0005 (`PostgreSQL (via ODBC) 14.0.5`): fetch
 541,823 (pyodbc 389,313), ingest 1,822 (array 1,781; pyodbc 94), with `ADBC_BENCH_AUTOCOMMIT=1`

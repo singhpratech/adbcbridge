@@ -9,8 +9,7 @@ Desktop; the ones marked emulated are amd64 images under Rosetta-class emulation
 was never idle (1-minute load 2.4–10.5, recorded per entry in `BENCHMARKS-macos.md`), so read
 rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's, whose
 `alexbrainman/odbc` binding faults on every server here except SQLite, Access and Informix
-(the same failure the Linux file records). The campaign is in progress; this file grows by
-batch.
+(the same failure the Linux file records). The campaign is complete: 144 cells, every empty one explained below.
 
 | Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
 |---|---|---:|---:|---:|---:|
@@ -132,10 +131,10 @@ batch.
 | java | tidb | 91,862 | 44,860 | — | — |
 | csharp | tidb | 106,326 | 44,541 | — | — |
 | python | percona | 133,650 | 45,408 | 4,783 | 42,507 |
-| rust | percona | — | — | — | — |
-| go | percona | — | — | — | — |
-| java | percona | — | — | — | — |
-| csharp | percona | — | — | — | — |
+| rust | percona | 103,614 | 44,744 | 151,119 | 44,769 |
+| go | percona | 170,642 | 44,604 | — | — |
+| java | percona | 158,060 | 44,581 | — | — |
+| csharp | percona | 171,011 | 44,781 | — | — |
 | python | dolt | 105,090 | 44,927 | 3,081 | 43,156 |
 | rust | dolt | 85,776 | 44,710 | — | 44,871 |
 | go | dolt | 83,953 | 44,607 | — | — |
@@ -184,6 +183,6 @@ batch.
 | **oracle** | `NLS_LANG=.AL32UTF8` has to be in the environment before `libsqora` loads; the compat harness's in-process setting is too late on macOS. |
 | **mssql**, **postgres** | Python only so far; the four harnesses come with a later batch. |
 | **access**, **tdengine**, **mongodbbi** | read-only entries: fetch of the fixture only. |
-| **tidb**, **percona**, **dolt**, **matrixone**, **columnstore**, **oceanbase**, **mongodbbi** (tier 4) | Every MySQL-wire entry on this Mac goes through MariaDB Connector/ODBC 3.2.9 (arm64; MySQL's own Connector/ODBC has no arm64 macOS build), and **every one of them fetches at 39–47k rows/s in all five languages and in pyodbc alike** — against 1.0–2.0M rows/s for the same servers on Linux through MySQL Connector/ODBC. Six servers, six clients, one number: the ceiling is the connector's fetch path on this platform, not the servers and not the bridge (ingest through the same connector runs 86–208k rows/s). Percona's four harness rows follow. |
+| **tidb**, **percona**, **dolt**, **matrixone**, **columnstore**, **oceanbase**, **mongodbbi** (tier 4) | Every MySQL-wire entry on this Mac goes through MariaDB Connector/ODBC 3.2.9 (arm64; MySQL's own Connector/ODBC has no arm64 macOS build), and **every one of them fetches at 39–47k rows/s in all five languages and in pyodbc alike** — against 1.0–2.0M rows/s for the same servers on Linux through MySQL Connector/ODBC. Six servers, six clients, one number: the ceiling is the connector's fetch path on this platform, not the servers and not the bridge (ingest through the same connector runs 86–208k rows/s). |
 | **databend**, **greptimedb** | FAIL at `SQLDriverConnect`, before any bridge code runs: MariaDB Connector/ODBC 3.2.9 probes `SELECT 1 FROM DUAL WHERE @@sql_mode LIKE '%ansi_quotes%'` at connect, and neither server has a `DUAL` table (`Unknown table "default"."default".DUAL`; `Table not found: greptime.public.dual`). Identical through pyodbc, with and without `NO_SSPS`; MySQL's Connector/ODBC on Linux does not issue the probe. |
-| **doris**, **starrocks** | FAIL at `SQLExecute`; exact diagnostics being captured (both BEs alive, containers within limits). |
+| **doris**, **starrocks** | FAIL at `SQLExecute` inside MariaDB Connector/ODBC's prepared / binary-literal path (Doris: server NPE on the prepared INSERT, then `_binary '<raw>'` rejected under `PREPONCLIENT=1`; StarRocks: syntax error at the inlined `_binary ''`). On Linux both pass through MySQL Connector/ODBC with `NO_SSPS=1`, for which libmaodbc has no equivalent. No language rows. |
