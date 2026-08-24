@@ -1684,6 +1684,32 @@ what else the machine is doing**, and the number to quote is the low end, not th
 of a quiet run: our side needs eight cores where the native driver needs about one and
 a half, so a busy host costs us more than it costs the reference.
 
+The next day (2026-08-24, after a host reboot, build `fcaa46e`) the same 1 M fetch was
+taken three more times as the machine's state changed, and the spread is the point:
+
+| host state | containers up | load avg | fetch, 8 partitions | ingest, 8 conn |
+|---|---:|---:|---:|---:|
+| morning, base fleet only | 13 | 4.6-5.7 | **1.201x** PASS | (1 conn) 0.23x |
+| full compat fleet idling | 46 | 3.0-3.3 | **0.973x** FAIL | 0.768x |
+| PostgreSQL alone | 3 | 2.0-2.2 | **1.271x** PASS | 0.727x |
+
+Load average is not the right noise gauge: 46 idle containers at load 3 cost us more than
+13 at load 5, because their wake-ups fragment the eight cores the partitioned read
+needs while the native driver's single stream barely notices. One of them, CockroachDB,
+was spending 6-7 cores in its garbage collector while idle (fixed in the compose file
+with `--max-go-memory`); the CPU governor after the reboot is `powersave`, which holds
+idle cores at 400-1800 MHz against a 5.2 GHz ceiling and penalises a spread-out
+workload against a hot single thread. **The fetch claim stands at 1.2x-1.5x on a quiet
+host and does not hold on a busy one.**
+
+Ingest moved the other way: 0.73x-0.77x today against 1.02x yesterday at 16
+connections, with the native side unchanged (0.33 s both days) and ours 0.45 s against
+0.32 s. To rule the driver out, yesterday's build (`007bab3`) was run on today's host
+with the same harness: 0.593x, slower still, with the native side itself drifting to
+0.44 s in that run. The 30% is the host, not a regression -- but it also means the
+"parity" row above is the best of a range whose low end is 0.73x, and that is the
+number to plan around.
+
 Fetch clears the bar at both sizes, but 1 M is now a narrow pass rather than a
 comfortable one: the fixed per-read costs the partitions cannot divide (eight
 connections, eight plans) are a large share of a 0.19 s read and a small one of a 1.24 s
