@@ -106,6 +106,13 @@ func makeRecord(n int) arrow.Record {
 // handing the connection to a database's native ADBC driver, so the numbers
 // describe this driver.
 func adbcConnect(driver, uri string, setup []string, autocommit bool) (adbc.Database, adbc.Connection, error) {
+	// ADBC_BENCH_AUTOCOMMIT: keep autocommit on even for the ingest steps.
+	// MonetDBODBClib's SQLEndTran is a no-op, so a connection with autocommit off
+	// never commits anything and the rows are gone by the time the fetch step opens
+	// its own connection; on such a driver the only way to measure the ingest at all
+	// is to let the bridge batch the stream itself, which is what
+	// bench/matrix_bench.py does everywhere.
+	autocommit = autocommit || os.Getenv("ADBC_BENCH_AUTOCOMMIT") != ""
 	var drv drivermgr.Driver
 	db, err := drv.NewDatabase(map[string]string{
 		"driver":             driver,
@@ -162,11 +169,24 @@ func adbcExec(cnxn adbc.Connection, sql string) error {
 // of the spellings.
 func dropTable(cnxn adbc.Connection, names []string, autocommit bool) {
 	for _, name := range names {
-		_ = adbcExec(cnxn, "DROP TABLE "+name)
+		dropped := adbcExec(cnxn, "DROP TABLE "+name) == nil
 		if !autocommit {
-			// A failed DROP leaves e.g. PostgreSQL in an aborted transaction;
-			// ending it here keeps the next statement from inheriting that.
-			_ = cnxn.Commit(ctx)
+			// A failed statement leaves the transaction aborted on PostgreSQL and on
+			// MonetDB -- and MonetDB refuses to end that with a COMMIT, insisting on a
+			// ROLLBACK ("Current transaction is aborted (please ROLLBACK)"). Commit the
+			// spelling that dropped, roll back the ones that did not, so the ingest's
+			// CREATE TABLE starts from a clean transaction either way.
+			if dropped {
+				_ = cnxn.Commit(ctx)
+			} else {
+				_ = cnxn.Rollback(ctx)
+				// MonetDBODBClib's SQLEndTran does not clear an aborted transaction
+				// -- the next statement still fails with "Current transaction is
+				// aborted (please ROLLBACK)". A literal ROLLBACK does clear it, and is
+				// harmless where the driver manager already ended the transaction
+				// properly.
+				_ = adbcExec(cnxn, "ROLLBACK")
+			}
 		}
 	}
 }
@@ -196,8 +216,11 @@ func adbcIngest(cnxn adbc.Connection, table string, rec arrow.Record) (float64, 
 		return 0, err
 	}
 	stmt.Close()
-	if err := cnxn.Commit(ctx); err != nil {
-		return 0, err
+	// Nothing to commit when ADBC_BENCH_AUTOCOMMIT put the connection in autocommit.
+	if os.Getenv("ADBC_BENCH_AUTOCOMMIT") == "" {
+		if err := cnxn.Commit(ctx); err != nil {
+			return 0, err
+		}
 	}
 	return time.Since(start).Seconds(), nil
 }
@@ -552,33 +575,44 @@ func main() {
 		return secs, verify(cnxn, ident, *rows)
 	})
 
+	// ADBC_BENCH_NO_NATIVE: skip the database/sql comparison entirely and leave its
+	// columns empty. Some ODBC drivers take the whole process down from the plain
+	// ODBC path -- DuckDB's segfaults inside SQLExecute, which no recover() can
+	// catch across cgo -- and that would lose the ADBC numbers too. With this set
+	// the ADBC columns are still measured.
+	noNative := os.Getenv("ADBC_BENCH_NO_NATIVE") != ""
+	skipped := step{err: "skipped: ADBC_BENCH_NO_NATIVE"}
+
 	// 2. database/sql ingest of the same rows into the table ADBC's DDL created.
-	odbcIngestStep := attempt(func() (float64, error) {
-		adbcDB, cnxn, err := adbcConnect(driver, uri, setup, false)
-		if err != nil {
-			return 0, err
-		}
-		defer adbcDB.Close()
-		defer cnxn.Close()
-		sqlDB, err := odbcConnect(uri, setup)
-		if err != nil {
-			return 0, err
-		}
-		defer sqlDB.Close()
-		secs, err := repeat(*reps, func() (float64, error) {
-			dropTable(cnxn, candidates, false)
-			empty := makeRecord(0)
-			defer empty.Release()
-			if _, err := adbcIngest(cnxn, table, empty); err != nil {
+	odbcIngestStep := skipped
+	if !noNative {
+		odbcIngestStep = attempt(func() (float64, error) {
+			adbcDB, cnxn, err := adbcConnect(driver, uri, setup, false)
+			if err != nil {
 				return 0, err
 			}
-			return odbcIngest(sqlDB, ident, *rows)
+			defer adbcDB.Close()
+			defer cnxn.Close()
+			sqlDB, err := odbcConnect(uri, setup)
+			if err != nil {
+				return 0, err
+			}
+			defer sqlDB.Close()
+			secs, err := repeat(*reps, func() (float64, error) {
+				dropTable(cnxn, candidates, false)
+				empty := makeRecord(0)
+				defer empty.Release()
+				if _, err := adbcIngest(cnxn, table, empty); err != nil {
+					return 0, err
+				}
+				return odbcIngest(sqlDB, ident, *rows)
+			})
+			if err != nil {
+				return 0, err
+			}
+			return secs, verify(cnxn, ident, *rows)
 		})
-		if err != nil {
-			return 0, err
-		}
-		return secs, verify(cnxn, ident, *rows)
-	})
+	}
 
 	// Load the bigger table the two fetch steps read back.
 	loaded := attempt(func() (float64, error) {
@@ -610,16 +644,19 @@ func main() {
 				return timed(*fetchRows, func() (int, error) { return adbcFetch(cnxn, query) })
 			})
 		})
-		odbcFetchStep = attempt(func() (float64, error) {
-			sqlDB, err := odbcConnect(uri, setup)
-			if err != nil {
-				return 0, err
-			}
-			defer sqlDB.Close()
-			return repeat(*reps, func() (float64, error) {
-				return timed(*fetchRows, func() (int, error) { return odbcFetch(sqlDB, query) })
+		odbcFetchStep = skipped
+		if !noNative {
+			odbcFetchStep = attempt(func() (float64, error) {
+				sqlDB, err := odbcConnect(uri, setup)
+				if err != nil {
+					return 0, err
+				}
+				defer sqlDB.Close()
+				return repeat(*reps, func() (float64, error) {
+					return timed(*fetchRows, func() (int, error) { return odbcFetch(sqlDB, query) })
+				})
 			})
-		})
+		}
 	}
 
 	// Leave nothing of ours behind on a shared server.

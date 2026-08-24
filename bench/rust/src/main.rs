@@ -177,6 +177,13 @@ fn adbc_connect(
     setup: &[String],
     autocommit: bool,
 ) -> Res<ManagedConnection> {
+    // ADBC_BENCH_AUTOCOMMIT: keep autocommit on even for the ingest steps.
+    // MonetDBODBClib's SQLEndTran is a no-op, so a connection with autocommit off
+    // never commits anything and the rows are gone by the time the fetch step opens
+    // its own connection; on such a driver the only way to measure the ingest at
+    // all is to let the bridge batch the stream itself, which is what
+    // bench/matrix_bench.py does everywhere.
+    let autocommit = autocommit || env::var_os("ADBC_BENCH_AUTOCOMMIT").is_some();
     let mut driver = ManagedDriver::load_dynamic_from_filename(
         driver,
         Some(b"AdbcDriverInit"),
@@ -212,11 +219,24 @@ fn exec(connection: &mut ManagedConnection, sql: &str) -> Res<()> {
 /// of the spellings.
 fn drop_table(connection: &mut ManagedConnection, names: &[String], autocommit: bool) {
     for name in names {
-        let _ = exec(connection, &format!("DROP TABLE {name}"));
+        let dropped = exec(connection, &format!("DROP TABLE {name}")).is_ok();
         if !autocommit {
-            // A failed DROP leaves e.g. PostgreSQL in an aborted transaction;
-            // ending it here keeps the next statement from inheriting that.
-            let _ = connection.commit();
+            // A failed statement leaves the transaction aborted on PostgreSQL and on
+            // MonetDB -- and MonetDB refuses to end that with a COMMIT, insisting on a
+            // ROLLBACK ("Current transaction is aborted (please ROLLBACK)"). Commit the
+            // spelling that dropped, roll back the ones that did not, so the ingest's
+            // CREATE TABLE starts from a clean transaction either way.
+            if dropped {
+                let _ = connection.commit();
+            } else {
+                let _ = connection.rollback();
+                // MonetDBODBClib's SQLEndTran does not clear an aborted transaction
+                // -- the next statement still fails with "Current transaction is
+                // aborted (please ROLLBACK)". A literal ROLLBACK does clear it, and
+                // is harmless where the driver manager already ended the
+                // transaction properly.
+                let _ = exec(connection, "ROLLBACK");
+            }
         }
     }
 }
@@ -231,7 +251,10 @@ fn adbc_ingest(connection: &mut ManagedConnection, table: &str, batch: RecordBat
     statement.bind(batch)?;
     statement.execute_update()?;
     drop(statement);
-    connection.commit()?;
+    // Nothing to commit when ADBC_BENCH_AUTOCOMMIT put the connection in autocommit.
+    if env::var_os("ADBC_BENCH_AUTOCOMMIT").is_none() {
+        connection.commit()?;
+    }
     Ok(start.elapsed().as_secs_f64())
 }
 
@@ -431,7 +454,9 @@ fn odbc_api_ingest(connection: &odbc_api::Connection<'_>, ident: &str, rows: usi
         offset += n;
     }
     drop(inserter);
-    connection.commit()?;
+    if env::var_os("ADBC_BENCH_AUTOCOMMIT").is_none() {
+        connection.commit()?;
+    }
     Ok(start.elapsed().as_secs_f64())
 }
 
@@ -634,8 +659,16 @@ fn main() {
         Ok(secs)
     });
 
+    // ADBC_BENCH_NO_NATIVE: skip the odbc-api comparison entirely and leave its
+    // columns empty. Some ODBC drivers abort the whole process from the plain ODBC
+    // path -- DuckDB's throws a C++ exception out of SQLExecute, which Rust cannot
+    // catch -- and that would take the ADBC numbers down with it. With this set the
+    // ADBC columns are still measured.
+    let no_native = env::var_os("ADBC_BENCH_NO_NATIVE").is_some();
+    let skipped = || -> Step { Err("skipped: ADBC_BENCH_NO_NATIVE".to_string()) };
+
     // 2. odbc-api ingest of the same rows into the table ADBC's DDL created.
-    let odbc_ingest_step: Step = attempt(|| {
+    let odbc_ingest_step: Step = if no_native { skipped() } else { attempt(|| {
         let mut adbc = adbc_connect(&driver, &uri, &setup, false)?;
         let odbc = odbc_connect(&environment, &uri, &setup, false)?;
         let secs = repeat(args.reps, || {
@@ -649,7 +682,7 @@ fn main() {
             return Err(format!("wrong row count {got} != {}", args.rows).into());
         }
         Ok(secs)
-    });
+    })};
 
     // Load the bigger table the three fetch steps read back.
     let loaded = attempt(|| {
@@ -672,18 +705,18 @@ fn main() {
                     timed(args.fetch_rows, || adbc_fetch(&mut connection, &select))
                 })
             }),
-            attempt(|| {
+            if no_native { skipped() } else { attempt(|| {
                 let connection = odbc_connect(&environment, &uri, &setup, true)?;
                 repeat(args.reps, || {
                     timed(args.fetch_rows, || odbc_api_fetch(&connection, &select))
                 })
-            }),
-            attempt(|| {
+            })},
+            if no_native { skipped() } else { attempt(|| {
                 let connection = odbc_connect(&environment, &uri, &setup, true)?;
                 repeat(args.reps, || {
                     timed(args.fetch_rows, || arrow_odbc_fetch(&connection, &select))
                 })
-            }),
+            })},
         ),
     };
 
