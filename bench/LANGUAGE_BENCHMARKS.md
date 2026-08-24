@@ -153,30 +153,30 @@ driver default, the same setting every other language here runs with — not its
 | java | matrixone | 178,350 | 1,681,416 | — | — |
 | go | matrixone | 142,330 | 1,817,333 | — | — |
 | python | greptimedb | 109,302 | 909,235 | — | — |
-| rust | greptimedb | — | — | — | — |
-| csharp | greptimedb | — | — | — | — |
-| java | greptimedb | — | — | — | — |
-| go | greptimedb | — | — | — | — |
+| rust | greptimedb | 140,269 | 2,609,913 | — | 2,962,675 |
+| csharp | greptimedb | 71,525 | 2,213,432 | — | — |
+| java | greptimedb | 145,493 | 2,282,943 | — | — |
+| go | greptimedb | 84,443 | 2,501,208 | — | — |
 | python | questdb | 131,909 | 1,390,435 | — | — |
-| rust | questdb | — | — | — | — |
-| csharp | questdb | — | — | — | — |
-| java | questdb | — | — | — | — |
-| go | questdb | — | — | — | — |
+| rust | questdb | 136,242 | 1,239,831 | — | 1,304,348 |
+| csharp | questdb | 166,459 | 1,323,168 | — | 749,581 |
+| java | questdb | 160,660 | 1,187,772 | — | — |
+| go | questdb | 179,188 | 1,376,015 | — | — |
 | python | materialize | 24,021 | 174,074 | — | — |
-| rust | materialize | — | — | — | — |
-| csharp | materialize | — | — | — | — |
-| java | materialize | — | — | — | — |
-| go | materialize | — | — | — | — |
-| python | firebird | 6,380 | 298,613 | — | — |
-| rust | firebird | — | — | — | — |
-| csharp | firebird | — | — | — | — |
-| java | firebird | — | — | — | — |
-| go | firebird | — | — | — | — |
+| rust | materialize | 31,735 | 271,104 | — | 494,995 |
+| csharp | materialize | 31,689 | 255,175 | — | 284,581 |
+| java | materialize | 33,159 | 498,412 | — | — |
+| go | materialize | 33,404 | 362,933 | — | — |
+| python | firebird | 40,468 | 297,837 | — | — |
+| rust | firebird | 36,045 | 293,842 | — | 288,629 |
+| csharp | firebird | 37,507 | 258,789 | — | — |
+| java | firebird | 34,089 | 270,097 | — | — |
+| go | firebird | 37,564 | 300,858 | — | — |
 | python | arcadedb | — | 397,502 | — | — |
-| rust | arcadedb | — | — | — | — |
-| csharp | arcadedb | — | — | — | — |
-| java | arcadedb | — | — | — | — |
-| go | arcadedb | — | — | — | — |
+| rust | arcadedb | — | 327,191 | — | 369,610 |
+| csharp | arcadedb | — | 355,848 | — | — |
+| java | arcadedb | — | 332,503 | — | — |
+| go | arcadedb | — | 417,419 | — | — |
 | python | opensearch | — | 120,772 | — | — |
 | rust | opensearch | — | — | — | — |
 | csharp | opensearch | — | — | — | — |
@@ -386,12 +386,12 @@ path; the ADBC columns are still the real measurement.
 
 | Database | What fails, and whose fault it is |
 |---|---|
-| **questdb** | *Server.* With autocommit off QuestDB accepts the ingest — `adbc_ingest` returns 10,000 — but after `COMMIT` the table holds 0 rows, so every benchmark fails its row-count check (`wrong row count 0 != 10000`). The same ingest with autocommit on stores all 10,000. Go additionally dies with SIGSEGV inside psqlodbc's `SQLFreeHandle` while closing the prepared `INSERT` of the `database/sql` comparison, and C#'s comparison hits `ERROR: duplicate statement [name=_PLAN0x…]` — psqlodbc's server-side plan names colliding against QuestDB. |
-| **materialize** | *Server.* Materialize runs one statement per transaction: the `CREATE TABLE` of a create-mode ingest fails with `[25000] this transaction can only execute a single statement`, and everything after it with `[25P02] current transaction is aborted`. |
-| **firebird** | *Server.* Firebird does not make a table created inside an open transaction visible to a later statement in that same transaction, so the ingest fails at its first `INSERT` with `[42S02] (-204) Dynamic SQL Error … Table unknown`. `matrix_bench.py` documents this and runs Firebird with autocommit on. |
-| **greptimedb** | *Server, surfaced by the ODBC driver.* GreptimeDB has no transactions (`SQL_TC_NONE`), so MySQL Connector/ODBC rejects `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)` with `NotImplemented` and the connection never opens. Every step of all four benchmarks fails at connect. |
+| **questdb** (native ingest) | *Server rule, handled.* With autocommit off QuestDB accepts the ingest but the table holds 0 rows after `COMMIT`; with autocommit on it stores all 10,000. The four harnesses now run it with `ADBC_BENCH_AUTOCOMMIT=1` and agree at 136k–179k rows/s ingest and 1.19M–1.38M fetch (python: 22,383 / 1,451,460 on the matrix workload). Native ingest: Rust's `odbc-api` writes inside a transaction the autocommit connection never commits (`wrong row count 0`), C#'s prepared `INSERT` hits psqlodbc's `ERROR: duplicate statement [name=_PLAN0x…]` against QuestDB, and Go runs `-no-native` because `database/sql` dies in psqlodbc's `SQLFreeHandle` there. |
+| **materialize** (native ingest) | *Server rule, handled.* Materialize runs one statement per transaction, so a create-mode ingest under autocommit off fails at its `CREATE TABLE` (`[25000] this transaction can only execute a single statement`). With `ADBC_BENCH_AUTOCOMMIT=1` all four harnesses have numbers: 31.7k–33.4k rows/s ingest, 255k–498k fetch. Rust's and C#'s native ingest read back 0 rows for the same transaction reason; Go is `-no-native`. |
+| **firebird** (native columns) | *Server rule, handled — and a driver-side finding.* Firebird does not make a table created inside an open transaction visible to a later statement in that transaction, so the four harnesses run it with `ADBC_BENCH_AUTOCOMMIT=1`, as `matrix_bench.py` always did. Their first pass read the table back at 5.5k–7.7k rows/s — and `odbc-api` at the same 7.5k — which turned out to be our generated DDL: it spelled the Arrow string as `BLOB SUB_TYPE TEXT` and OdbcFb reads a BLOB one row at a time. The driver now spells it `VARCHAR(8191)`; re-measured, all five languages agree at 34k–40k rows/s ingest and 259k–301k fetch (was 5–8k both ways). Native columns: OdbcFb refuses `System.Data.Odbc`'s prepared statements with an empty diagnostic, `odbc-api`'s ingest never commits, Go is `-no-native`, Java has no JDBC URL. |
+| **greptimedb** (native columns) | *Server, surfaced by the ODBC driver; handled.* GreptimeDB has no transactions (`SQL_TC_NONE`), so MySQL Connector/ODBC rejects `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)` with `[HYC00] Transactions are not enabled` and an autocommit-off connection never opens. With `ADBC_BENCH_AUTOCOMMIT=1` all four have numbers — 71k–145k rows/s ingest, 2.21M–2.61M fetch, the fastest reads in this table after MariaDB. The native comparisons need the same autocommit-off connection (Rust `SQLSetConnectAttr` error, C# `Transactions are not enabled`), so they stay empty; Go is `-no-native`. |
 | **opensearch** | *Driver.* The OpenSearch SQL ODBC driver is read-only and refuses `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT)` too, so the four autocommit-off benchmarks cannot connect. There is no `CREATE TABLE`/`INSERT` in the SQL plugin either, so no ingest exists to time. |
-| **arcadedb**, **tdengine** | *Benchmark harness, and the entry.* Both entries are `read_only` — ArcadeDB has no `CREATE TABLE` (its DDL is `CREATE DOCUMENT TYPE` plus one `CREATE PROPERTY` per column) and every TDengine table must start with a `TIMESTAMP` primary key, which no generated DDL emits — so there is no create-mode ingest for any language. On top of that `bench/rust/conn.py` exports the entry's `setup` through the environment, and for these two `setup` *is* the literal bulk load (100,000 rows / 20,000 rows), so the benchmark binaries cannot even be exec'd: `Argument list too long` (E2BIG). |
+| **arcadedb** (native columns), **tdengine** (all four) | *Read-only entries; ArcadeDB handled, TDengine not re-run.* ArcadeDB has no `CREATE TABLE` (its DDL is `CREATE DOCUMENT TYPE` plus one `CREATE PROPERTY` per column), so it is `read_only`; the four harnesses now fetch the pre-loaded 100,000-document `adbc_big` at 327k–417k rows/s (Rust's `odbc-api` 369,610, `arrow-odbc` 395,745). Its entry's `setup` is the 4.3 MB fixture load itself, which no environment can carry, so `bench/rust/conn.py` no longer exports a setup over 16 KB and the compat run has to seed the fixture first. TDengine's driver (`taos-odbc`, built from source) has not been rebuilt on this host since a reboot; its four cells wait for that. |
 | **duckdb** (fetch, and every native column) | *The entry, plus the driver's model.* The compat entry connects with `Database=:memory:`, so **every ODBC connection is its own empty DuckDB**. The ingest step creates its table, fills it and checks the count inside one connection, so its number is real; the fetch step opens a fresh connection, where that table has never existed. All five bindings report the read as `[ODBC] SQLExecDirect failed`, and the driver's own text under it is `[42000] ODBC_DuckDB->PrepareStmt / Catalog Error: Table with name adbc_bench_rs does not exist!`. The native columns are `—` for exactly the same reason and not because the comparison was skipped: `System.Data.Odbc`, `database/sql` and `odbc-api` each carry the same `[42000] ODBC_DuckDB->PrepareStmt` out of their `SQLPrepare`/`SQLExecDirect`. |
 | **cratedb** (go native) | *Harness gap, closed; one binding crash left.* The four non-python harnesses used to send a `date32` column whose generated DDL named PostgreSQL's `date`, which CrateDB has no storage type for (`XX000 Type \`date\` does not support storage`). They now apply the compat entry's `ingest_types` (`date32=timestamp_us`) and issue its `REFRESH TABLE` before every row count, the way `matrix_bench.py` always did, and all four have numbers. The go row ran with `-no-native`: with the `database/sql` comparison on, `bench_go` dies with a SIGSEGV in cgo before printing anything (register dump on stderr, no Go stack). |
 | **spanner** (csharp fetch; all native ingest) | *Harness gap, closed; one server rule; one open cell.* The four harnesses used to send an `int32` column whose generated DDL named psqlodbc's `int4`, which Spanner has not (`P0001 Type <int4> is not supported; use bigint or int8 instead`); they now apply the entry's `ingest_types` (`int32=int64`). Spanner also refuses DDL inside a transaction (`25000 DDL statements are not allowed in mixed batches or transactions`), so like ydb the four ran with `ADBC_BENCH_AUTOCOMMIT=1`. Rust, Java and Go then agree at 8,091–9,120 rows/s ingest and 250k–283k fetch, next to python's 7,870 / 205,396; Rust's `odbc-api` ingest reads back 0 rows because its `ColumnarBulkInserter` writes inside a transaction the autocommit connection never commits (as on sqlite). Go's first run failed with `Already Exists` on `CREATE TABLE` — the emulator had not finished the preceding `DROP TABLE` — and was clean on the retry that is recorded. **C#'s fetch is the open cell**: the first run reported an error the log truncated, the second did not finish inside the 600 s cap; not yet isolated. |

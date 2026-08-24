@@ -41,6 +41,15 @@ pa = m.pa  # pyarrow, already imported the way test_matrix has to import it
 TABLE = os.environ.get("ADBC_BENCH_TABLE", "adbc_bench_rs") + os.environ.get("ADBC_MATRIX_SUFFIX", "")
 
 
+def setup_env(cfg):
+    setup = "\n".join(cfg.get("setup", []))
+    if len(setup) > 16384:
+        sys.stderr.write("conn.py: %s's setup is %d bytes (the fixture load); not exported -- run "
+                         "tests/compat/test_matrix.py first\n" % (cfg.get("env", "?"), len(setup)))
+        return ""
+    return setup
+
+
 def main(name):
     cfg = m.DBS.get(name)
     if cfg is None:
@@ -64,7 +73,12 @@ def main(name):
     out = [
         (prefix + "_CONN", uri),
         (prefix + "_TABLE", ident(TABLE)),
-        (prefix + "_SETUP", "\n".join(cfg.get("setup", []))),
+        # A read-only entry's `setup` is the fixture load itself (ArcadeDB: 100,000
+        # INSERTs), far past what an environment can carry -- and the harnesses only
+        # read the fixture, which tests/compat/test_matrix.py has already loaded.
+        # Per-connection settings are short; anything long is the fixture, and is left
+        # to the compat run.
+        (prefix + "_SETUP", setup_env(cfg)),
         # The entry's `ingest_types`, for the two payload columns a server can refuse:
         # int32 (Spanner has no int4) and date32 (CrateDB has no date storage type).
         # The bench has no boolean column, and its float64 column takes the driver's
