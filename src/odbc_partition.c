@@ -836,6 +836,20 @@ static void PartitionsPublish(struct OdbcPartitionsState* st, struct AdbcPartiti
 // --- ExecutePartitions --------------------------------------------------------------
 
 // How many slices the caller asked for, resolved against what the table can offer.
+// Not inlined, deliberately.  MSVC 19.44 for x86 at /O2 /Ob2 miscompiles the inline
+// expansion of this function into its caller: for a mixed-sign key range whose span
+// fits in 32 bits while the operands do not (lo = -1,000,000, hi = 1,000,000) the
+// comparison below is narrowed and `want = span` is taken unconditionally, so the
+// partition count came back as 2,000,000 instead of 8.  /Od, /O1 and /O2 /Ob0 are all
+// correct, the function is correct as source, and every way of observing the value
+// (a print, a volatile) makes the bug vanish -- found by bisecting compiler flags on a
+// 32-bit Windows build (tests/c/test_partition.c covers the exact input).  Keeping the
+// call out of line is the one fix that does not depend on what the optimiser decides.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__)
+__attribute__((noinline))
+#endif
 static int64_t ResolvePartitionCount(int64_t requested, const struct OdbcSplit* split) {
   int64_t want = requested;
   if (want <= 0) {

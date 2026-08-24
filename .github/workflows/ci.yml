@@ -70,18 +70,20 @@ jobs:
         if: runner.os != 'macOS' && matrix.arch == ''
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/dist"
 
+      # Release, not Debug: the configuration people ship is the one that has to pass.
+      # An MSVC x86 /O2 /Ob2 miscompile was invisible to a Debug-only job.
       - name: Configure (Windows x86)
         if: matrix.arch == 'Win32'
-        run: cmake -S . -B build -A Win32 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/dist"
+        run: cmake -S . -B build -A Win32 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/dist"
 
       - name: Build
-        run: cmake --build build --config Debug --parallel 4
+        run: cmake --build build --config ${{ matrix.arch == 'Win32' && 'Release' || 'Debug' }} --parallel 4
 
       - name: C unit tests
-        run: ctest --test-dir build -C Debug --output-on-failure
+        run: ctest --test-dir build -C ${{ matrix.arch == 'Win32' && 'Release' || 'Debug' }} --output-on-failure
 
       - name: Install
-        run: cmake --install build --config Debug
+        run: cmake --install build --config ${{ matrix.arch == 'Win32' && 'Release' || 'Debug' }}
 
       - name: Show driver manifest
         if: runner.os != 'Windows'
