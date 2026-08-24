@@ -29,6 +29,13 @@ languages, because each one uses the bulk API its client actually offers:
 | java | `adbc-driver-jni` | JDBC (`sqlite-jdbc` / `postgresql`): a prepared `INSERT` with `addBatch`/`executeBatch`, and a `ResultSet` |
 | go | `go/adbc/drivermgr` | `database/sql` + [`alexbrainman/odbc`](https://github.com/alexbrainman/odbc): a prepared `INSERT` executed row by row in one transaction |
 
+Two things share the word "Java" here and they are not the same. The `java` rows are
+Java *as a client* of this driver: a Java program loads `libadbc_driver_odbc.so` through
+`adbc-driver-jni` and talks ODBC through it, exactly as Python or Go do. "JDBC" appears
+only in Java's *native comparison* column, as the ordinary path a Java program would use
+instead. The JDBC *bridge* on the roadmap -- a separate library that would host a JVM to
+reach databases that ship only a JDBC driver -- does not exist yet and is not measured here.
+
 Native delegation is switched off (`adbc.odbc.delegate=never`), so every row
 really travels over ODBC. Servers run locally, so the numbers reflect the ODBC
 driver plus the database, not a network — and they move with whatever else is
