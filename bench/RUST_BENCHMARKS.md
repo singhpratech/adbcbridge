@@ -30,16 +30,34 @@ reads the same result set fine. MySQL Connector/ODBC needs the same
 `LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6` the compat matrix documents in
 [`tests/compat/README.md`](../tests/compat/README.md).
 
-Two rows no longer read the way the paragraph above describes. **oracle**'s fetch
-columns are `—` because the read *crashes the process*: any row-array fetch of a
-character column segfaults inside Oracle's own `libsqora.so.23.1`
-(`bcoReturnColData` under `SQLFetch`), from every language and from plain
-`adbc_driver_manager`, and `tests/compat/test_matrix.py oracle` segfaults
-identically. Its ingest columns are the ordinary 10,000-row workload — only the
-fetch step was shortened so the run survived to print them. And **db2**'s
-`odbc-api`/`arrow-odbc` columns now return numbers rather than panicking, but the
+Three rows do not read the way the paragraph above describes. **oracle**'s fetch
+columns were `—` because the read used to *crash the process*: any row-array fetch
+of a character column segfaulted inside Oracle's own `libsqora.so.23.1`
+(`bcoReturnColData` under `SQLFetch`). The driver now settles the rowset before the
+first fetch and never moves it on SQORA, and reads a column with no real declared
+width — the `txt` column here, which generated ingest DDL spells `CLOB` — with
+`SQLGetData`, one row at a time. All three fetch columns are numbers again, and
+all three are an order of magnitude below what the same four columns read from a
+server whose strings are ordinary `VARCHAR`: that is the price of the row-at-a-time
+path, and `odbc-api` and `arrow-odbc` pay it too. **monetdb**'s `odbc-api` and
+`arrow-odbc` columns are `—` because that crate cannot open the DSN at all
+(`SQLDriverConnect` → `IM005 … Driver's SQLAllocHandle on SQL_HANDLE_DBC failed`),
+though the bridge and pyodbc both connect through the same unixODBC; the monetdb
+row also needs `ADBC_BENCH_AUTOCOMMIT=1`, because MonetDBODBClib's `SQLEndTran` is
+a no-op and an autocommit-off ingest leaves nothing behind. And **db2**'s
+`odbc-api`/`arrow-odbc` columns return numbers rather than panicking, but the
 32-bit `SQLLEN` they are reading through has not changed, so they are not
 throughput to compare against the ADBC column.
+
+Four of the databases below have no ADBC column at all. **cratedb** and **spanner**
+refuse the generated ingest DDL (``Type `date` does not support storage`` and
+`Type <int4> is not supported; use bigint or int8 instead`), **ignite** refuses any
+`CREATE TABLE` without a primary key, and **mongodbbi**, **flightsql** and
+**dremio** refuse `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)` so the connection
+never opens. **duckdb** has an ingest but no fetch: the entry connects with
+`Database=:memory:`, so the table the ingest wrote is gone from the next
+connection. [`LANGUAGE_BENCHMARKS.md`](LANGUAGE_BENCHMARKS.md) quotes each of these
+in full.
 
 | Database | ADBC ingest | odbc-api ingest | Ingest × | ADBC fetch | odbc-api fetch | arrow-odbc fetch | Fetch × |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -47,8 +65,6 @@ throughput to compare against the ADBC column.
 | postgres (PostgreSQL) | 482,822 | 77,045 | 6.3× | 2,078,465 | 2,091,423 | 1,951,012 | 1.0× |
 | mariadb (MariaDB) | 44,424 | 61,489 | 0.7× | 1,347,187 | 1,985,269 | 1,812,120 | 0.7× |
 | mysql (MySQL) | 5,076 | 5,734 | 0.9× | 867,101 | 1,242,873 | 1,108,492 | 0.7× |
-| mssql (Microsoft SQL Server) | 79,568 | 82,982 | 1.0× | 585,635 | 576,563 | 587,186 | 1.0× |
-| oracle (Oracle) | 24,730 | 456 | 54.2× | — | — | — | — |
 | db2 (DB2/LINUXX8664) | 35,952 | 209,563 | 0.2× | 1,610,567 | 6,527,260 | 4,602,507 | 0.2× |
 | cockroachdb (PostgreSQL) | 854 | 852 | 1.0× | 171,333 | 183,735 | 157,175 | 0.9× |
 | timescaledb (PostgreSQL) | 362,032 | 26,462 | 13.7× | 1,913,228 | 1,966,551 | 1,752,925 | 1.0× |
@@ -61,3 +77,19 @@ throughput to compare against the ADBC column.
 | firebird (Firebird) | — | — | — | — | — | — | — |
 | vertica (Vertica Database) | 117,441 | 264,453 | 0.4× | 657,974 | 955,205 | 832,010 | 0.7× |
 | opensearch (opensearch) | — | — | — | — | — | — | — |
+| mssql (Microsoft SQL Server) | 165,692 | 143,400 | 1.2× | 2,400,560 | 2,986,862 | 2,875,788 | 0.8× |
+| percona (MySQL) | 114,478 | 8,953 | 12.8× | 1,497,547 | 1,743,255 | 1,629,625 | 0.9× |
+| tidb (MySQL) | 69,693 | 4,549 | 15.3× | 1,418,597 | 1,570,622 | 1,661,157 | 0.9× |
+| oceanbase (MySQL) | 96,455 | 8,837 | 10.9× | 1,332,754 | 1,501,355 | 1,494,517 | 0.9× |
+| yugabyte (PostgreSQL) | 28,419 | 5,730 | 5.0× | 1,583,608 | 1,553,695 | 1,489,918 | 1.0× |
+| cloudberry (PostgreSQL) | 8,828 | 977 | 9.0× | 1,957,488 | 1,935,721 | 1,855,777 | 1.0× |
+| cratedb (PostgreSQL) | — | — | — | — | — | — | — |
+| spanner (PostgreSQL) | — | — | — | — | — | — | — |
+| monetdb (monetdb) | 110,307 | — | — | 1,418,697 | — | — | — |
+| ignite (Apache Ignite) | — | — | — | — | — | — | — |
+| oracle (Oracle) | 30,547 | 1,853 | 16.5× | 103,686 | 136,334 | 145,299 | 0.8× |
+| mongodbbi (MySQL) | — | — | — | — | — | — | — |
+| flightsql (sqlflite) | — | — | — | — | — | — | — |
+| dremio (Dremio Server) | — | — | — | — | — | — | — |
+| columnstore (MariaDB) | 54,005 | 471,175 | 0.1× | 1,098,912 | 1,412,067 | 1,126,513 | 0.8× |
+| duckdb (DuckDB) | 336,638 | — | — | — | — | — | — |
