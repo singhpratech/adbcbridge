@@ -122,6 +122,31 @@ def competing_manifests():
     return [p for p in found if p.exists()]
 
 
+# Under pytest the two test functions take their `tmp` and `build` from these
+# fixtures; run as a script, main() below passes the same values by hand.  The
+# import is guarded so the script keeps working where pytest is not installed.
+try:
+    import pytest
+except ImportError:  # pragma: no cover
+    pytest = None
+
+if pytest is not None:
+
+    @pytest.fixture(scope="module")
+    def tmp(tmp_path_factory):
+        stray = competing_manifests()
+        if stray:
+            pytest.skip("an odbc.toml the test does not control is installed at "
+                        + ", ".join(map(str, stray)))
+        if not shutil.which("cmake"):
+            pytest.skip("cmake not found")
+        return tmp_path_factory.mktemp("adbcbridge-pnp-")
+
+    @pytest.fixture(scope="module")
+    def build(tmp):
+        return build_tree(tmp)
+
+
 def build_tree(tmp):
     """A configured, built CMake build tree to install from."""
     build = pathlib.Path(os.environ.get("ADBCBRIDGE_BUILD_DIR", tmp / "build"))
