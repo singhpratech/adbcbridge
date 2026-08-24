@@ -117,8 +117,21 @@ lang_record() {
     local lang="$1" db="$2" row="$3" tmp
     [ -n "$row" ] || return 0
     tmp="$(mktemp)"
-    grep -v "^| $lang | $db |" "$LANG_OUT" > "$tmp"
-    printf '%s\n' "$row" >> "$tmp"
+    # Replace the pair's row where it stands; a new pair goes after the last row of
+    # the results table, not at the end of the file -- the file carries prose after
+    # the table, and a row appended there is outside it.
+    awk -v lang="$lang" -v db="$db" -v row="$row" '
+        BEGIN { key = "| " lang " | " db " |" }
+        FNR == NR {
+            if (index($0, key) == 1) { have = 1 }
+            else if ($0 ~ /^\| [a-z]+ \| [a-z0-9]+ \|/ && !seen_heading) { last = FNR }
+            if (last && $0 ~ /^## /) { seen_heading = 1 }
+            next
+        }
+        index($0, key) == 1 { print row; next }
+        { print }
+        !have && FNR == last { print row }
+    ' "$LANG_OUT" "$LANG_OUT" > "$tmp"
     mv "$tmp" "$LANG_OUT"
 }
 
