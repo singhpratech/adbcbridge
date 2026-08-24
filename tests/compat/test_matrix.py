@@ -909,7 +909,13 @@ DBS = {
         # below are declared unqualified.  psqlodbc's own type names ("int8", "float8",
         # "bool", "varchar", "numeric") are all accepted, so the generated ingest DDL
         # needs neither `ansi_ddl_type_names` nor `ingest_types`.
-        env="RISINGWAVE_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=14566;Database=dev;Uid=root;",
+        env="RISINGWAVE_ODBC_DRIVER", # UseServerSidePrepare=0: with the extended protocol psqlodbc names its server-side
+        # statement _PLAN<hex> and RisingWave refuses to prepare a second one under that
+        # name ("XX000 Failed to prepare the statement: Duplicated statement name"), so
+        # the second parameterised query of any connection failed -- QuestDB says the same
+        # thing as "duplicate statement [name=_PLAN0x...]".  The simple protocol has no
+        # statement names.
+        conn="Driver={drv};Server=127.0.0.1;Port=14566;Database=dev;Uid=root;UseServerSidePrepare=0;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR, b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC, bo BOOLEAN)",
         # A write only becomes visible to a later scan once the next barrier commits it,
         # so every write here is followed by FLUSH (which waits for that barrier).  The
