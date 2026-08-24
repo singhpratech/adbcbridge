@@ -133,7 +133,6 @@ public final class Bench {
 
   // --------------------------------------------------------------------- ADBC
 
-  /** A JNI driver, database and connection opened over {@code libadbc_driver_odbc.so}. */
   /**
    * ADBC_BENCH_AUTOCOMMIT: keep autocommit on even for the ingest steps.
    * MonetDBODBClib's SQLEndTran is a no-op, so a connection with autocommit off never
@@ -145,6 +144,7 @@ public final class Bench {
       System.getenv("ADBC_BENCH_AUTOCOMMIT") != null
           && !System.getenv("ADBC_BENCH_AUTOCOMMIT").isEmpty();
 
+  /** A JNI driver, database and connection opened over {@code libadbc_driver_odbc.so}. */
   private static final class Session implements AutoCloseable {
     final BufferAllocator allocator;
     final AdbcDatabase database;

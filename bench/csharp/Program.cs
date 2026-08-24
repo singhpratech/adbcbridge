@@ -354,12 +354,6 @@ internal static class Bench
         }
 
         /// <summary>
-        /// Open a connection through the driver under test.
-        /// <c>adbc.odbc.delegate=never</c> keeps the bridge on its own ODBC path
-        /// instead of handing the connection to a database's native ADBC driver,
-        /// so the numbers describe this driver.
-        /// </summary>
-        /// <summary>
         /// ADBC_BENCH_AUTOCOMMIT: keep autocommit on even for the ingest steps.
         /// MonetDBODBClib's SQLEndTran is a no-op, so a connection with autocommit
         /// off never commits anything and the rows are gone by the time the fetch
@@ -372,6 +366,12 @@ internal static class Bench
 
         internal static bool ForceAutoCommitting => ForceAutoCommit;
 
+        /// <summary>
+        /// Open a connection through the driver under test.
+        /// <c>adbc.odbc.delegate=never</c> keeps the bridge on its own ODBC path
+        /// instead of handing the connection to a database's native ADBC driver,
+        /// so the numbers describe this driver.
+        /// </summary>
         public static Session Open(bool autoCommit)
         {
             autoCommit = autoCommit || ForceAutoCommit;
