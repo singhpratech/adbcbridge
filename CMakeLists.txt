@@ -303,8 +303,9 @@ if(ADBC_ODBC_BUILD_TESTS)
       ADBC_EXPORTING
       NANOARROW_DLL=)
     # The tests compile the driver's own sources, whose reader and ingest paths
-    # use pthreads; on glibc < 2.34 (manylinux_2_28) libpthread is a separate DSO.
-    target_link_libraries(${test_name} PRIVATE ODBC::ODBC Threads::Threads)
+    # use pthreads and dlopen; on glibc < 2.34 (manylinux_2_28) libpthread and
+    # libdl are separate DSOs that must be named on the link line.
+    target_link_libraries(${test_name} PRIVATE ODBC::ODBC Threads::Threads ${CMAKE_DL_LIBS})
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
       target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wno-unused-parameter)
     endif()
