@@ -260,6 +260,14 @@ struct OdbcReaderOptions {
   // on.  It is what lets a "long" column be bound at all on a driver that cannot
   // SQLGetData from a block cursor.
   bool refetch_repair;
+  // Driver quirk: SQL_ATTR_ROW_ARRAY_SIZE is fixed for the life of a cursor -- whatever
+  // it was when the statement was executed is the only size that cursor can be fetched
+  // at.  Oracle's SQORA sizes its per-rowset fetch state once and then indexes it with
+  // the current array size: raising the size mid-cursor walks off the end of that state
+  // and segfaults inside the driver (see OdbcDetectQuirks), and lowering it silently
+  // ends the result set early.  The reader picks the rowset before the first fetch and
+  // never touches the attribute again on such a driver.
+  bool fixed_rowset;
   // Driver quirk: bind boolean parameters as integers (DuckDB rejects SQL_BIT params).
   bool bool_param_as_int;
   // Driver quirk: bind boolean parameters as an integer described as SQL_TINYINT, not

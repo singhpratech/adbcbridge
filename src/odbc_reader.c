@@ -368,8 +368,12 @@ static bool IsTimestampWithTimezone(SQLHSTMT hstmt, SQLUSMALLINT col) {
 // holds, a column whose declared width is a type maximum rather than a real bound has
 // to stay unbound, because a bound buffer would silently clip it.
 static inline bool TruncationRepairable(const struct OdbcReaderOptions* opts) {
-  // Both routes end in SQLGetData on a bound column, which needs SQL_GD_BOUND.
-  return opts->getdata_bound && (opts->getdata_repair || opts->refetch_repair);
+  // Both routes end in SQLGetData on a bound column, which needs SQL_GD_BOUND.  The
+  // refetch route also has to drop SQL_ATTR_ROW_ARRAY_SIZE to 1 and put it back, which a
+  // fixed-rowset driver cannot survive (see OdbcReaderOptions::fixed_rowset), so there it
+  // is not a route at all.
+  return opts->getdata_bound &&
+         (opts->getdata_repair || (opts->refetch_repair && !opts->fixed_rowset));
 }
 
 // Settle how a variable-length column is read, given the width `ClassifyColumn` derived
@@ -1281,8 +1285,12 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
   // and a one-row rowset has nothing to give up.  While the decision is open the rowset
   // is the small probe one, so that the rows it is taken on are few; the buffers are
   // still allocated for the full rowset the batch after it goes back to.
+  // A driver whose rowset cannot move once the cursor is open cannot run the probe
+  // either: the probe is a small rowset that goes back to the full one, and the remedy it
+  // may reach for is a collapse to a single row.  Such a driver keeps whatever binding
+  // ApplyBindWidth() chose, and repairs the values that outgrow it where they sit.
   r->rowset_full = r->rows_per_fetch;
-  if (r->opts.getdata_repair && r->rows_per_fetch > 1) {
+  if (r->opts.getdata_repair && r->rows_per_fetch > 1 && !r->opts.fixed_rowset) {
     for (SQLSMALLINT i = 0; i < r->ncols; i++) {
       if (r->cols[i].bound && r->cols[i].clipped) r->adapt_open = true;
     }
@@ -1878,6 +1886,18 @@ static bool RowsetTruncated(const struct OdbcReader* r, const struct OdbcRowsetS
   return false;
 }
 
+// Change SQL_ATTR_ROW_ARRAY_SIZE on a cursor that is already open, and say whether the
+// cursor is now fetching that many rows.  Every mid-cursor resize goes through here: a
+// driver whose rowset is fixed once the statement has been executed
+// (OdbcReaderOptions::fixed_rowset -- Oracle's SQORA, where raising it segfaults inside
+// the driver and lowering it truncates the result set) is left at the size it was given
+// before the first fetch, and every caller has a path that works without the resize.
+static bool ReaderResizeRowset(struct OdbcReader* r, SQLULEN rows) {
+  if (r->opts.fixed_rowset) return false;
+  return SQL_SUCCEEDED(
+      SQLSetStmtAttr(r->ref->hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)rows, 0));
+}
+
 // Re-read a rowset that clipped a value, one row at a time, and append every row.
 //
 // `first` is the 1-based position of the rowset's first row in the result set.  With
@@ -2200,8 +2220,10 @@ static AdbcStatusCode ReaderUnbindFrom(struct OdbcReader* r, SQLSMALLINT from,
   // Only give the binding up if the cursor can actually be collapsed; SQLGetData needs
   // the one-row rowset (see above), so a driver that refuses is left as it was.
   if (r->rows_per_fetch > 1) {
-    if (!SQL_SUCCEEDED(SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)1, 0))) {
-      r->rowset_restore = true;  // keep the bindings, and the rowset they were sized for
+    if (!ReaderResizeRowset(r, 1)) {
+      // Keep the bindings, and the rowset they were sized for.  A fixed-rowset driver is
+      // already at the size it will stay at, so it needs no restore either.
+      r->rowset_restore = !r->opts.fixed_rowset;
       return ADBC_STATUS_OK;
     }
     r->rows_per_fetch = 1;
@@ -2307,10 +2329,7 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
   // the size it would otherwise have had.
   if (r->rowset_restore) {
     r->rowset_restore = false;
-    if (SQL_SUCCEEDED(SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)r->rowset_full,
-                                     0))) {
-      r->rows_per_fetch = r->rowset_full;
-    }
+    if (ReaderResizeRowset(r, r->rowset_full)) r->rows_per_fetch = r->rowset_full;
   }
 
   struct ArrowArray batch;
@@ -2356,7 +2375,8 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
     // reader only ever bound a "long" column for because that is possible.
     r->rowsets_read++;
     if (bulk && r->rows_seen_exact && r->rows_per_fetch > 1 && !r->opts.getdata_repair &&
-        r->opts.refetch_repair && RowsetTruncated(r, &r->slots[r->cur_slot], fetched)) {
+        r->opts.refetch_repair && !r->opts.fixed_rowset &&
+        RowsetTruncated(r, &r->slots[r->cur_slot], fetched)) {
       status = RepairRowset(r, first_row, fetched, &batch, error);
       if (status != ADBC_STATUS_OK) break;
       total += (int64_t)fetched;
@@ -2365,9 +2385,7 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
       // exception, read one row per SQLFetch instead: every value is then read where it
       // sits, which is what an unbound column would have cost from the start.
       if (r->rowsets_repaired >= 4 && r->rowsets_repaired * 4 >= r->rowsets_read * 3) {
-        if (SQL_SUCCEEDED(SQLSetStmtAttr(hstmt, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)1, 0))) {
-          r->rows_per_fetch = 1;
-        }
+        if (ReaderResizeRowset(r, 1)) r->rows_per_fetch = 1;
       }
       continue;
     }

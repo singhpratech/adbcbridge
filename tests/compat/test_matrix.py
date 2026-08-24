@@ -238,6 +238,12 @@ DBS = {
     "oracle": dict(
         env="ORACLE_ODBC_DRIVER", conn="Driver={drv};DBQ=127.0.0.1:11521/FREEPDB1;UID=adbc;PWD=adbc;",
         ddl="CREATE TABLE adbc_t (i NUMBER(10), f BINARY_DOUBLE, s VARCHAR2(50), b RAW(10), d DATE, ts TIMESTAMP(6), n NUMBER(10,3), bo BOOLEAN)",
+        # Oracle's SQLGetTypeInfo(SQL_LONGVARCHAR) names CLOB, so ingesting an Arrow
+        # string column here creates one -- and reading a CLOB back is the one shape
+        # SQORA cannot be driven through the way every other driver is.  3,000 rows cross
+        # three 1,024-row batches, which is what it takes to reach the crash that quirk
+        # exists for; see OdbcDetectQuirks in src/odbc_driver.c.
+        wide_text_rows=3000,
         ident=str.upper, unicode_env="NLS_LANG=.AL32UTF8"),
     "clickhouse": dict(
         env="CLICKHOUSE_ODBC_DRIVER", conn="Driver={drv};Url=http://127.0.0.1:18123;Database=adbc;UID=adbc;PWD=adbc;",
@@ -1799,6 +1805,52 @@ def check_ingest(cur, cfg, ing_name):
     check_big(cur, cfg, "SELECT %s, %s FROM %s ORDER BY %s"
               % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, ing_name), qi(cfg, "a")))
     check_text_sortable(cur, cfg, ing_name, N)
+    check_wide_text(cur, cfg, ing_name)
+
+
+def check_wide_text(cur, cfg, ing_name):
+    """Read back a text column holding values far wider than the reader binds for.
+
+    `wide_text_rows` opts an entry in, and the column is the one the *generated ingest
+    DDL* made for an Arrow string column -- whatever the server's
+    SQLGetTypeInfo(SQL_LONGVARCHAR) named.  That is the only way a user reaches this
+    column, and on Oracle it is a CLOB, which the reader has to treat as a column with no
+    declared width at all: 2,147,483,647 characters is what SQORA reports for one.
+
+    Two things have to hold at once, and only a table of mixed widths asks for both.
+    Every value must come back whole, including the ones past
+    adbc.odbc.long_bind_bytes (2 KiB) that no bound rowset buffer could have held; and
+    the read must cross several rowsets and several Arrow batches, because a reader that
+    changes its fetch shape between rowsets does it at a batch boundary.  Oracle's SQORA
+    segfaulted on exactly that: raising SQL_ATTR_ROW_ARRAY_SIZE mid-cursor on a cursor
+    holding a LOB column dies inside the driver (see OdbcDetectQuirks in
+    src/odbc_driver.c), and 20,000 narrow CLOBs were enough to reach it.
+    """
+    n = cfg.get("wide_text_rows")
+    if not n:
+        return
+    # Mostly narrow, one row in 250 far wider than the reader's long_bind_bytes.  The
+    # narrow rows are what keeps a block cursor worth having; the wide ones are what a
+    # bound buffer cannot hold.
+    def value(i):
+        return "w%09d" % i + "." * 9000 if i % 250 == 0 else "row-%012d" % i
+    want = [value(i) for i in range(n)]
+    cur.adbc_ingest(ing_name, ingest_payload(cfg, {
+        "a": pa.array(range(n), pa.int64()),
+        "b": pa.array(want),
+        "c": pa.array([float(i) for i in range(n)]),
+        "d": pa.array(list(range(n)), pa.date32()),
+        "e": pa.array([i % 2 == 0 for i in range(n)]),
+    }), mode="replace")
+    refresh(cur, cfg, ing_name)
+    cur.execute("SELECT %s, %s FROM %s" % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, ing_name)))
+    t = cur.fetch_arrow_table()
+    col = {name.lower(): i for i, name in enumerate(t.schema.names)}
+    got = dict(zip(t.column(col["a"]).to_pylist(), t.column(col["b"]).to_pylist()))
+    assert len(got) == n, (len(got), n)
+    bad = [i for i in range(n) if got.get(i) != want[i]]
+    assert not bad, ("wide text came back wrong on %d of %d rows, first %s"
+                     % (len(bad), n, [(i, len(got.get(i) or ""), len(want[i])) for i in bad[:3]]))
 
 
 def check_text_sortable(cur, cfg, ing_name, n):

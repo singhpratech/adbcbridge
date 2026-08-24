@@ -3423,6 +3423,10 @@ static void QueueFail(struct IngestQueue* q) {
 struct WorkerStream {
   struct IngestQueue* q;
   struct ArrowSchema schema;
+  // Set when this worker's stream ended because the queue had been tripped -- i.e. this
+  // worker failed only because a *different* one did.  IngestParallel reads it to tell
+  // the failure that caused the ingest to stop from the ones that merely followed it.
+  bool* collateral;
 };
 
 static int WorkerStreamGetSchema(struct ArrowArrayStream* s, struct ArrowSchema* out) {
@@ -3442,6 +3446,7 @@ static int WorkerStreamGetNext(struct ArrowArrayStream* s, struct ArrowArray* ou
       out->release = NULL;
       return 0;
     default:
+      if (ws->collateral) *ws->collateral = true;
       return EIO;
   }
 }
@@ -3471,6 +3476,10 @@ struct IngestWorker {
   AdbcStatusCode status;
   struct AdbcError error;
   int64_t rows;
+  // This worker failed only because another one had already tripped the queue.  Written
+  // by its own thread (through WorkerStream::collateral) before it exits, read by
+  // IngestParallel after the join, so the join is the barrier that publishes it.
+  bool collateral;
 };
 
 static void* IngestWorkerMain(void* arg) {
@@ -3606,6 +3615,7 @@ static AdbcStatusCode IngestParallel(struct OdbcStatement* stmt, int64_t nconn,
       break;
     }
     ws->q = &q;
+    ws->collateral = &w->collateral;
     if (ArrowSchemaDeepCopy(&schema, &ws->schema) != NANOARROW_OK) {
       free(ws);
       status = ADBC_STATUS_INTERNAL;
@@ -3663,11 +3673,27 @@ static AdbcStatusCode IngestParallel(struct OdbcStatement* stmt, int64_t nconn,
     if (workers[i].started) pthread_join(workers[i].tid, NULL);
   }
 
+  // Which worker's failure to report.  When one worker breaks a constraint it trips the
+  // queue, and every other worker still running then fails too -- with "another
+  // parallel-ingest worker failed", which says nothing about what went wrong.  Reporting
+  // the lowest-numbered failure would hand the caller that message whenever a collateral
+  // worker happened to be numbered first, which is a coin toss on every run.  So the
+  // failure that stopped the ingest -- the one that is not collateral -- is the one the
+  // caller is told about, and the collateral ones are only a fallback for the case where
+  // somehow every failure is collateral.
+  int64_t blame = -1;
+  if (status == ADBC_STATUS_OK) {  // the pump's own failure, where there was one, wins
+    for (int64_t i = 0; i < nconn; i++) {
+      if (workers[i].status == ADBC_STATUS_OK) continue;
+      if (blame < 0 || (workers[blame].collateral && !workers[i].collateral)) blame = i;
+    }
+  }
+
   int64_t total = 0;
   for (int64_t i = 0; i < nconn; i++) {
     struct IngestWorker* w = &workers[i];
     if (w->rows > 0) total += w->rows;
-    if (w->status != ADBC_STATUS_OK && status == ADBC_STATUS_OK) {
+    if (i == blame) {
       status = w->status;
       InternalAdbcSetError(error, "Parallel ingest worker %lld of %lld failed: %s", (long long)i,
                            (long long)nconn,
