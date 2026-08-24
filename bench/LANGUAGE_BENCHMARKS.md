@@ -108,10 +108,10 @@ driver default, the same setting every other language here runs with — not its
 | Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
 |---|---|---:|---:|---:|---:|
 | python | sqlite | 801,668 | 1,595,715 | — | — |
-| rust | sqlite | 944,635 | 1,814,239 | — | 1,940,707 |
-| csharp | sqlite | 844,423 | 1,537,260 | 296,681 | 1,022,166 |
-| java | sqlite | 732,161 | 1,449,726 | 582,282 | 1,485,673 |
-| go | sqlite | 827,133 | 1,747,453 | 349,602 | 642,191 |
+| rust | sqlite | 997,745 | 1,795,703 | 735,267 | 1,996,522 |
+| csharp | sqlite | 765,539 | 1,536,939 | 296,819 | 980,392 |
+| java | sqlite | 743,890 | 1,309,780 | 265,672 | 1,371,841 |
+| go | sqlite | 804,033 | 1,580,606 | 356,741 | 682,859 |
 | python | postgres | 278,075 | 1,892,520 | — | — |
 | rust | postgres | 482,822 | 2,078,465 | 77,045 | 2,091,423 |
 | csharp | postgres | 401,694 | 1,937,816 | 18,926 | 966,055 |
@@ -349,11 +349,14 @@ The **sqlite** rows and the sixteen databases from **mariadb** down were
 measured together in one pass, so they are comparable with each other. The
 sqlite rows **supersede** the ones this file was first published with (python
 382,310, rust 638,747, csharp 590,678, java 258,370, go 516,754 rows/s of ADBC
-ingest) — but they are not quite the same workload, because the four
-autocommit-off harnesses can no longer commit on this ODBC driver at all and had
-to be run with `ADBC_BENCH_AUTOCOMMIT=1`; see **sqlite** in the table below. The
-same knob is why **databend**, **doris**, **starrocks** and **ydb** have numbers
-at all.
+ingest). They are the full autocommit-off workload: the pass that first
+re-measured them had to run the four non-python harnesses with
+`ADBC_BENCH_AUTOCOMMIT=1` because of a harness bug (see **sqlite** in the table
+below), which was then fixed and the four rows re-taken with autocommit off —
+rust 997,745, csharp 765,539, java 743,890 and go 804,033 rows/s of ADBC ingest,
+within noise of the autocommit-on figures (944,635 / 844,423 / 732,161 /
+827,133). `ADBC_BENCH_AUTOCOMMIT=1` is why **databend**, **doris**, **starrocks**
+and **ydb** have numbers at all.
 
 ## Why a cell is empty
 
@@ -404,7 +407,7 @@ path; the ADBC columns are still the real measurement.
 | **db2** (go/csharp native fetch) | *Driver/client.* `alexbrainman/odbc` reports `SQLGetDiagRec failed: ret=-2`; both are the 32-bit `SQLLEN` again. The `odbc-api` numbers in the rust row are for the same reason not to be read as real throughput. |
 | **matrixone** (go native) | *Server.* MatrixOne rejects the quoted-identifier `INSERT`/`SELECT` that `database/sql` prepares with `SQL parser error`. |
 | **vertica** (csharp native fetch) | *Client.* `System.Data.Odbc` raises `Unable to cast object of type 'System.Int64' to type 'System.Int32'` — Vertica has one 64-bit integer type and the comparison reads it as `int`. |
-| **sqlite** (ran with `ADBC_BENCH_AUTOCOMMIT=1`) | *ODBC driver, tripped by the harness.* `drop_table()` in all four harnesses follows a failed `DROP TABLE` with `connection.rollback()` **and** a literal `ROLLBACK`, which MonetDB needs to clear an aborted transaction. `libsqlite3odbc.so` never issues `BEGIN` again after that literal `ROLLBACK`, so every later `COMMIT` fails with `[HY000] (1) [SQLite]cannot commit - no transaction is active` and the whole run reads `—` — as it does today for all four languages without the knob. The rows land: the ingest itself succeeds and `SELECT COUNT(*)` returns 10,000; it is only `SQLEndTran(SQL_COMMIT)` that errors. Gating the literal `ROLLBACK` on `rollback()` having failed fixes SQLite and breaks MonetDB, whose `SQLEndTran` returns success without clearing anything, so the workload was changed rather than the harness. In autocommit the rust row's *native ingest* is `—` for a second reason: `odbc-api`'s `ColumnarBulkInserter` writes into a transaction the comparison then cannot see, `wrong row count 0 != 10000`. |
+| **sqlite** | *Harness bug, fixed.* `drop_table()` in all four harnesses used to follow a failed `DROP TABLE` with `connection.rollback()` **and** a literal `ROLLBACK`, added for MonetDB. `libsqlite3odbc.so` never issues `BEGIN` again after that literal `ROLLBACK`, so every later `COMMIT` failed with `[HY000] (1) [SQLite]cannot commit - no transaction is active` and the whole run read `—` — the rows had landed (`SELECT COUNT(*)` returned 10,000); only `SQLEndTran(SQL_COMMIT)` errored. The literal `ROLLBACK` bought nothing: MonetDB's `SQLEndTran` is a no-op, so it is measured with `ADBC_BENCH_AUTOCOMMIT=1` and never reaches that branch. It is gone from all four harnesses, and the sqlite rows above are the full autocommit-off workload again, native columns included. |
 | **clickhouse** | *ODBC driver.* The 1.3–1.5k rows/s ADBC ingest is real and is the same in all five languages: clickhouse-odbc is on the bridge's no-array-binding list, so the ingest is one `INSERT` per row over HTTP. The native ingest is `—` because that comparison *does* array-bind — rust lands 2 of 10,000 rows (`wrong row count 2 != 10000`) and go's driver answers `SQLExecute: {HY000} Error while processing query …: HTTP status code: 501`. C# had to run with `ADBC_BENCH_NO_NATIVE=1`: with the comparison on, `bench_cs` printed nothing and was still running when it was killed at 600 s. |
 | **mariadb** (go native) | *Driver/client.* The `database/sql` read of 100,000 rows never returns. MariaDB's own `PROCESSLIST` shows the connection `Sleep` with no query in flight for 12 minutes while `bench_go` sits at 0.2% CPU, so the client is not waiting on the server. Run with `-no-native`; the ADBC columns are unaffected. Its first ADBC ingest also came out at 44,161 rows/s against 230k–257k for the other four languages, and re-ran at 257,292 — the low one was noise, and the second is what the table carries. |
 | **databend**, **doris**, **starrocks** (ran with `ADBC_BENCH_AUTOCOMMIT=1`) | *Server, surfaced by the ODBC driver.* None of the three has transactions, so MySQL Connector/ODBC rejects `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)` with `NotImplemented` and the autocommit-off connection never opens — the same failure as **greptimedb** above. With the knob all four languages measure. Their *native ingest* is `—` in every language for the same reason from the other side: the comparison opens its own transaction and gets `{HYC00} [MySQL][ODBC 9.4(w) Driver]Transactions are not enabled`. |

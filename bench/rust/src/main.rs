@@ -229,13 +229,11 @@ fn drop_table(connection: &mut ManagedConnection, names: &[String], autocommit: 
             if dropped {
                 let _ = connection.commit();
             } else {
+                // Not a literal ROLLBACK: after one, libsqlite3odbc never BEGINs
+                // again, so the ingest's final commit fails with "cannot commit - no
+                // transaction is active". MonetDB, whose SQLEndTran is a no-op, is
+                // measured with ADBC_BENCH_AUTOCOMMIT=1 and never reaches this branch.
                 let _ = connection.rollback();
-                // MonetDBODBClib's SQLEndTran does not clear an aborted transaction
-                // -- the next statement still fails with "Current transaction is
-                // aborted (please ROLLBACK)". A literal ROLLBACK does clear it, and
-                // is harmless where the driver manager already ended the
-                // transaction properly.
-                let _ = exec(connection, "ROLLBACK");
             }
         }
     }

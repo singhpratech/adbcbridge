@@ -449,20 +449,12 @@ internal static class Bench
                     }
                     else
                     {
+                        // Not a literal ROLLBACK: after one, libsqlite3odbc never
+                        // BEGINs again, so the ingest's final Commit fails with
+                        // "cannot commit - no transaction is active". MonetDB, whose
+                        // SQLEndTran is a no-op, is measured with
+                        // ADBC_BENCH_AUTOCOMMIT=1 and never reaches this branch.
                         session.Connection.Rollback();
-                        // MonetDBODBClib's SQLEndTran does not clear an aborted
-                        // transaction -- the next statement still fails with
-                        // "Current transaction is aborted (please ROLLBACK)". A
-                        // literal ROLLBACK does clear it, and is harmless where the
-                        // driver manager already ended the transaction properly.
-                        try
-                        {
-                            Execute(session, "ROLLBACK");
-                        }
-                        catch (Exception)
-                        {
-                            // Best effort.
-                        }
                     }
                 }
                 catch (Exception)

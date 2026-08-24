@@ -179,13 +179,11 @@ func dropTable(cnxn adbc.Connection, names []string, autocommit bool) {
 			if dropped {
 				_ = cnxn.Commit(ctx)
 			} else {
+				// Not a literal ROLLBACK: after one, libsqlite3odbc never BEGINs
+				// again, so the ingest's final Commit fails with "cannot commit - no
+				// transaction is active". MonetDB, whose SQLEndTran is a no-op, is
+				// measured with ADBC_BENCH_AUTOCOMMIT=1 and never reaches this branch.
 				_ = cnxn.Rollback(ctx)
-				// MonetDBODBClib's SQLEndTran does not clear an aborted transaction
-				// -- the next statement still fails with "Current transaction is
-				// aborted (please ROLLBACK)". A literal ROLLBACK does clear it, and is
-				// harmless where the driver manager already ended the transaction
-				// properly.
-				_ = adbcExec(cnxn, "ROLLBACK")
 			}
 		}
 	}

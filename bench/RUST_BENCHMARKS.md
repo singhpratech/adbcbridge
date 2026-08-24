@@ -79,7 +79,6 @@ in full.
 
 | Database | ADBC ingest | odbc-api ingest | Ingest × | ADBC fetch | odbc-api fetch | arrow-odbc fetch | Fetch × |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| sqlite (SQLite) | 944,635 | — | — | 1,814,239 | 1,940,707 | 1,787,753 | 0.9× |
 | postgres (PostgreSQL) | 482,822 | 77,045 | 6.3× | 2,078,465 | 2,091,423 | 1,951,012 | 1.0× |
 | timescaledb (PostgreSQL) | 362,032 | 26,462 | 13.7× | 1,913,228 | 1,966,551 | 1,752,925 | 1.0× |
 | azuresqledge (Microsoft SQL Server) | 130,239 | 68,266 | 1.9× | 2,407,563 | 2,885,924 | 2,864,614 | 0.8× |
@@ -123,3 +122,4 @@ in full.
 | influxdb3 (InfluxDB IOx) | — | — | — | — | — | — | — |
 | ydb (PostgreSQL) | 1,731 | — | — | 642,348 | — | — | — |
 | access (access) | — | — | — | — | — | — | — |
+| sqlite (SQLite) | 997,745 | 735,267 | 1.4× | 1,795,703 | 1,996,522 | 1,760,387 | 0.9× |
