@@ -42,7 +42,11 @@ def main(name):
     if not drv:
         sys.exit("conn.py: %s is unset, so %s cannot be reached" % (cfg["env"], name))
     prefix = name.upper()
-    uri = os.environ.get(prefix + "_CONN", cfg["conn"]).format(drv=drv)
+    # m.conn_uri applies the same substitutions the compat matrix does -- {drv},
+    # {drvdir} and the {plugin_dir} PLUGIN_DIR= setting MySQL Connector/ODBC needs
+    # to authenticate against a mysql_native_password server (TiDB, OceanBase,
+    # the MongoDB BI connector) -- and honours an existing <DB>_CONN.
+    uri = m.conn_uri(name, cfg, drv)
     ident = cfg.get("ident", lambda x: x)
     out = [
         (prefix + "_CONN", uri),

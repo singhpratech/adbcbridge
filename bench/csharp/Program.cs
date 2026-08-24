@@ -205,8 +205,17 @@ internal static class Bench
             return seconds;
         });
 
+        // ADBC_BENCH_NO_NATIVE: skip the System.Data.Odbc comparison entirely and
+        // leave its columns empty. Some ODBC drivers end the whole process from the
+        // plain ODBC path -- DuckDB's throws a C++ exception out of SQLExecute, which
+        // std::terminate turns into an abort no catch block sees -- and that would
+        // lose the ADBC numbers too. With this set the ADBC columns still land.
+        bool noNative = !string.IsNullOrEmpty(
+            Environment.GetEnvironmentVariable("ADBC_BENCH_NO_NATIVE"));
+        Step skipped = Step.Failed("skipped: ADBC_BENCH_NO_NATIVE");
+
         // 2. System.Data.Odbc ingest into the table ADBC's DDL created.
-        Step odbcIngest = Attempt(() =>
+        Step odbcIngest = noNative ? skipped : Attempt(() =>
         {
             using Session session = Session.Open(autoCommit: false);
             using OdbcConnection odbc = OdbcConnect();
@@ -240,7 +249,7 @@ internal static class Bench
                 using Session session = Session.Open(autoCommit: true);
                 return Repeat(reps, () => Timed(fetchRows, () => AdbcFetch(session, select)));
             });
-            odbcFetch = Attempt(() =>
+            odbcFetch = noNative ? skipped : Attempt(() =>
             {
                 using OdbcConnection odbc = OdbcConnect();
                 return Repeat(reps, () => Timed(fetchRows, () => OdbcFetch(odbc, select)));
@@ -350,8 +359,22 @@ internal static class Bench
         /// instead of handing the connection to a database's native ADBC driver,
         /// so the numbers describe this driver.
         /// </summary>
+        /// <summary>
+        /// ADBC_BENCH_AUTOCOMMIT: keep autocommit on even for the ingest steps.
+        /// MonetDBODBClib's SQLEndTran is a no-op, so a connection with autocommit
+        /// off never commits anything and the rows are gone by the time the fetch
+        /// step opens its own connection; on such a driver the only way to measure
+        /// the ingest at all is to let the bridge batch the stream itself, which is
+        /// what bench/matrix_bench.py does everywhere.
+        /// </summary>
+        private static readonly bool ForceAutoCommit =
+            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ADBC_BENCH_AUTOCOMMIT"));
+
+        internal static bool ForceAutoCommitting => ForceAutoCommit;
+
         public static Session Open(bool autoCommit)
         {
+            autoCommit = autoCommit || ForceAutoCommit;
             AdbcDriver driver = CAdbcDriverImporter.Load(DriverPath);
             AdbcDatabase database = driver.Open(new Dictionary<string, string>
             {
@@ -396,8 +419,10 @@ internal static class Bench
     /// </summary>
     private static void DropTable(Session session, string[] names, bool autoCommit)
     {
+        autoCommit = autoCommit || Session.ForceAutoCommitting;
         foreach (string name in names)
         {
+            bool dropped = true;
             try
             {
                 Execute(session, "DROP TABLE " + name);
@@ -405,16 +430,40 @@ internal static class Bench
             catch (Exception)
             {
                 // Expected when the table is not there.
+                dropped = false;
             }
 
             if (!autoCommit)
             {
                 try
                 {
-                    // A failed DROP leaves e.g. PostgreSQL in an aborted
-                    // transaction; ending it here keeps the next statement from
-                    // inheriting that.
-                    session.Connection.Commit();
+                    // A failed statement leaves the transaction aborted on
+                    // PostgreSQL and on MonetDB -- and MonetDB refuses to end that
+                    // with a COMMIT, insisting on a ROLLBACK ("Current transaction
+                    // is aborted (please ROLLBACK)"). Commit the spelling that
+                    // dropped, roll back the ones that did not, so the ingest's
+                    // CREATE TABLE starts from a clean transaction either way.
+                    if (dropped)
+                    {
+                        session.Connection.Commit();
+                    }
+                    else
+                    {
+                        session.Connection.Rollback();
+                        // MonetDBODBClib's SQLEndTran does not clear an aborted
+                        // transaction -- the next statement still fails with
+                        // "Current transaction is aborted (please ROLLBACK)". A
+                        // literal ROLLBACK does clear it, and is harmless where the
+                        // driver manager already ended the transaction properly.
+                        try
+                        {
+                            Execute(session, "ROLLBACK");
+                        }
+                        catch (Exception)
+                        {
+                            // Best effort.
+                        }
+                    }
                 }
                 catch (Exception)
                 {
@@ -440,7 +489,12 @@ internal static class Bench
             statement.ExecuteUpdate();
         }
 
-        session.Connection.Commit();
+        // Nothing to commit when ADBC_BENCH_AUTOCOMMIT put the connection in autocommit.
+        if (!Session.ForceAutoCommitting)
+        {
+            session.Connection.Commit();
+        }
+
         return Stopwatch.GetElapsedTime(start).TotalSeconds;
     }
 

@@ -134,6 +134,17 @@ public final class Bench {
   // --------------------------------------------------------------------- ADBC
 
   /** A JNI driver, database and connection opened over {@code libadbc_driver_odbc.so}. */
+  /**
+   * ADBC_BENCH_AUTOCOMMIT: keep autocommit on even for the ingest steps.
+   * MonetDBODBClib's SQLEndTran is a no-op, so a connection with autocommit off never
+   * commits anything and the rows are gone by the time the fetch step opens its own
+   * connection; on such a driver the only way to measure the ingest at all is to let the
+   * bridge batch the stream itself, which is what bench/matrix_bench.py does everywhere.
+   */
+  private static final boolean FORCE_AUTOCOMMIT =
+      System.getenv("ADBC_BENCH_AUTOCOMMIT") != null
+          && !System.getenv("ADBC_BENCH_AUTOCOMMIT").isEmpty();
+
   private static final class Session implements AutoCloseable {
     final BufferAllocator allocator;
     final AdbcDatabase database;
@@ -144,7 +155,8 @@ public final class Bench {
      * bridge on its own ODBC path instead of handing the connection to a database's native ADBC
      * driver, so the numbers describe this driver.
      */
-    Session(boolean autoCommit) throws Exception {
+    Session(boolean autoCommitIn) throws Exception {
+      boolean autoCommit = autoCommitIn || FORCE_AUTOCOMMIT;
       allocator = new RootAllocator();
       Map<String, Object> parameters = new HashMap<>();
       JniDriver.PARAM_DRIVER.set(parameters, driverPath);
@@ -199,18 +211,37 @@ public final class Bench {
    * DROP TABLE under every spelling of the name, ignoring failures: the table usually does not exist
    * yet, and a case-folding database answers to only one of the spellings.
    */
-  private static void dropTable(Session session, List<String> names, boolean autoCommit) {
+  private static void dropTable(Session session, List<String> names, boolean autoCommitIn) {
+    boolean autoCommit = autoCommitIn || FORCE_AUTOCOMMIT;
     for (String name : names) {
+      boolean dropped = true;
       try {
         execute(session.connection, "DROP TABLE " + name);
       } catch (Exception ignored) {
         // Expected when the table is not there.
+        dropped = false;
       }
       if (!autoCommit) {
         try {
-          // A failed DROP leaves e.g. PostgreSQL in an aborted transaction; ending
-          // it here keeps the next statement from inheriting that.
-          session.connection.commit();
+          // A failed statement leaves the transaction aborted on PostgreSQL and on
+          // MonetDB -- and MonetDB refuses to end that with a COMMIT, insisting on a
+          // ROLLBACK ("Current transaction is aborted (please ROLLBACK)"). Commit the
+          // spelling that dropped, roll back the ones that did not, so the ingest's
+          // CREATE TABLE starts from a clean transaction either way.
+          if (dropped) {
+            session.connection.commit();
+          } else {
+            session.connection.rollback();
+            // MonetDBODBClib's SQLEndTran does not clear an aborted transaction -- the
+            // next statement still fails with "Current transaction is aborted (please
+            // ROLLBACK)". A literal ROLLBACK does clear it, and is harmless where the
+            // driver manager already ended the transaction properly.
+            try {
+              execute(session.connection, "ROLLBACK");
+            } catch (Exception ignored) {
+              // Best effort.
+            }
+          }
         } catch (Exception ignored) {
           // Best effort.
         }
@@ -229,7 +260,10 @@ public final class Bench {
       stmt.bind(root);
       stmt.executeUpdate();
     }
-    session.connection.commit();
+    // Nothing to commit when ADBC_BENCH_AUTOCOMMIT put the connection in autocommit.
+    if (!FORCE_AUTOCOMMIT) {
+      session.connection.commit();
+    }
     return (System.nanoTime() - start) / 1e9;
   }
 
