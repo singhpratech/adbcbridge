@@ -252,6 +252,13 @@ install_name_tool -add_rpath <iodbc>/lib -add_rpath <connector>/lib <connector>/
 codesign -f -s - <connector>/lib/libmyodbc26w.so
 ```
 
+The connector itself: Oracle's download page is JavaScript-only and its `/get/` URL refuses
+`curl`; the "No thanks, just start my download" link fetches
+`mysql-connector-odbc-26.7.1-macos15-arm64.tar.gz`. Its bound wide parameters are not read the
+way its columns are written, so on a four-byte build the bridge binds text for this connector
+through the narrow UTF-8 path (`5a16131`) — at no measurable cost: 2.0M rows/s fetch on
+Databend either way.
+
 Then `Driver=<connector>/lib/libmyodbc26w.so;...` in the connection string, with
 `ADBC_ODBC_DRIVER` pointing at `build-iodbc/libadbc_driver_odbc.dylib`. One bridge build
 per driver manager: a unixODBC-built bridge for unixODBC drivers (psqlodbc, sqliteodbc,

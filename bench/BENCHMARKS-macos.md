@@ -331,14 +331,11 @@ compat sqlite      PASS  (SQLite (via ODBC) 3.51.0)
 compat postgres    PASS  (PostgreSQL (via ODBC) 15.15.0)
 ```
 
-Final macOS tally: **33 pass · 8 fail · 4 no driver for this OS · 1 server not runnable here**
-(46). The eight failures are all on the driver side of the ODBC API, before or beside any
-bridge code: four drivers that abort the process on the first failing statement (Virtuoso,
-Flight SQL, InfluxDB 3, Dremio — the same Flight SQL ODBC binary for three of them), two
-MariaDB Connector/ODBC connect-time `DUAL` probes (Databend, GreptimeDB) and two of its
-prepared/binary-literal path (Doris, StarRocks). The last four pass on Linux through MySQL's
-own Connector/ODBC, which has no arm64 macOS build; building it from source on arm64 is the
-one workaround that would change those four cells, and it is a driver build, not a bridge change.
+Final macOS tally: **37 pass · 4 fail · 4 no driver for this OS · 1 server not runnable here**
+(46). The four failures are drivers that abort the process on the first failing statement
+(Virtuoso, and the one Flight SQL ODBC binary behind Flight SQL, InfluxDB 3 and Dremio).
+Databend, GreptimeDB, Doris and StarRocks fail through MariaDB Connector/ODBC and pass through
+MySQL's own connector via an iODBC-built bridge (batch 4 below); both results are kept.
 
 ## Batch 3: tier 4, the MySQL-wire servers (main @ f9c27dc)
 
@@ -364,14 +361,49 @@ arm64-native. Load 3–7. Python columns are `matrix_bench.py` (10,000 / 100,000
 The one number to read from this table: **every MySQL-wire server fetches at 39–47k rows/s
 here, through the bridge and through pyodbc alike**, against 1.0–2.0M rows/s for the same
 servers on Linux. The bridge's own path is the same on both platforms; what differs is the
-client library — MariaDB Connector/ODBC on the Mac (MySQL's connector has no arm64 macOS
-build), MySQL Connector/ODBC on Linux — and pyodbc hitting the same ceiling puts it in the
-connector's fetch path. Ingest through the same connector runs 86–208k rows/s, 20–60× pyodbc.
+client library — MariaDB Connector/ODBC here, MySQL Connector/ODBC on Linux — and pyodbc
+hitting the same ceiling puts it in the connector's fetch path; batch 4 confirms it from the
+other side, with the same servers reading at 1.3–4.5M rows/s through MySQL's connector. Ingest through the same connector runs 86–208k rows/s, 20–60× pyodbc.
 
-That closes the macOS campaign: **33 pass, 8 fail (4 driver abort-on-error, 2 connector `DUAL` probe, 2 connector binary-literal/prepared path), 4 no driver for this OS, 1 server not runnable here** — 46, one result each, every non-pass with its first error.
+Tier 4 through this connector: **33 pass, 8 fail (4 driver abort-on-error, 2 connector `DUAL` probe, 2 connector binary-literal/prepared path)**; batch 4 below takes the four connector failures through MySQL's own connector.
 
 Also closed here: `ydb` on psqlodbc 16.00.0005 (`PostgreSQL (via ODBC) 14.0.5`): fetch
 541,823 (pyodbc 389,313), ingest 1,822 (array 1,781; pyodbc 94), with `ADBC_BENCH_AUTOCOMMIT=1`
 for the language harnesses. `go/monetdb` (autocommit on, `-no-native`); `go/db2` fetch stays
 empty — the harness's second `SQLDriverConnect` fails on the IBM clidriver every time while
 the other three languages reconnect fine.
+
+## Batch 4: the four MariaDB-connector failures through MySQL's own connector (main @ 5a16131)
+
+MySQL Connector/ODBC **26.7.1 for macOS arm64 exists** (Oracle renumbered 9.x → 26.x; the
+download page is JavaScript-only and its `/get/` URL refuses `curl`, so it is fetched through
+the "No thanks, just start my download" link) — and it is **built for iODBC**: `libmyodbc26w.so`
+links `@rpath/libiodbcinst.dylib`. It can only be used through a bridge built against iODBC;
+relinking it to unixODBC is not valid (4-byte vs 2-byte `SQLWCHAR`, every call fails with an
+empty diagnostic). That route exposed two bridge bugs, fixed on the way (`60b05e8`, `4280a9d`,
+`5a16131`; see `docs/TROUBLESHOOTING.md`): the wide-text codecs assumed 2-byte units, and this
+connector reads bound wide parameters inconsistently with how it writes columns, so on a
+4-byte build it now takes the narrow UTF-8 route.
+
+Recipe: iODBC 3.52.16 from the `openlink/iODBC` tag (`autogen`, `./configure --prefix=<iodbc>
+--disable-static --disable-gui`, `make install`); the bridge with `cmake -S . -B build-iodbc
+-DCMAKE_BUILD_TYPE=Release -DODBC_INCLUDE_DIR=<iodbc>/include -DODBC_LIBRARY=<iodbc>/lib/libiodbc.dylib`
+(clean, 0 warnings, `ctest --test-dir build-iodbc` 8/8 — compiled against the 4-byte
+`SQLWCHAR` for real); the connector with `xattr -c lib/*.so lib/*.dylib lib/plugin/*.so`,
+`install_name_tool -add_rpath <iodbc>/lib -add_rpath <connector>/lib lib/libmyodbc26w.so`,
+`codesign -f -s - lib/libmyodbc26w.so`, and `PLUGIN_DIR=<connector>/lib/plugin` (the entries'
+`{plugin_dir}`). Docker VM 16 GiB, load 1.3–3.2, `ADBC_BENCH_AUTOCOMMIT=1` for the harnesses.
+
+| entry | result | ADBC fetch | ADBC ingest (array) |
+|---|---|---:|---:|
+| databend | PASS (`MySQL (via ODBC) 8.0.90-v1.2.881`) | 2,034,078 | 13,157 (13,581) |
+| greptimedb | PASS (`MySQL (via ODBC) 8.4.2`) | 1,336,557 | 25,700 (23,501) |
+| doris | PASS (`MySQL (via ODBC) 5.7.99`), 300/2,000 rows, 2.86 GiB / 6 GiB | 261,990 | 1,197 (1,226) |
+| starrocks | PASS (`MySQL (via ODBC) 8.0.33`), 300/2,000 rows, 1.69 GiB / 5 GiB | 301,326 | 1,040 (1,026) |
+
+No pyodbc, odbc-api or arrow-odbc columns: those clients link unixODBC and cannot load an
+iODBC driver. Two things the numbers say. Databend and GreptimeDB read at 2.0M and 1.3M
+rows/s through this connector — the same Mac read every MySQL-wire server at 39–47k through
+MariaDB Connector/ODBC, which settles where that ceiling lives. And the narrow UTF-8 binding
+costs nothing measurable: the pre-fix build that bound narrow by a local patch read 2,234,246
+and 1,295,615 rows/s on the same two servers.

@@ -9,7 +9,7 @@ Desktop; the ones marked emulated are amd64 images under Rosetta-class emulation
 was never idle (1-minute load 2.4–10.5, recorded per entry in `BENCHMARKS-macos.md`), so read
 rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's, whose
 `alexbrainman/odbc` binding faults on every server here except SQLite, Access and Informix
-(the same failure the Linux file records). The campaign is complete: 144 cells, every empty one explained below.
+(the same failure the Linux file records). The campaign is complete: 164 cells, every empty one explained below.
 
 | Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
 |---|---|---:|---:|---:|---:|
@@ -165,6 +165,26 @@ rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's
 | go | ydb | 1,667 | 644,349 | — | — |
 | java | ydb | 1,703 | 625,175 | — | — |
 | csharp | ydb | 1,664 | 578,305 | — | — |
+| python | databend | 13,581 | 2,034,078 | — | — |
+| rust | databend | 12,813 | 2,205,864 | — | — |
+| go | databend | 13,510 | 2,197,599 | — | — |
+| java | databend | 13,387 | 2,039,526 | — | — |
+| csharp | databend | 13,844 | 2,214,070 | — | — |
+| python | greptimedb | 23,501 | 1,336,557 | — | — |
+| rust | greptimedb | 24,641 | 4,416,018 | — | — |
+| go | greptimedb | 24,618 | 4,499,530 | — | — |
+| java | greptimedb | 24,229 | 4,205,686 | — | — |
+| csharp | greptimedb | 25,772 | 4,411,933 | — | — |
+| python | doris | 1,226 | 261,990 | — | — |
+| rust | doris | 1,254 | 339,647 | — | — |
+| go | doris | 1,240 | 320,147 | — | — |
+| java | doris | 1,234 | 383,751 | — | — |
+| csharp | doris | 1,274 | 415,671 | — | — |
+| python | starrocks | 1,026 | 301,326 | — | — |
+| rust | starrocks | 976 | 380,261 | — | — |
+| go | starrocks | 999 | 371,267 | — | — |
+| java | starrocks | 994 | 418,027 | — | — |
+| csharp | starrocks | 996 | 445,097 | — | — |
 
 ## Why a cell is empty, and what was different on macOS
 
@@ -183,6 +203,5 @@ rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's
 | **oracle** | `NLS_LANG=.AL32UTF8` has to be in the environment before `libsqora` loads; the compat harness's in-process setting is too late on macOS. |
 | **mssql**, **postgres** | Python only so far; the four harnesses come with a later batch. |
 | **access**, **tdengine**, **mongodbbi** | read-only entries: fetch of the fixture only. |
-| **tidb**, **percona**, **dolt**, **matrixone**, **columnstore**, **oceanbase**, **mongodbbi** (tier 4) | Every MySQL-wire entry on this Mac goes through MariaDB Connector/ODBC 3.2.9 (arm64; MySQL's own Connector/ODBC has no arm64 macOS build), and **every one of them fetches at 39–47k rows/s in all five languages and in pyodbc alike** — against 1.0–2.0M rows/s for the same servers on Linux through MySQL Connector/ODBC. Six servers, six clients, one number: the ceiling is the connector's fetch path on this platform, not the servers and not the bridge (ingest through the same connector runs 86–208k rows/s). |
-| **databend**, **greptimedb** | FAIL at `SQLDriverConnect`, before any bridge code runs: MariaDB Connector/ODBC 3.2.9 probes `SELECT 1 FROM DUAL WHERE @@sql_mode LIKE '%ansi_quotes%'` at connect, and neither server has a `DUAL` table (`Unknown table "default"."default".DUAL`; `Table not found: greptime.public.dual`). Identical through pyodbc, with and without `NO_SSPS`; MySQL's Connector/ODBC on Linux does not issue the probe. |
-| **doris**, **starrocks** | FAIL at `SQLExecute` inside MariaDB Connector/ODBC's prepared / binary-literal path (Doris: server NPE on the prepared INSERT, then `_binary '<raw>'` rejected under `PREPONCLIENT=1`; StarRocks: syntax error at the inlined `_binary ''`). On Linux both pass through MySQL Connector/ODBC with `NO_SSPS=1`, for which libmaodbc has no equivalent. No language rows. |
+| **tidb**, **percona**, **dolt**, **matrixone**, **columnstore**, **oceanbase**, **mongodbbi** (tier 4) | Every MySQL-wire entry in tier 4 went through MariaDB Connector/ODBC 3.2.9 (arm64; MySQL's own connector for macOS arm64 exists — 26.7.1 — but is built for iODBC, see batch 4), and **every one of them fetches at 39–47k rows/s in all five languages and in pyodbc alike** — against 1.0–2.0M rows/s for the same servers on Linux through MySQL Connector/ODBC. Six servers, six clients, one number: the ceiling is the connector's fetch path on this platform, not the servers and not the bridge (ingest through the same connector runs 86–208k rows/s). |
+| **databend**, **greptimedb**, **doris**, **starrocks** | Two connectors, two results, both kept. Through MariaDB Connector/ODBC 3.2.9 all four FAIL inside the connector (the connect-time `DUAL` probe for the first two, the prepared/binary-literal path for the last two). Through MySQL's own Connector/ODBC 26.7.1 — Oracle's macOS arm64 binary, which is built for iODBC and so needs a bridge built against iODBC (`bench/BENCHMARKS-macos.md`, batch 4) — all four PASS in all five languages, the rows above. No pyodbc / odbc-api / arrow-odbc columns for them: those clients link unixODBC and cannot load an iODBC driver. And the MySQL-wire fetch ceiling below is the connector's: the same servers read at 1.3–4.5M rows/s through MySQL's connector. |
