@@ -7,9 +7,12 @@ Prints shell `export` lines for the Rust benchmark (`bench/rust/src/main.rs`), w
 knows nothing about the compat matrix and reads everything it needs out of the
 environment:
 
-    <DB>_CONN   the full ODBC connection string, with `{drv}` already substituted
-                from the database's `*_ODBC_DRIVER` variable (an existing <DB>_CONN
-                in the environment wins, as it does in matrix_bench.py)
+    <DB>_CONN   the full ODBC connection string, built by `test_matrix.conn_uri`, so
+                `{drv}`, `{drvdir}` and `{plugin}`/`{plugin_dir}` expand exactly as they
+                do for the compat matrix -- the MySQL-wire entries (Databend, Doris,
+                StarRocks, TiDB, ...) need the PLUGIN_DIR one to authenticate at all.
+                An existing <DB>_CONN in the environment wins, as it does in
+                matrix_bench.py.
     <DB>_TABLE  the benchmark table named the way SQL has to spell it -- the compat
                 matrix's `ident` hook, which upper-cases for Oracle and Db2
     <DB>_SETUP  per-connection setup statements, one per line (empty for most

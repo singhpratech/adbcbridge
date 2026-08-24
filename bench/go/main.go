@@ -273,6 +273,18 @@ func adbcCount(cnxn adbc.Connection, ident string) (int64, error) {
 			return col.Value(0), nil
 		case *array.Int32:
 			return int64(col.Value(0)), nil
+		// ClickHouse reports COUNT(*) as UInt64; the count never approaches
+		// math.MaxInt64, so the conversions below are safe.
+		case *array.Uint64:
+			return int64(col.Value(0)), nil
+		case *array.Uint32:
+			return int64(col.Value(0)), nil
+		case *array.Uint16:
+			return int64(col.Value(0)), nil
+		case *array.Uint8:
+			return int64(col.Value(0)), nil
+		case *array.Int16:
+			return int64(col.Value(0)), nil
 		case *array.Float64:
 			return int64(col.Value(0)), nil
 		case *array.String:
@@ -481,6 +493,11 @@ func main() {
 	rows := flag.Int("rows", 10000, "rows to ingest")
 	fetchRows := flag.Int("fetch-rows", 100000, "rows to read back")
 	reps := flag.Int("reps", 3, "timings to take the median of")
+	// Some ODBC drivers fault inside github.com/alexbrainman/odbc rather than
+	// returning an error -- MariaDB Connector/ODBC segfaults in SQLGetData -- which
+	// takes the whole process down and loses the ADBC columns with it. This skips
+	// the database/sql comparison so those stay measurable.
+	noNative := flag.Bool("no-native", false, "skip the database/sql comparison columns")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		die("expected a database name")
@@ -580,12 +597,14 @@ func main() {
 	// ODBC path -- DuckDB's segfaults inside SQLExecute, which no recover() can
 	// catch across cgo -- and that would lose the ADBC numbers too. With this set
 	// the ADBC columns are still measured.
-	noNative := os.Getenv("ADBC_BENCH_NO_NATIVE") != ""
-	skipped := step{err: "skipped: ADBC_BENCH_NO_NATIVE"}
+	// ADBC_BENCH_NO_NATIVE is -no-native by environment, which is how
+	// bench/langbench.sh sets it for every language at once.
+	skipNative := *noNative || os.Getenv("ADBC_BENCH_NO_NATIVE") != ""
+	skipped := step{err: "skipped: -no-native"}
 
 	// 2. database/sql ingest of the same rows into the table ADBC's DDL created.
 	odbcIngestStep := skipped
-	if !noNative {
+	if !skipNative {
 		odbcIngestStep = attempt(func() (float64, error) {
 			adbcDB, cnxn, err := adbcConnect(driver, uri, setup, false)
 			if err != nil {
@@ -645,7 +664,7 @@ func main() {
 			})
 		})
 		odbcFetchStep = skipped
-		if !noNative {
+		if !skipNative {
 			odbcFetchStep = attempt(func() (float64, error) {
 				sqlDB, err := odbcConnect(uri, setup)
 				if err != nil {

@@ -504,7 +504,12 @@ internal static class Bench
         using AdbcStatement statement = session.Connection.CreateStatement();
         statement.SqlQuery = sql;
         QueryResult result = statement.ExecuteQuery();
-        IArrowArrayStream stream = result.Stream
+        // `using`: the stream must be released on this thread, before the statement.
+        // Left to the GC, ArrowArrayStreamExporter's release callback runs on the .NET
+        // finalizer thread, and an ODBC driver whose client library is thread-affine
+        // (MySQL/MariaDB Connector/ODBC, whose libmysqlclient/libmariadb keeps a
+        // per-thread MEM_ROOT) segfaults inside SQLCloseCursor when it does.
+        using IArrowArrayStream stream = result.Stream
                                    ?? throw new InvalidOperationException("no result stream");
         int rows = 0;
         while (true)
@@ -531,7 +536,12 @@ internal static class Bench
         using AdbcStatement statement = session.Connection.CreateStatement();
         statement.SqlQuery = "SELECT COUNT(*) FROM " + ident;
         QueryResult result = statement.ExecuteQuery();
-        IArrowArrayStream stream = result.Stream
+        // `using`: the stream must be released on this thread, before the statement.
+        // Left to the GC, ArrowArrayStreamExporter's release callback runs on the .NET
+        // finalizer thread, and an ODBC driver whose client library is thread-affine
+        // (MySQL/MariaDB Connector/ODBC, whose libmysqlclient/libmariadb keeps a
+        // per-thread MEM_ROOT) segfaults inside SQLCloseCursor when it does.
+        using IArrowArrayStream stream = result.Stream
                                    ?? throw new InvalidOperationException("no result stream");
         while (true)
         {
@@ -551,6 +561,13 @@ internal static class Bench
             {
                 Int64Array a => a.GetValue(0) ?? 0,
                 Int32Array a => a.GetValue(0) ?? 0,
+                // ClickHouse reports COUNT(*) as UInt64; the count never approaches
+                // long.MaxValue, so these casts are safe.
+                UInt64Array a => (long)(a.GetValue(0) ?? 0),
+                UInt32Array a => a.GetValue(0) ?? 0,
+                UInt16Array a => a.GetValue(0) ?? 0,
+                UInt8Array a => a.GetValue(0) ?? 0,
+                Int16Array a => a.GetValue(0) ?? 0,
                 DoubleArray a => (long)(a.GetValue(0) ?? 0),
                 Decimal128Array a => (long)a.GetValue(0)!,
                 StringArray a => long.Parse(a.GetString(0)!.Trim(), CultureInfo.InvariantCulture),
