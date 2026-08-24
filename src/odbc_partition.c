@@ -836,15 +836,17 @@ static void PartitionsPublish(struct OdbcPartitionsState* st, struct AdbcPartiti
 // --- ExecutePartitions --------------------------------------------------------------
 
 // How many slices the caller asked for, resolved against what the table can offer.
-// Not inlined, deliberately.  MSVC 19.44 for x86 at /O2 /Ob2 miscompiles the inline
-// expansion of this function into its caller: for a mixed-sign key range whose span
-// fits in 32 bits while the operands do not (lo = -1,000,000, hi = 1,000,000) the
-// comparison below is narrowed and `want = span` is taken unconditionally, so the
-// partition count came back as 2,000,000 instead of 8.  /Od, /O1 and /O2 /Ob0 are all
-// correct, the function is correct as source, and every way of observing the value
-// (a print, a volatile) makes the bug vanish -- found by bisecting compiler flags on a
-// 32-bit Windows build (tests/c/test_partition.c covers the exact input).  Keeping the
-// call out of line is the one fix that does not depend on what the optimiser decides.
+// Not inlined, deliberately.  What was measured, on a 32-bit Windows build with MSVC
+// 19.44.35228 for x86 and NDEBUG held constant: at /Od, /O1 and /O2 /Ob0
+// tests/c/test_partition.c passes; at /O2 /Ob2 -- inline expansion on -- this function,
+// inlined into its caller, returned the key span (2,000,000) where 8 is correct, for
+// the one input whose span fits in 32 bits while the operands do not
+// (lo = -1,000,000, hi = 1,000,000).  Every way of observing the value (a print, a
+// volatile, AddressSanitizer -- which also reports no memory error) makes it correct,
+// and the failure could not be reproduced outside this translation unit, so the cause
+// is left open rather than named.  Keeping the call out of line is the one fix that
+// does not depend on what the optimiser decides, and the 32-bit CI job builds Release
+// so it stays covered.
 #if defined(_MSC_VER)
 __declspec(noinline)
 #elif defined(__GNUC__)

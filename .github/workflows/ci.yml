@@ -71,7 +71,7 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/dist"
 
       # Release, not Debug: the configuration people ship is the one that has to pass.
-      # An MSVC x86 /O2 /Ob2 miscompile was invisible to a Debug-only job.
+      # An x86 /O2 /Ob2 test failure (see ResolvePartitionCount) was invisible to a Debug-only job.
       - name: Configure (Windows x86)
         if: matrix.arch == 'Win32'
         run: cmake -S . -B build -A Win32 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/dist"
