@@ -74,13 +74,17 @@ jobs:
           mkdir -p natives/${{ matrix.rid }}
           cp build/libadbc_driver_odbc.so natives/${{ matrix.rid }}/
       - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           name: wheel-${{ matrix.rid }}
           path: wheelhouse/*.whl
+          retention-days: 7
       - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           name: native-${{ matrix.rid }}
           path: natives/
+          retention-days: 7
 
   macos:
     name: macOS arm64
@@ -101,21 +105,29 @@ jobs:
       - name: Build and repair the wheel
         run: |
           python -m pip install --upgrade build delocate
-          ADBCBRIDGE_LIBRARY=$PWD/build/libadbc_driver_odbc.dylib python -m build --wheel python -o wheelhouse-raw
-          delocate-wheel --exclude libodbc -w wheelhouse -v wheelhouse-raw/*.whl
+          # setup-python's macOS interpreter is a universal2 build, which would tag
+          # the wheel universal2 and make delocate demand an x86_64 slice; the
+          # library is arm64 only, so say so.
+          _PYTHON_HOST_PLATFORM=macosx-14.0-arm64 ADBCBRIDGE_LIBRARY=$PWD/build/libadbc_driver_odbc.dylib \
+            python -m build --wheel python -o wheelhouse-raw
+          delocate-wheel --exclude libodbc --require-archs arm64 -w wheelhouse -v wheelhouse-raw/*.whl
           ls -l wheelhouse
       - name: Stage the bare library
         run: |
           mkdir -p natives/osx-arm64
           cp build/libadbc_driver_odbc.dylib natives/osx-arm64/
       - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           name: wheel-osx-arm64
           path: wheelhouse/*.whl
+          retention-days: 7
       - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           name: native-osx-arm64
           path: natives/
+          retention-days: 7
 
   windows:
     name: Windows x64
@@ -142,13 +154,17 @@ jobs:
           mkdir -p natives/win-x64
           cp build/Release/libadbc_driver_odbc.dll natives/win-x64/
       - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           name: wheel-win-x64
           path: wheelhouse/*.whl
+          retention-days: 7
       - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           name: native-win-x64
           path: natives/
+          retention-days: 7
 
   sdist:
     name: Source distribution
@@ -162,9 +178,11 @@ jobs:
           python -m pip install --upgrade build
           python -m build --sdist python -o sdist
       - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
         with:
           name: sdist
           path: sdist/*.tar.gz
+          retention-days: 7
 
   release:
     name: GitHub Release
