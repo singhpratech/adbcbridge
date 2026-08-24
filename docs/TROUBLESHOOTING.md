@@ -171,3 +171,40 @@ fixture libraries (`tests/c/tls_dep.c`, `tests/c/tls_user.c`) — one standing i
 for libstdc++, one for a driver that needs it in static TLS — so the diagnostic
 can be tested on any glibc host without depending on which drivers or Python
 packages happen to be installed.
+
+## Windows: non-ASCII text arrives mangled, or pyarrow raises `UnicodeDecodeError`
+
+Symptoms seen on Windows 11 with builds before `d364312` (2026-08-24):
+
+- a literal in statement text stored double-encoded — `INSERT ... VALUES ('héllo')` put
+  `hÃ©llo` (`68c383c2a96c6c6f`) in the table, `WHERE s = 'héllo'` matched nothing, a
+  `CREATE TABLE "tabelle_ä"` created `tabelle_Ã¤`, and `日本語` was best-fit mapped to other
+  characters and lost;
+- a column named `prix_€` came back as the byte `0x80`, and `fetch_arrow_table()` raised
+  `UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80`;
+- with psqlodbc against a UTF8 database, `SELECT 'héllo'::varchar` raised
+  `UnicodeDecodeError: byte 0xe9` and `SELECT '日本語'::text` returned `???`.
+
+Cause: the Windows driver manager transcodes every *narrow* (`SQLCHAR*`, `SQL_C_CHAR`)
+string between the driver and the process's ANSI code page (1252 on a Western install).
+unixODBC and iODBC pass narrow bytes through untouched, so on Linux and macOS the narrow
+entry points and the `SQL_C_CHAR` fetch path carry UTF-8 end to end, and adbcbridge was
+written on that assumption. Bound parameters and `SQL_WCHAR` columns were always correct
+(they are UTF-16), which is what hid both halves for as long as it did.
+
+Fix, in the driver: on `_WIN32` statement text, catalog names, column and type names and
+diagnostics go through the `W` entry points (`src/odbc_text.c`, `44c4926`), and every
+character column — whatever the driver calls it — is read as `SQL_C_WCHAR` and converted,
+with the `wchar_as_utf8` quirk (whose premise is the narrow-path-is-UTF-8 assumption)
+forced off there (`9c07f78`). Verified byte-exact against PostgreSQL 16 on Windows 11 for
+`héllo` and `日本語` through both `varchar` and `text`.
+
+How to check a build: `python tests\test_windows_text.py` (needs the SQLite ODBC driver)
+must print `all passed`; the compat workload's statement-literal step
+(`WHERE s LIKE 'héllo%'`) fails on any entry whose text path is wrong.
+
+A driver that reports `column_size` in *bytes* rather than characters would over-allocate
+the wide buffer harmlessly; one that under-reports would truncate — none of SQLite,
+DuckDB, msodbcsql or psqlodbc does either. If a text column on Windows comes back
+truncated, that is where to look.
+
