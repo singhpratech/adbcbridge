@@ -976,6 +976,44 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // Only consulted once the plain form has actually been refused, so a future Oracle
     // that grows one would simply use it.
     conn->reader_opts.multirow_insert_all = true;
+    // SQORA cannot be told a new SQL_ATTR_ROW_ARRAY_SIZE once a cursor is open.  Raising
+    // it on a cursor holding a LOB column segfaults inside the driver on the next
+    // SQLFetch -- bcoReturnColData dereferences a null entry of the per-rowset LOB state
+    // it sized when the statement was executed (SQLFetch -> bcoSQLFetch -> bcoSQLScroll
+    // -> bcoCacheFetch -> bcoCacheFetchNext -> bcoCacheReturnData -> bcoReturnUserData
+    // -> bcoReturnColData, all in libsqora 23.9).  Reproduced with plain SQLBindCol and
+    // SQLFetch and nothing else: a 20,000-row (NUMBER, CLOB) cursor fetched at 128 rows
+    // and then raised to 1,024 dies on the fetch after the raise, while the same cursor
+    // held at either size reads every row.  AddressSanitizer, which sees the driver's
+    // own allocations, reports no overflow of any buffer this driver hands out -- the
+    // fault is a read of address 0x1d8 inside libsqora, so there is nothing a caller can
+    // bind differently to avoid it.  Lowering the size is not safe either, and does not
+    // even crash: it ends the result set early and silently (100,000 rows of
+    // (TIMESTAMP, NUMBER, VARCHAR2) come back as 14,336 when the array size drops from
+    // 1,024 to 128 mid-cursor), which is worse than a crash.
+    //   So the reader settles the rowset before the first fetch and never moves it: no
+    // probe-then-restore for the bind-width adaptation, no collapse to one row to repair
+    // a rowset.  Every result set here is fetched at the one size it was given before its
+    // first row.
+    conn->reader_opts.fixed_rowset = true;
+    // SQORA reports SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER and honours none of
+    // the first: SQLGetData against a cursor whose SQL_ATTR_ROW_ARRAY_SIZE is above 1
+    // fails outright with HY109 "Invalid cursor position", and SQLSetPos(SQL_POSITION)
+    // fails with HY109 at *every* array size, one included.  So a value that outgrew its
+    // bound buffer cannot be re-read where it sits; and with SQL_CA1_ABSOLUTE absent from
+    // SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1 -- SQLFetchScroll(SQL_FETCH_ABSOLUTE) answers
+    // HY106, "Fetch type out of range" -- it cannot be re-read by going back to its row
+    // either.  Nothing repairs a truncated value on this driver, so a column whose
+    // declared width is a type maximum rather than a real bound stays unbound and is read
+    // with SQLGetData, which does work once the cursor holds a single row.
+    //   That is the whole cost of these two quirks, and it falls on exactly one shape of
+    // result set: one that selects a LOB column (CLOB, NCLOB, BLOB and LONG are all
+    // SQL_LONGVARCHAR/SQL_LONGVARBINARY of column_size 2,147,483,647 here) reads a row at
+    // a time instead of a rowset at a time.  It buys correctness for every CLOB width:
+    // bound, the driver clips a value longer than adbc.odbc.long_bind_bytes to a prefix
+    // and has no way to hand back the rest.  Result sets with no LOB column -- NUMBER,
+    // VARCHAR2, DATE, TIMESTAMP, RAW -- keep the full block cursor and are untouched.
+    conn->reader_opts.getdata_repair = false;
   }
   if (strstr((const char*)name, "msodbcsql")) {
     // SQLGetTypeInfo(SQL_LONGVARCHAR) answers "text", which is what generated ingest DDL
