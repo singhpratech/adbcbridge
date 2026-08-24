@@ -15,6 +15,10 @@
 #include "test_common.h"
 
 // Convert UTF-16 code units to UTF-8 through AppendUtf16 and compare.
+// The inputs are written as UTF-16 units.  When this test is built with a four-byte
+// SQLWCHAR (unixODBC's SQL_WCHART_CONVERT, the width iODBC always has) the same
+// text is fed as one code point per unit, which is what such a driver manager
+// carries; a lone surrogate stays a lone unit so the U+FFFD cases hold either way.
 static void CheckUtf16(const uint16_t* units, size_t n, const char* expected) {
   struct ArrowArray arr;
   struct ArrowArrayView view;
@@ -23,7 +27,20 @@ static void CheckUtf16(const uint16_t* units, size_t n, const char* expected) {
   SQLWCHAR w[64];
 
   CHECK_TRUE(n <= sizeof(w) / sizeof(w[0]));
-  for (size_t i = 0; i < n; i++) w[i] = (SQLWCHAR)units[i];
+  if (sizeof(SQLWCHAR) < 4) {
+    for (size_t i = 0; i < n; i++) w[i] = (SQLWCHAR)units[i];
+  } else {
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+      uint32_t cp = units[i];
+      if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < n && units[i + 1] >= 0xDC00 && units[i + 1] <= 0xDFFF) {
+        cp = 0x10000 + ((cp - 0xD800) << 10) + (units[i + 1] - 0xDC00);
+        i++;
+      }
+      w[k++] = (SQLWCHAR)cp;
+    }
+    n = k;
+  }
 
   CHECK_I64(ArrowArrayInitFromType(&arr, NANOARROW_TYPE_STRING), NANOARROW_OK);
   CHECK_I64(ArrowArrayStartAppending(&arr), NANOARROW_OK);
@@ -44,8 +61,9 @@ static void CheckUtf16(const uint16_t* units, size_t n, const char* expected) {
 }
 
 static void TestUtf16(void) {
-  // unixODBC's SQLWCHAR is a 16-bit unit; the conversion assumes UTF-16.
-  CHECK_I64(sizeof(SQLWCHAR), 2);
+  // Two-byte SQLWCHAR (unixODBC, Windows) carries UTF-16; four-byte (iODBC, or
+  // unixODBC with SQL_WCHART_CONVERT) carries one code point per unit.
+  CHECK_TRUE(sizeof(SQLWCHAR) == 2 || sizeof(SQLWCHAR) == 4);
 
   const uint16_t empty[1] = {0};
   CheckUtf16(empty, 0, "");

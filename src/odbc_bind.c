@@ -70,8 +70,12 @@ static void CivilFromDays(int64_t z, int* y, unsigned* m, unsigned* d) {
   *y = (int)(yy + (*m <= 2));
 }
 
-// UTF-8 -> UTF-16 into `o`, which must hold at least Utf16Units(s, n) + 1 units.
-// NUL-terminates and returns the number of units written.
+// UTF-8 -> SQLWCHAR units into `o`, which must hold at least Utf16Units(s, n) + 1
+// units.  NUL-terminates and returns the number of units written.  A driver manager
+// whose SQLWCHAR is two bytes (unixODBC, Windows) takes UTF-16, surrogate pairs and
+// all; one whose SQLWCHAR is wchar_t (iODBC: four bytes) takes one code point per
+// unit, i.e. UTF-32 -- writing UTF-16 into four-byte slots is how a statement reaches
+// the server as garbage after the first non-ASCII character.
 int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
   int64_t k = 0;
   for (int64_t i = 0; i < n;) {
@@ -84,7 +88,7 @@ int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
     else if ((c & 0xF8) == 0xF0 && i + 3 < n) { cp = ((c & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) | ((s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F); len = 4; }
     else { cp = 0xFFFD; len = 1; }
     i += len;
-    if (cp >= 0x10000) {
+    if (cp >= 0x10000 && sizeof(SQLWCHAR) < 4) {
       cp -= 0x10000;
       o[k++] = (SQLWCHAR)(0xD800 + (cp >> 10));
       o[k++] = (SQLWCHAR)(0xDC00 + (cp & 0x3FF));
@@ -96,7 +100,7 @@ int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
   return k;
 }
 
-// How many UTF-16 units OdbcUtf8ToUtf16Into would write for this UTF-8 string.
+// How many SQLWCHAR units OdbcUtf8ToUtf16Into would write for this UTF-8 string.
 static int64_t Utf16Units(const char* s, int64_t n) {
   int64_t k = 0;
   for (int64_t i = 0; i < n;) {
@@ -109,7 +113,7 @@ static int64_t Utf16Units(const char* s, int64_t n) {
     else if ((c & 0xF8) == 0xF0 && i + 3 < n) { len = 4; pair = true; }
     else { len = 1; }
     i += len;
-    k += pair ? 2 : 1;
+    k += (pair && sizeof(SQLWCHAR) < 4) ? 2 : 1;
   }
   return k;
 }

@@ -311,4 +311,42 @@ if(ADBC_ODBC_BUILD_TESTS)
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
   endforeach()
+
+  # The same wide-text test with a four-byte SQLWCHAR: unixODBC's headers switch to
+  # wchar_t under SQL_WCHART_CONVERT, which is the width iODBC always has, so this
+  # proves the UTF-8 <-> SQLWCHAR codecs on a build like the macOS-with-iODBC one
+  # without needing iODBC here.  Only meaningful with unixODBC's headers.
+  get_target_property(_odbc_inc ODBC::ODBC INTERFACE_INCLUDE_DIRECTORIES)
+  if(NOT _odbc_inc)
+    set(_odbc_inc "${ODBC_INCLUDE_DIR}")
+  endif()
+  set(_sqltypes "")
+  foreach(_d IN LISTS _odbc_inc)
+    if(EXISTS "${_d}/sqltypes.h")
+      set(_sqltypes "${_d}/sqltypes.h")
+    endif()
+  endforeach()
+  if(_sqltypes STREQUAL "" AND EXISTS "/usr/include/sqltypes.h")
+    set(_sqltypes "/usr/include/sqltypes.h")
+  endif()
+  if(NOT _sqltypes STREQUAL "")
+    file(STRINGS "${_sqltypes}" _wchart_lines REGEX "SQL_WCHART_CONVERT")
+    if(_wchart_lines)
+      foreach(wide_test IN ITEMS test_utf16 test_multirow)
+        set(wide_target ${wide_test}_wchar32)
+        add_executable(${wide_target}
+          tests/c/${wide_test}.c
+          src/utils.c
+          src/odbc_text.c
+          vendor/nanoarrow/nanoarrow.c)
+        target_include_directories(${wide_target} PRIVATE include vendor src tests/c)
+        target_compile_definitions(${wide_target} PRIVATE ADBC_EXPORTING NANOARROW_DLL= SQL_WCHART_CONVERT)
+        target_link_libraries(${wide_target} PRIVATE ODBC::ODBC Threads::Threads ${CMAKE_DL_LIBS})
+        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+          target_compile_options(${wide_target} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+        endif()
+        add_test(NAME ${wide_target} COMMAND ${wide_target})
+      endforeach()
+    endif()
+  endif()
 endif()

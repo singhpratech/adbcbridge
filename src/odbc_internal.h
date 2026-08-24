@@ -372,8 +372,11 @@ struct OdbcReaderOptions {
   bool sqllen_32bit;
   // True once a user option pinned sqllen_32bit; suppresses autodetection.
   bool sqllen_32bit_forced;
-  // Driver quirk: the driver's SQLWCHAR is wchar_t (4 bytes on Linux) while unixODBC
-  // passes UTF-16 (Firebird OdbcFb): a bound SQL_C_WCHAR parameter is truncated to
+  // Driver quirk: the driver's SQLWCHAR width differs from the driver manager's this
+  // library was compiled against -- e.g. a driver built with wchar_t (4-byte) SQLWCHAR
+  // loaded through unixODBC (Firebird OdbcFb). (A bridge compiled against iODBC uses
+  // 4-byte units throughout, so an iODBC-built vendor driver needs no quirk there.)
+  // Symptom: a bound SQL_C_WCHAR parameter is truncated to
   // byte_length/4 characters ("héllo 🚀" stores as "héll") and fetched wide columns come
   // back as UTF-32. Use the narrow SQL_C_CHAR path instead, which is UTF-8 when the
   // connection is opened with CHARSET=UTF8.
