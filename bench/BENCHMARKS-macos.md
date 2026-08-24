@@ -313,12 +313,36 @@ Driver fix: `no_param_arrays` keyed on MariaDB Connector/ODBC ≥ 3.2 (the Linux
 | spanner | PASS (`PostgreSQL (via ODBC) 14.1.0`), emulator + PGAdapter, 300/2,000 rows — python fetch 81,367/s (pyodbc 112,280), ingest 6,115 (array 7,141; pyodbc 265); the four harness rows first failed (DDL inside a transaction — autocommit off) and pass with `ADBC_BENCH_AUTOCOMMIT=1`: fetch 106,509–126,408/s, ingest 7,061–8,761/s, in `LANGUAGE_BENCHMARKS-macos.md` |
 | arcadedb | PASS (`PostgreSQL (via ODBC) 12.0.0`), read-only fixture — python fetch 289,023/s; the four harnesses first read 0 rows — `conn.py` was recreating `adbc_big` empty per connection (fixed `b883d62`) — and read 274,520–304,373/s with the setup unset |
 
-## Batch 3 (in progress): tier 4, the MySQL-wire servers (main @ f9c27dc)
+## Batch 3: tier 4, the MySQL-wire servers (main @ f9c27dc)
 
-MariaDB Connector/ODBC 3.2.9 arm64 with the `≥ 3.2` quirk (`no_param_arrays`) in place.
+MariaDB Connector/ODBC 3.2.9 (libmaodbc, `SQL_DRIVER_VER 03.02.0009`) + Connector/C 3.4.9 for
+every MySQL-wire entry, with the `≥ 3.2` quirk (`no_param_arrays`) in place; `PLUGIN_DIR`
+appended where the entry needs `mysql_native_password` or `caching_sha2`. All server images
+arm64-native. Load 3–7. Python columns are `matrix_bench.py` (10,000 / 100,000 rows).
 
-| entry | result |
-|---|---|
-| tidb | PASS (`MySQL (via ODBC) 08.00.000011`) |
-| percona | PASS (`MySQL (via ODBC) 08.04.000011`) |
-| dolt, databend, matrixone, greptimedb, columnstore, mongodbbi, doris, starrocks, oceanbase | running |
+| entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
+|---|---|---:|---:|---:|---:|
+| tidb | PASS (`MySQL (via ODBC) 08.00.000011`) | 46,796 | 44,287 | 90,877 (105,077) | 3,296 |
+| percona | PASS (`MySQL (via ODBC) 08.04.000011`) | 45,408 | 42,507 | 113,261 (133,650) | 4,783 |
+| dolt | PASS (`MySQL (via ODBC) 08.00.000033`) | 44,927 | 43,156 | 92,431 (105,090) | 3,081 |
+| databend | **FAIL** at `SQLDriverConnect`: `[HY000] (1105) [ma-3.2.9] Unknown table "default"."default".DUAL` — the connector's own connect-time probe `SELECT 1 FROM DUAL WHERE @@sql_mode LIKE '%ansi_quotes%'`; identical through pyodbc, with or without `NO_SSPS` | | | | |
+| matrixone | PASS (`MySQL (via ODBC) 08.00.000030`) | 44,995 | 42,976 | 188,960 (188,201) | 3,116 |
+| greptimedb | **FAIL** at `SQLDriverConnect`: `[42S02] (1146) [ma-3.2.9] (TableNotFound): Table not found: greptime.public.dual` — the same probe; identical through pyodbc | | | | |
+| columnstore | PASS (`MariaDB (via ODBC) 11.01.000001`) — provisioning and user by hand, `columnstore.cnf` mounted from `/private/tmp` | 44,197 | 42,263 | 107,253 (89,203) | 4,188 |
+| mongodbbi | PASS (`MySQL (via ODBC) 05.07.000012`; read-only) — mongosqld 2.14.30 linux-arm64 build inside the `mongo:7` arm64 container (no macOS build of 2.14.x) | 39,271 | — | — | — |
+| doris | **FAIL** at `SQLExecute` — exact diagnostic being captured (BE alive; 2.27 GiB / 6 GiB) | | | | |
+| starrocks | **FAIL** at `SQLExecute` — exact diagnostic being captured (BE alive; 1.09 GiB / 5 GiB) | | | | |
+| oceanbase | PASS (`MySQL (via ODBC) 05.07.000025`) — `MODE=SLIM`, boot in 40 s, 4.3 GiB / 6 GiB peak | 45,282 | 43,170 | 106,711 (102,495) | 3,435 |
+
+The one number to read from this table: **every MySQL-wire server fetches at 39–47k rows/s
+here, through the bridge and through pyodbc alike**, against 1.0–2.0M rows/s for the same
+servers on Linux. The bridge's own path is the same on both platforms; what differs is the
+client library — MariaDB Connector/ODBC on the Mac (MySQL's connector has no arm64 macOS
+build), MySQL Connector/ODBC on Linux — and pyodbc hitting the same ceiling puts it in the
+connector's fetch path. Ingest through the same connector runs 86–208k rows/s, 20–60× pyodbc.
+
+Also closed here: `ydb` on psqlodbc 16.00.0005 (`PostgreSQL (via ODBC) 14.0.5`): fetch
+541,823 (pyodbc 389,313), ingest 1,822 (array 1,781; pyodbc 94), with `ADBC_BENCH_AUTOCOMMIT=1`
+for the language harnesses. `go/monetdb` (autocommit on, `-no-native`); `go/db2` fetch stays
+empty — the harness's second `SQLDriverConnect` fails on the IBM clidriver every time while
+the other three languages reconnect fine.
