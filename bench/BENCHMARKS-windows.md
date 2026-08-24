@@ -131,12 +131,17 @@ prune -af` between entries.
 | yugabyte | PASS (`PostgreSQL (via ODBC) 15.12.0`), YugabyteDB 2026.1.1.1 at `--memory=1536m` with the compose memory flags, 278 MB used | 181,786 | 128,431 | 9,768 (10,579) | 528 |
 | opengauss | PASS (`PostgreSQL (via ODBC) 9.2.4`), openGauss 6.0.0 at `--memory=1536m` (503 MB used; the compose 3 GB is not needed), `--shm-size=1g --cap-add SYS_NICE` | 196,872 | 103,289 | 61,544 (58,290) | 1,035 |
 | databend | **FAIL** at the astral check only: `héllo 🚀` stored byte-exact on every write path, read back as `héllo ???` on every read path including pyodbc — Connector/ODBC 8.4.0 decodes Databend's result sets as 3-byte `utf8`, since Databend implements neither `@@character_set_client` nor `@@character_set_connection` (both 0) and ignores `charset=`; the same driver reads 🚀 from MySQL, TiDB, Percona and MariaDB; Linux passes on 9.4. Everything else passes | 334,776 | — | 7,538 (7,705) | — |
+| greptimedb | **FAIL** at the astral check only — same signature; GreptimeDB 1.1.4, 41 MB | 224,755 | 101,186 | 62,007 (50,294) | — |
+| matrixone | **FAIL** at the astral check only — same signature; MatrixOne v4.2.0, `NO_SSPS=1` needed, 405 MB | 484,587 | 235,948 | 32,259 (34,868) | 683 |
+
+**A class, not three incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone. Everything else in
+their workloads passes, and their read rates are among the best on this machine.
 
 openGauss operator note: the `adbc` role must be created *inside* the container as `omm` via
 `gsql`, as the compat README's recipe says — a role created over a remote `psql` session
 authenticates locally but every remote MD5 login then fails with `FATAL: Invalid
-username/password,login denied`. `NO_SSPS=1` tally so far: needed on tidb, mariadb and dolt;
-already in the entry for databend and greptimedb; not needed on percona.
+username/password,login denied`. `NO_SSPS=1` tally so far: needed on tidb, mariadb, dolt and
+matrixone; already in the entry for databend and greptimedb; not needed on percona.
 
 **A Windows-only environment fact, found by CrateDB:** Windows has no system time-zone
 database, so pyarrow's timestamp-with-timezone conversion raises `ArrowInvalid: The
