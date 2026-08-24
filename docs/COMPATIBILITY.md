@@ -196,7 +196,7 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | questdb | PASS | PASS (QuestDB, PostgreSQL wire 11.3) | pending |
 | risingwave | PASS | PASS (RisingWave, PostgreSQL wire 13.14) — compose bind-mount of risingwave.toml refused by Docker Desktop for this account; run with the README's `docker run` and the toml under /private/tmp | pending |
 | spanner | PASS | PASS (Spanner emulator + PGAdapter, PostgreSQL wire 14.1; 300/2,000 rows as on Linux) | pending |
-| firebird | PASS | driver unavailable: firebird-odbc-driver v3-0-1 ships Linux and Windows assets only | pending |
+| firebird | PASS | driver unavailable: firebird-odbc-driver v3-0-1 ships Linux and Windows assets only | server not runnable here: Firebird 5's `security5.fdb.sample` ships with no SYSDBA, and creating one through the embedded engine as a non-administrator fails (`no permission for INSERT access to TABLE PLG$SRP_VIEW`); running the server as administrator is the documented route and this box has no such account for it. The ODBC driver itself (3.5.0-rc1 win-x64) installed and registered |
 | virtuoso | PASS | FAIL: the driver (virtodbcu_r.so, Homebrew 7.2.17) aborts the process with SIGABRT inside SQLExecDirect on the first failing statement — isql and raw ODBC die identically, pyodbc's W connect survives | pending |
 | flightsql | PASS | FAIL: Arrow Flight SQL ODBC 0.9.7 (armv8 dmg) aborts the process with SIGABRT inside SQLExecDirect on the first failing statement — isql, raw ODBC and pyodbc die identically | pending |
 | arcadedb | PASS | PASS (ArcadeDB, PostgreSQL wire 12.0.0; read-only fixture) | pending |

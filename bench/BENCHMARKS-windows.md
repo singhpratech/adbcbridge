@@ -114,21 +114,32 @@ same way. Verified at `d364312`: all four probes byte-exact (`68c3a96c6c6f`,
 `ctest` 7/7, zero warnings. No truncation or doubling seen on these four drivers, whose
 `column_size` is in characters; drivers that report bytes are the ones to watch next.
 
-### Five languages, one database (`bench/*/run.sh sqlite`, ROWS=10000 FETCH_ROWS=100000 REPS=1)
+### Five languages, five databases (`bench/*/run.sh`, ROWS=10000 FETCH_ROWS=100000 REPS=1)
 
-The full grid runs on Windows: [`LANGUAGE_BENCHMARKS-windows.md`](LANGUAGE_BENCHMARKS-windows.md).
-First cells, SQLite, adbcbridge ingest / fetch rows/s and then the language's own ODBC client:
+**24 of 25 cells** on Windows: [`LANGUAGE_BENCHMARKS-windows.md`](LANGUAGE_BENCHMARKS-windows.md).
+adbcbridge ingest / fetch rows/s, single samples on the 4-core laptop:
 
-| language | ADBC ingest | ADBC fetch | native ingest | native fetch | native client |
-|---|---:|---:|---:|---:|---|
-| python | 209,082 | 456,214 | 146,264 | 254,287 | pyodbc |
-| go | 266,413 | 426,972 | 119,186 | 268,775 | alexbrainman/odbc |
-| rust | 196,713 | 414,294 | 243,985 | 485,325 | odbc-api (arrow-odbc fetch 404,126) |
-| csharp | 177,166 | 223,620 | 64,308 | 170,062 | System.Data.Odbc |
-| java | 80,041 | 216,175 | 25,177 | 362,294 | JDBC (sqlite-jdbc, not ODBC) |
+| database | python | go | rust | csharp | java |
+|---|---:|---:|---:|---:|---:|
+| sqlite | 161,088 / 456,214 | 235,899 / 456,975 | 222,957 / 429,941 | 238,109 / 427,553 | 157,071 / 408,076 |
+| duckdb | 73,952 / 592,742 | 64,308 / 554,729 | abort (driver's C++ exception) | 61,744 / 498,014 | 56,400 / 517,045 |
+| mssql | 36,209 / 583,138 | 56,362 / 652,627 | 46,963 / 745,551 | 60,126 / 701,911 | 34,237 / 573,710 |
+| postgres | 151,542 / 235,955 | 214,632 / 440,254 | 164,864 / 429,818 | 225,977 / 445,502 | 114,210 / 387,586 |
+| mysql | 42,144 / 397,443 | 37,381 / 467,658 | 42,398 / 489,120 | 41,557 / 492,964 | 30,400 / 444,488 |
 
-Single samples on the 4-core laptop. C# and Rust ran unmodified (Rust's first build:
-4 min 22 s). Three harness defects the first Windows run found, all fixed on main:
+Five languages land within a band on every server (fetch on SQL Server 573k–746k, on
+MySQL 397k–493k), which is the point of the grid: the binary is the same, the language
+binding is not the bottleneck. C# and Rust ran unmodified (Rust's first build: 4 min 22 s).
+The Java runner's classpath fix (`cygpath -w`, `;`) is confirmed on all five databases.
+
+The empty cells and three findings from the grid, none of them the bridge's — the
+language file spells each out: Go's `alexbrainman/odbc` access-violates inside
+`SQLGetDiagRec` on Windows on every server but SQLite, so four Go rows are `-no-native`;
+the DuckDB ODBC driver throws a C++ exception through Rust's FFI and the process aborts;
+and a Windows JVM wrote the bench's em-dash placeholder as one Cp1252 byte, corrupting the
+file's UTF-8 — `bench/java/run.sh` now pins `-Dstdout.encoding=UTF-8 -Dfile.encoding=UTF-8`.
+
+Three harness defects the first Windows run found, all fixed on main:
 
 1. `bench/java/run.sh` joined the classpath with `:` and a Git-Bash `/c/...` prefix, which
    a Windows JVM cannot read — `ClassNotFoundException: org.adbcbridge.bench.Bench`, which
@@ -158,7 +169,9 @@ Not "run the installer": what actually worked on this box, 2026-08-24.
   mirrors — a JavaScript download page only), so a person has to fetch it.
 - **Firebird**: server 5.0.4 zip and ODBC driver 3.5.0-rc1 win-x64 MSI are both on GitHub;
   the server runs standalone from the zip on a spare port without admin, but its sample
-  security database needs a SYSDBA created before first use.
+  security database ships with no SYSDBA, and creating one through the embedded engine as a
+  non-administrator fails (`no permission for INSERT access to TABLE PLG$SRP_VIEW`). Recorded
+  as *server not runnable here*; the driver installed fine.
 
 ### PostgreSQL vs the native ADBC driver (`bench/native_threshold.py --database postgres --rows 1000000 --runs 3 --partitions 8`)
 
