@@ -162,8 +162,8 @@ static void TestWideEncoding(void) {
   const char* s = "h\xc3\xa9llo \xf0\x9f\x9a\x80";  // "héllo 🚀": 7 code points
   int64_t n = (int64_t)strlen(s);
   SQLWCHAR w[16];
-  int64_t units = OdbcUtf8ToUtf16Into(w, s, n);
-  CHECK_I64(Utf16Units(s, n), units);
+  int64_t units = OdbcUtf8ToUtf16Into(w, s, n, false);
+  CHECK_I64(Utf16Units(s, n, false), units);
   if (sizeof(SQLWCHAR) < 4) {
     CHECK_I64(units, 8);
     CHECK_I64((int64_t)w[1], 0xE9);
@@ -173,6 +173,12 @@ static void TestWideEncoding(void) {
     CHECK_I64(units, 7);
     CHECK_I64((int64_t)w[1], 0xE9);
     CHECK_I64((int64_t)w[6], 0x1F680);
+    // The wide_utf16_pairs quirk: surrogate pairs in four-byte units.
+    units = OdbcUtf8ToUtf16Into(w, s, n, true);
+    CHECK_I64(Utf16Units(s, n, true), units);
+    CHECK_I64(units, 8);
+    CHECK_I64((int64_t)w[6], 0xD83D);
+    CHECK_I64((int64_t)w[7], 0xDE80);
   }
   CHECK_I64((int64_t)w[units], 0);
 }

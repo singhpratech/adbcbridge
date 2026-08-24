@@ -19,14 +19,18 @@
 // SQLWCHAR (unixODBC's SQL_WCHART_CONVERT, the width iODBC always has) the same
 // text is fed as one code point per unit, which is what such a driver manager
 // carries; a lone surrogate stays a lone unit so the U+FFFD cases hold either way.
+static void CheckUtf16Raw(const SQLWCHAR* w, size_t n, const char* expected);
+
 static void CheckUtf16(const uint16_t* units, size_t n, const char* expected) {
-  struct ArrowArray arr;
-  struct ArrowArrayView view;
-  struct ArrowBuffer scratch;
-  struct ArrowError na_error;
   SQLWCHAR w[64];
 
   CHECK_TRUE(n <= sizeof(w) / sizeof(w[0]));
+  if (sizeof(SQLWCHAR) >= 4) {
+    // First as a driver that puts UTF-16 units into four-byte slots would send it
+    // (MySQL Connector/ODBC on iODBC): the reader combines the pairs regardless.
+    for (size_t i = 0; i < n; i++) w[i] = (SQLWCHAR)units[i];
+    CheckUtf16Raw(w, n, expected);
+  }
   if (sizeof(SQLWCHAR) < 4) {
     for (size_t i = 0; i < n; i++) w[i] = (SQLWCHAR)units[i];
   } else {
@@ -41,6 +45,15 @@ static void CheckUtf16(const uint16_t* units, size_t n, const char* expected) {
     }
     n = k;
   }
+  CheckUtf16Raw(w, n, expected);
+}
+
+// Feed n SQLWCHAR units to AppendUtf16 and compare the UTF-8 that comes out.
+static void CheckUtf16Raw(const SQLWCHAR* w, size_t n, const char* expected) {
+  struct ArrowArray arr;
+  struct ArrowArrayView view;
+  struct ArrowBuffer scratch;
+  struct ArrowError na_error;
 
   CHECK_I64(ArrowArrayInitFromType(&arr, NANOARROW_TYPE_STRING), NANOARROW_OK);
   CHECK_I64(ArrowArrayStartAppending(&arr), NANOARROW_OK);

@@ -492,6 +492,24 @@ static void OdbcServerVersionString(SQLHDBC hdbc, char* out, size_t out_size) {
 }
 
 // Did the last call on this handle leave a diagnostic record?
+// True when the handle's only diagnostic is 01004 (string data, right truncated): the
+// driver manager or driver complaining about the completed connection string it was
+// asked to hand back, not about the connection.  Seen on iODBC with MySQL Connector/ODBC
+// 26.7 (macOS): the narrow SQLDriverConnect answered SQL_ERROR with nothing but 01004,
+// and the wide call with a sized buffer connects.
+static bool OdbcOnlyTruncationDiag(SQLHDBC hdbc) {
+  SQLCHAR state[7] = {0}, msg[8] = {0};
+  SQLINTEGER native = 0;
+  SQLSMALLINT len = 0;
+  if (!SQL_SUCCEEDED(OdbcGetDiagRecUtf8(SQL_HANDLE_DBC, hdbc, 1, state, &native, (char*)msg,
+                                        sizeof(msg), &len))) {
+    return false;
+  }
+  if (strcmp((const char*)state, "01004") != 0) return false;
+  return !SQL_SUCCEEDED(OdbcGetDiagRecUtf8(SQL_HANDLE_DBC, hdbc, 2, state, &native, (char*)msg,
+                                           sizeof(msg), &len));
+}
+
 static bool OdbcHasDiag(SQLHDBC hdbc) {
   SQLCHAR state[7] = {0}, msg[8] = {0};
   SQLINTEGER native = 0;
@@ -524,9 +542,15 @@ static SQLRETURN OdbcDriverConnectWide(SQLHDBC hdbc, const char* s) {
   int64_t n = (int64_t)strlen(s);
   SQLWCHAR* w = (SQLWCHAR*)malloc((size_t)(n + 1) * sizeof(SQLWCHAR));
   if (!w) return SQL_ERROR;
-  int64_t units = OdbcUtf8ToUtf16Into(w, s, n);
-  SQLRETURN ret =
-      SQLDriverConnectW(hdbc, NULL, w, (SQLSMALLINT)units, NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
+  int64_t units = OdbcUtf8ToUtf16Into(w, s, n, false);
+  // A real output buffer: a NULL one makes some driver managers report the completed
+  // connection string as truncated (01004), and iODBC counts its length in its own
+  // four-byte units.
+  SQLWCHAR out[2048];
+  SQLSMALLINT out_len = 0;
+  SQLRETURN ret = SQLDriverConnectW(hdbc, NULL, w, (SQLSMALLINT)units, out,
+                                    (SQLSMALLINT)(sizeof(out) / sizeof(out[0])), &out_len,
+                                    SQL_DRIVER_NOPROMPT);
   free(w);
   return ret;
 }
@@ -1083,6 +1107,13 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       conn->reader_opts.ddl_string_as_max_varchar = true;
     }
   }
+  if (sizeof(SQLWCHAR) >= 4 && strstr((const char*)name, "myodbc") != NULL) {
+    // MySQL Connector/ODBC built for iODBC (its macOS 26.x package links libiodbcinst)
+    // exchanges UTF-16 code units in iODBC's four-byte SQLWCHAR: a non-BMP character is
+    // a surrogate pair of two units, not one code point.  Encode bound wide parameters
+    // the same way; the reader combines pairs whatever the width.
+    conn->reader_opts.wide_utf16_pairs = true;
+  }
   if (!conn->reader_opts.sqllen_32bit_forced) {
     // IBM Db2's freely downloadable CLI driver package ("linuxx64_odbc_cli.tar.gz")
     // ships a libdb2.so built with 32-bit SQLLEN/SQLULEN even on 64-bit Linux; it
@@ -1207,9 +1238,13 @@ AdbcStatusCode OdbcOpenHdbc(struct OdbcDatabase* db, SQLHDBC* out, struct AdbcEr
   if (db->password) InternalAdbcStringBuilderAppend(&sb, "PWD=%s;", db->password);
   OdbcTuneConnectionString(db, &sb);
 
-  SQLRETURN ret =
-      SQLDriverConnect(hdbc, NULL, (SQLCHAR*)sb.buffer, SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
-  if (!SQL_SUCCEEDED(ret) && !OdbcHasDiag(hdbc)) {
+  // A real output buffer for the completed connection string: with a NULL one some
+  // driver managers answer 01004 (truncated) instead of connecting.
+  SQLCHAR completed[4096];
+  SQLSMALLINT completed_len = 0;
+  SQLRETURN ret = SQLDriverConnect(hdbc, NULL, (SQLCHAR*)sb.buffer, SQL_NTS, completed,
+                                   (SQLSMALLINT)sizeof(completed), &completed_len, SQL_DRIVER_NOPROMPT);
+  if (!SQL_SUCCEEDED(ret) && (!OdbcHasDiag(hdbc) || OdbcOnlyTruncationDiag(hdbc))) {
     ret = OdbcDriverConnectWide(hdbc, sb.buffer);
   }
   InternalAdbcStringBuilderReset(&sb);

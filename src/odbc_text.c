@@ -156,9 +156,9 @@ static SQLSMALLINT FromW(const SQLWCHAR* w, size_t units, char* out, size_t cap)
   size_t o = 0, full = 0;
   for (size_t i = 0; i < units; i++) {
     uint32_t c = sizeof(SQLWCHAR) < 4 ? (uint32_t)(uint16_t)w[i] : (uint32_t)w[i];
-    if (sizeof(SQLWCHAR) >= 4) {
-      if (c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) c = 0xFFFD;
-    } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < units && w[i + 1] >= 0xDC00 && w[i + 1] <= 0xDFFF) {
+    if (sizeof(SQLWCHAR) >= 4 && c > 0x10FFFF) {
+      c = 0xFFFD;
+    } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < units && (uint32_t)w[i + 1] >= 0xDC00 && (uint32_t)w[i + 1] <= 0xDFFF) {
       c = 0x10000 + ((c - 0xD800) << 10) + (w[i + 1] - 0xDC00);
       i++;
     } else if (c >= 0xD800 && c <= 0xDFFF) {

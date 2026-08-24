@@ -1031,10 +1031,12 @@ static size_t Utf16ToUtf8(const SQLWCHAR* w, size_t n, uint8_t* o) {
   size_t k = 0;
   for (size_t i = 0; i < n; i++) {
     uint32_t cp = sizeof(SQLWCHAR) < 4 ? (uint32_t)(uint16_t)w[i] : (uint32_t)w[i];
-    if (sizeof(SQLWCHAR) >= 4) {
-      if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
+    // A surrogate is never a valid code point on its own, so a pair is combined whatever
+    // the unit width: some drivers built for iODBC put UTF-16 units into wchar_t slots.
+    if (sizeof(SQLWCHAR) >= 4 && cp > 0x10FFFF) {
+      cp = 0xFFFD;
     } else if (cp >= 0xD800 && cp <= 0xDBFF) {
-      uint32_t lo = (i + 1 < n) ? (uint16_t)w[i + 1] : 0;
+      uint32_t lo = (i + 1 < n) ? (sizeof(SQLWCHAR) < 4 ? (uint32_t)(uint16_t)w[i + 1] : (uint32_t)w[i + 1]) : 0;
       if (lo >= 0xDC00 && lo <= 0xDFFF) {
         cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
         i++;
