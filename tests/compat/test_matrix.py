@@ -43,6 +43,14 @@ See README.md in this directory for how to obtain each driver without root.
 """
 import os, sys, shutil, tempfile, pathlib, datetime, decimal, ctypes
 
+# Line-buffered stdout: an ODBC driver that aborts the process (SIGABRT from inside
+# SQLExecDirect, seen on macOS) would otherwise take the last result line with it.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except (AttributeError, ValueError):
+    pass
+
+
 
 def _preload_odbc_drivers():
     """Open the ODBC driver libraries before pyarrow is imported.

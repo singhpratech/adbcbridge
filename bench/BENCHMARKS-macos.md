@@ -231,3 +231,40 @@ Reproduced in a ten-line harness; present on upstream `dev` at the time of writi
 to count on a local copy of the pointer. Ubuntu's `odbc-mdbtools` links real glib, which is
 why Linux never sees it. Load 5–6 throughout.
 
+## Full-matrix campaign — batch 1: tiers 1–2 (main @ 24dab36)
+
+| entry | result |
+|---|---|
+| azuresqledge | PASS (`Microsoft SQL Server (via ODBC) 15.00.2000`) — arm64 image, native; msodbcsql 18.6.2.1 arm64 |
+| mysql | **FAIL** `AssertionError: (2, 2)` — `adbc_ingest` of the 4-row table reports `rows_affected` 2 on create and on append. Driver: MariaDB Connector/ODBC 3.2.9 + Connector/C 3.4.9 (Homebrew, relinked), `PLUGIN_DIR` set for `caching_sha2_password`; MySQL's own Connector/ODBC for macOS has no non-interactive download. Server `mysql:8` = 8.4.11 arm64. Whether two or four rows landed is the open question |
+| mariadb | **FAIL** segmentation fault in `executemany`: `libmariadb.3.dylib store_param+128`, `EXC_BAD_ACCESS addr 0x1d` — a NULL `DATE` inside a parameter array on the bulk path. 100% reproducible with `INSERT (d DATE)` rows `[(date,), (None,)]`; a non-NULL date, a NULL `TIMESTAMP`, pyodbc row-at-a-time, and the same driver against MySQL 8 (no bulk protocol) are all fine. Server `mariadb:11` = 11.08 arm64. A Connector/C bug; every MariaDB-server target (mariadb, columnstore) will hit it in this workload |
+| clickhouse | PASS (`ClickHouse (via ODBC) 26.7.5.10`) — clickhouse-odbc 1.5.5 macOS zip, arm64, self-contained; server arm64 |
+| oracle | PASS (`Oracle (via ODBC) 23.26.0200`) — **only with `NLS_LANG=.AL32UTF8` exported before the process starts**; with the entry's in-process `unicode_env` alone the Unicode literal step fails (`hello ?`). Instant Client 23.3 arm64 dmgs, `@rpath/libodbcinst` relinked. `gvenzl/oracle-free:slim` is arm64 native |
+| db2 | PASS (`DB2/LINUXX8664 (via ODBC) 12.01.0500`) — IBM's `macarm64_odbc_cli.tar.gz` (libdb2.dylib arm64); server amd64 emulated, `--privileged --memory=3g` |
+| informix | PASS (`IDS/UNIX64 (via ODBC) 12.10.0000`) — same arm64 clidriver; server amd64 emulated, unprivileged, `GL_USEGLU=1` |
+| monetdb | PASS (`MonetDB (via ODBC) 11.55.0007`) — `libMonetODBC` built from the MonetDB 11.55 source (`cmake --target MonetODBC`; needs pkgconf and bison ≥ 3); Homebrew's bottle has no ODBC driver; server amd64 emulated |
+| firebird | driver unavailable on macOS arm64: firebird-odbc-driver v3-0-1 ships `linux_libs`, `linux_arm64_libs`, `win_installers`, `win_arm64_installers` only |
+| vertica | driver unavailable on macOS arm64: the macOS download is `vsql-*.mac.dmg` only, no ODBC |
+| virtuoso | **FAIL** the process aborts (SIGABRT, no message, stack not unwindable) inside `SQLExecDirect` at the workload's first failing statement (`DROP TABLE` of a missing table). Same with unixODBC's own `isql -k` and with raw ctypes `SQLExecDirect`/`SQLExecDirectW` on an ANSI-connected handle; pyodbc (W connect + `wideAsUTF16=Y`) gets the proper `42S02 SR268: No table in drop table` and survives; an ASan build of the bridge sees nothing (the smash is in uninstrumented driver code). Connect and `SELECT` work. Driver `virtodbcu_r.so` from Homebrew virtuoso 7.2.17 (arm64, openssl@3 relinked); server arm64 |
+| flightsql | **FAIL** the same abort class — SIGABRT inside `SQLExecDirect(W)` on the first failing statement, from the bridge, from `isql`, from raw ODBC (ANSI or UTF-16 connect) *and* from pyodbc (which dies even earlier). The driver needs `arrow-odbc.ini` beside the dylib (the pkg ships `.orig`). Arrow Flight SQL ODBC 0.9.7 armv8 dmg; sqlflite server arm64 |
+| influxdb3 | **FAIL** identical (same driver); `load_influxdb3.py` wrote 100,002 points fine; server arm64 |
+| dremio | **FAIL** identical (same driver); first-user bootstrap fine; dremio-oss (5 GB) run alone |
+| ignite | driver unavailable on macOS arm64: `platforms/cpp` carries only `common/os/{linux,win}`; the Darwin build stops at `concurrent_os.cpp:18 fatal error: 'sys/sysinfo.h' file not found` |
+
+`matrix_bench.py --rows 10000 --fetch-rows 100000` (clickhouse at 300 / 2,000 as on Linux; DuckDB on a file-backed database):
+
+```
+duckdb       DuckDB (via ODBC)                          fetch=4,238,635/s (pyodbc 1,299,832/s)  ingest=390,288/s array=385,861/s pyodbc=12,280/s
+access       MDBTOOLS (via ODBC) 1.0.1                  fetch=2,205,341/s                       ingest=— (read-only)
+azuresqledge Microsoft SQL Server (via ODBC) 15.00.2000 fetch=590,525/s (pyodbc 555,073/s)      ingest=42,577/s array=88,175/s pyodbc=61,371/s
+clickhouse   ClickHouse (via ODBC) 26.7.5.10            fetch=727,548/s (pyodbc 487,468/s)      ingest=998/s array=958/s pyodbc=16/s
+oracle       Oracle (via ODBC) 23.26.0200               fetch=78,908/s (pyodbc 55,935/s)        ingest=28,407/s array=30,251/s pyodbc=1,178/s
+monetdb      MonetDB (via ODBC) 11.55.0007              fetch=598,932/s (pyodbc 560,305/s)      ingest=114,534/s array=148,798/s pyodbc=1,250/s
+db2          DB2/LINUXX8664 (via ODBC) 12.01.0500       fetch=582,691/s (pyodbc 589,701/s)      ingest=82,281/s array=129,373/s pyodbc=4,869/s
+informix     IDS/UNIX64 (via ODBC) 12.10.0000           fetch=562,870/s (pyodbc 385,082/s)      ingest=3,702/s array=35,174/s pyodbc=4,334/s
+```
+Load at start: duckdb/access ~5, azuresqledge 4.8, clickhouse 2.4, oracle 6.5, monetdb 10.5 (emulation), db2 ~3, informix ~3.9. Never idle.
+The five-language rows are in [`LANGUAGE_BENCHMARKS-macos.md`](LANGUAGE_BENCHMARKS-macos.md).
+
+Findings from this batch, for the docs: (1) the MariaDB Connector/C bulk-path NULL-`DATE` crash; (2) Oracle's `NLS_LANG` must precede `libsqora` loading; (3) Arrow Flight SQL ODBC 0.9.7 and Virtuoso 7.2.17 abort the process on the first statement error under unixODBC 2.3.12 on macOS 26 — four entries fail for that one reason, and it is not the bridge (isql and raw ODBC die identically); (4) IBM's arm64 clidriver makes Db2 and Informix first-class on Apple Silicon; (5) DuckDB's driver lets a C++ exception escape into Rust and faults Go's binding; (6) Go on macOS needs `CGO_CFLAGS`/`CGO_LDFLAGS` for unixODBC (the module hard-codes `/usr/local/opt/unixodbc`).
+

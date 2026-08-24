@@ -20,6 +20,14 @@ bench/MATRIX_BENCHMARKS.md is regenerated from the cache on every run.
 """
 import argparse, datetime, json, os, pathlib, statistics, sys, time
 
+# Line-buffered stdout: an ODBC driver that aborts the process (SIGABRT from inside
+# SQLExecDirect, seen on macOS) would otherwise take the last result line with it.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except (AttributeError, ValueError):
+    pass
+
+
 import pyarrow as pa
 import adbc_driver_manager.dbapi as dbapi
 

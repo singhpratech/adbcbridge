@@ -164,13 +164,13 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | sqlite | PASS | PASS (SQLite 3.51.0) | PASS (SQLite 3.43.2) |
 | duckdb | PASS | PASS (DuckDB ODBC 1.5.5.0, universal binary) | PASS (duckdb_odbc 1.5.5.0) |
 | postgres | PASS | PASS (PostgreSQL 15.15) | PASS (PostgreSQL 16.15, psqlodbc 18.00.0002, native install) |
-| mariadb | PASS | pending | pending |
+| mariadb | PASS | FAIL: SIGSEGV in libmariadb.3.dylib `store_param` on a NULL DATE in a parameter array (Connector/C 3.4.9 bulk path; driver bug, 100% reproducible) | pending |
 | columnstore | PASS | pending | pending |
-| oracle | PASS | pending | pending |
-| clickhouse | PASS | pending | pending |
+| oracle | PASS | PASS (Oracle 23.26.0200, Instant Client 23.3 arm64) — `NLS_LANG=.AL32UTF8` must be exported before the process starts | pending |
+| clickhouse | PASS | PASS (ClickHouse 26.7.5.10, clickhouse-odbc 1.5.5 macOS zip, arm64) | pending |
 | mssql | PASS | PASS (SQL Server 2022) | PASS (SQL Server 2025 RTM 17.0.1000.7, msodbcsql 18) |
-| azuresqledge | PASS | pending | pending |
-| mysql | PASS | pending | pending |
+| azuresqledge | PASS | PASS (SQL Server 15.00.2000, arm64 image, msodbcsql 18.6.2.1 arm64) | pending |
+| mysql | PASS | FAIL: `adbc_ingest` reports rows_affected 2 for a 4-row table (MariaDB Connector/ODBC 3.2.9 against MySQL 8.4 arm64; MySQL's own Connector/ODBC has no non-interactive macOS download) — under investigation | pending |
 | tidb | PASS | pending | pending |
 | dolt | PASS | pending | pending |
 | databend | PASS | pending | pending |
@@ -181,10 +181,10 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | greptimedb | PASS | pending | pending |
 | starrocks | PASS | pending | pending |
 | mongodbbi | PASS | pending | pending |
-| db2 | PASS | pending | pending |
-| informix | PASS | pending | pending |
-| monetdb | PASS | pending | pending |
-| vertica | PASS | pending | pending |
+| db2 | PASS | PASS (Db2 12.01.0500, IBM macarm64 clidriver; server amd64 emulated) | pending |
+| informix | PASS | PASS (IDS 12.10, same arm64 clidriver; server amd64 emulated) | pending |
+| monetdb | PASS | PASS (MonetDB 11.55.0007, libMonetODBC built from the 11.55 source; Homebrew's bottle has no ODBC driver) | pending |
+| vertica | PASS | driver unavailable: vertica.com's macOS download is vsql only, no ODBC | pending |
 | cockroachdb | PASS | pending | pending |
 | yugabyte | PASS | pending | pending |
 | timescaledb | PASS | pending | pending |
@@ -196,14 +196,14 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | questdb | PASS | pending | pending |
 | risingwave | PASS | pending | pending |
 | spanner | PASS | pending | pending |
-| firebird | PASS | pending | pending |
-| virtuoso | PASS | pending | pending |
-| flightsql | PASS | pending | pending |
+| firebird | PASS | driver unavailable: firebird-odbc-driver v3-0-1 ships Linux and Windows assets only | pending |
+| virtuoso | PASS | FAIL: the driver (virtodbcu_r.so, Homebrew 7.2.17) aborts the process with SIGABRT inside SQLExecDirect on the first failing statement — isql and raw ODBC die identically, pyodbc's W connect survives | pending |
+| flightsql | PASS | FAIL: Arrow Flight SQL ODBC 0.9.7 (armv8 dmg) aborts the process with SIGABRT inside SQLExecDirect on the first failing statement — isql, raw ODBC and pyodbc die identically | pending |
 | arcadedb | PASS | pending | pending |
-| influxdb3 | PASS | pending | pending |
-| ignite | PASS | pending | pending |
+| influxdb3 | PASS | FAIL: same driver, same abort (fixture loaded fine) | pending |
+| ignite | PASS | driver unavailable: platforms/cpp has only linux/ and win/ OS layers; the Darwin build stops at `sys/sysinfo.h` | pending |
 | opensearch | PASS | driver unavailable: the project's macOS pkg is x86_64-only (Intel Macs not targeted) | pending |
 | ydb | PASS | pending | pending |
-| dremio | PASS | pending | pending |
+| dremio | PASS | FAIL: same driver, same abort (first-user bootstrap fine) | pending |
 | tdengine | PASS | PASS (3.3.6.13, vendor arm64 client) | pending |
 | access | PASS | PASS (mdbtools 1.0.1 from source, one local patch: fakeglib `g_strsplit`) | pending |
