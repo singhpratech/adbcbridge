@@ -30,13 +30,34 @@ reads the same result set fine. MySQL Connector/ODBC needs the same
 `LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6` the compat matrix documents in
 [`tests/compat/README.md`](../tests/compat/README.md).
 
+Two rows no longer read the way the paragraph above describes. **oracle**'s fetch
+columns are `—` because the read *crashes the process*: any row-array fetch of a
+character column segfaults inside Oracle's own `libsqora.so.23.1`
+(`bcoReturnColData` under `SQLFetch`), from every language and from plain
+`adbc_driver_manager`, and `tests/compat/test_matrix.py oracle` segfaults
+identically. Its ingest columns are the ordinary 10,000-row workload — only the
+fetch step was shortened so the run survived to print them. And **db2**'s
+`odbc-api`/`arrow-odbc` columns now return numbers rather than panicking, but the
+32-bit `SQLLEN` they are reading through has not changed, so they are not
+throughput to compare against the ADBC column.
+
 | Database | ADBC ingest | odbc-api ingest | Ingest × | ADBC fetch | odbc-api fetch | arrow-odbc fetch | Fetch × |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | sqlite (SQLite) | 245,842 | 291,744 | 0.8× | 563,095 | 1,342,529 | 1,353,151 | 0.4× |
-| postgres (PostgreSQL) | 57,595 | 60,078 | 1.0× | 1,405,712 | 1,399,201 | 1,456,818 | 1.0× |
+| postgres (PostgreSQL) | 482,822 | 77,045 | 6.3× | 2,078,465 | 2,091,423 | 1,951,012 | 1.0× |
 | mariadb (MariaDB) | 44,424 | 61,489 | 0.7× | 1,347,187 | 1,985,269 | 1,812,120 | 0.7× |
 | mysql (MySQL) | 5,076 | 5,734 | 0.9× | 867,101 | 1,242,873 | 1,108,492 | 0.7× |
 | mssql (Microsoft SQL Server) | 79,568 | 82,982 | 1.0× | 585,635 | 576,563 | 587,186 | 1.0× |
-| oracle (Oracle) | 1,017 | 1,069 | 1.0× | 64,986 | 83,534 | 82,750 | 0.8× |
-| db2 (DB2/LINUXX8664) | 2,329 | 4,747 | 0.5× | 61,392 | 65,987 | — | 0.9× |
+| oracle (Oracle) | 24,730 | 456 | 54.2× | — | — | — | — |
+| db2 (DB2/LINUXX8664) | 35,952 | 209,563 | 0.2× | 1,610,567 | 6,527,260 | 4,602,507 | 0.2× |
 | cockroachdb (PostgreSQL) | 854 | 852 | 1.0× | 171,333 | 183,735 | 157,175 | 0.9× |
+| timescaledb (PostgreSQL) | 362,032 | 26,462 | 13.7× | 1,913,228 | 1,966,551 | 1,752,925 | 1.0× |
+| questdb (PostgreSQL) | — | 10,808 | — | — | — | — | — |
+| materialize (PostgreSQL) | — | 5,600 | — | — | — | — | — |
+| azuresqledge (Microsoft SQL Server) | 130,239 | 68,266 | 1.9× | 2,407,563 | 2,885,924 | 2,864,614 | 0.8× |
+| dolt (MySQL) | 60,071 | 3,140 | 19.1× | 1,400,010 | 1,465,804 | 1,382,873 | 1.0× |
+| matrixone (MySQL) | 124,948 | 4,615 | 27.1× | 1,835,853 | 2,074,257 | 2,235,006 | 0.9× |
+| greptimedb (MySQL) | — | — | — | — | — | — | — |
+| firebird (Firebird) | — | — | — | — | — | — | — |
+| vertica (Vertica Database) | 117,441 | 264,453 | 0.4× | 657,974 | 955,205 | 832,010 | 0.7× |
+| opensearch (opensearch) | — | — | — | — | — | — | — |

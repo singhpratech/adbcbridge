@@ -42,7 +42,12 @@ def main(name):
     if not drv:
         sys.exit("conn.py: %s is unset, so %s cannot be reached" % (cfg["env"], name))
     prefix = name.upper()
-    uri = os.environ.get(prefix + "_CONN", cfg["conn"]).format(drv=drv)
+    # test_matrix.conn_uri() applies the <NAME>_CONN override and every placeholder the
+    # entries use -- {drv}, {drvdir} and the {plugin}/{plugin_dir} PLUGIN_DIR= setting
+    # MySQL Connector/ODBC needs for a server still on mysql_native_password.  Formatting
+    # {drv} alone here raised KeyError on those entries (dolt, matrixone, greptimedb,
+    # tidb, databend, ...), so no language benchmark could reach them.
+    uri = m.conn_uri(name, cfg, drv)
     ident = cfg.get("ident", lambda x: x)
     out = [
         (prefix + "_CONN", uri),
