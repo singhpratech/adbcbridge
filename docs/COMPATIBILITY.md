@@ -162,13 +162,13 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | entry | Linux | macOS arm64 | Windows x64 |
 |---|---|---|---|
 | sqlite | PASS | PASS (SQLite 3.51.0) | PASS (SQLite 3.43.2) |
-| duckdb | PASS | PASS (DuckDB ODBC 1.5.5.0, universal binary) | pending |
-| postgres | PASS | PASS (PostgreSQL 15.15) | pending |
+| duckdb | PASS | PASS (DuckDB ODBC 1.5.5.0, universal binary) | PASS (duckdb_odbc 1.5.5.0) |
+| postgres | PASS | PASS (PostgreSQL 15.15) | PASS (PostgreSQL 16.15, psqlodbc 18.00.0002, native install) |
 | mariadb | PASS | pending | pending |
 | columnstore | PASS | pending | pending |
 | oracle | PASS | pending | pending |
 | clickhouse | PASS | pending | pending |
-| mssql | PASS | PASS (SQL Server 2022) | PASS (SQL Server 2025 RTM) |
+| mssql | PASS | PASS (SQL Server 2022) | PASS (SQL Server 2025 RTM 17.0.1000.7, msodbcsql 18) |
 | azuresqledge | PASS | pending | pending |
 | mysql | PASS | pending | pending |
 | tidb | PASS | pending | pending |

@@ -55,15 +55,27 @@ PostgreSQL on the same 8 GB machine: the EDB installer or Docker Desktop with
 | database | result | vendor string |
 |---|---|---|
 | sqlite | PASS | `SQLite (via ODBC) 3.43.2` |
-| postgres | not run — no server and no psqlodbc on this machine | |
-| mssql | not run yet (driver present) | |
+| duckdb | PASS | `DuckDB (via ODBC) ` (the driver reports no version; duckdb_odbc 1.5.5.0) |
+| mssql | PASS | `Microsoft SQL Server (via ODBC) 17.00.1000` — SQL Server 2025 RTM, native install, Windows auth, `Trusted_Connection=yes;TrustServerCertificate=yes` |
+| postgres | PASS | `PostgreSQL (via ODBC) 16.15.0` — native install, psqlodbc 18.00.0002 "PostgreSQL Unicode(x64)"; **FAIL at 199f40e–9c07f78** with `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9`, see the second bug below |
 
 ### Python: adbcbridge vs pyodbc (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`)
 
 | database | ADBC ingest rows/s | pyodbc ingest | ADBC fetch rows/s | pyodbc fetch |
 |---|---:|---:|---:|---:|
-| sqlite | 175,704 (array binding 173,043) | 153,763 | 457,935 | 256,221 |
-| postgres | not run | | | |
+| sqlite | 209,082 (array binding 161,088) | 146,264 | 456,214 | 254,287 |
+| duckdb | 74,005 (array 73,952) | 590 | 592,742 | 267,814 |
+| mssql | 31,269 (array 36,209) | 21,468 | 583,138 | 270,097 |
+| postgres | 86,343 (array 151,542) | 9,506 | 235,955 | 151,745 |
+
+All at main @ d364312, x64 Release, **single sample each**, servers as native Windows installs.
+**Run-to-run variance on this machine swamps build-to-build comparison**: two postgres
+fetches on the same build minutes apart read 187,893 and 235,955 rows/s (26% apart) — a
+4-core mobile CPU with ~1.2 GB free, thermally limited, with the database server and Defender
+on the same box. DuckDB's fetch read 839,721 rows/s on the pre-fix narrow path and 592,742 on
+the wide one, which *looks* like a wide-path cost and cannot be distinguished from that noise;
+a real answer needs a quiet machine and repeated runs. Earlier single-sample sqlite line at
+199f40e: 175,704 / 153,763 / 457,935 / 256,221.
 
 Raw line: `sqlite  SQLite (via ODBC) 3.43.2  fetch=457,935/s (pyodbc 256,221/s, native —/s)  ingest=175,704/s array=173,043/s pyodbc=153,763/s`
 — fetch 1.79× pyodbc, ingest 1.14×, on a 4-core mobile CPU with 1.2 GB free and a build with neither prefetch nor fan-out; not comparable with the Linux rows.
@@ -82,6 +94,23 @@ text through as UTF-8, which is why Linux and macOS never saw it. Fixed the same
 (`src/odbc_text.c`: the W entry points on Windows); `tests/test_windows_text.py` is the
 diagnostic that found it and now verifies it, and the compat workload gained a
 statement-literal step so a PASS means something here.
+
+### Second bug, found by the fourth database: character columns were read through the ANSI code page
+
+At 199f40e–9c07f78, against PostgreSQL 16.15 with `server_encoding`/`client_encoding` UTF8
+(the server verifiably holding `68c3a96c6c6f` for `héllo`), `SELECT 'héllo'::varchar` raised
+`UnicodeDecodeError: byte 0xe9` in pyarrow and `SELECT '日本語'::text` came back as `???`,
+silently and irreversibly. The reader bound `SQL_CHAR`/`SQL_VARCHAR`/`SQL_LONGVARCHAR` as
+`SQL_C_CHAR` on the assumption that the narrow path carries UTF-8 — true on unixODBC and
+iODBC, never on the Windows driver manager, which transcodes narrow data to the ANSI code
+page (1252 here). SQLite, SQL Server (`NVARCHAR` → wide path) and DuckDB had passed by luck
+of the driver; psqlodbc, which fronts 14 of the 46, honours the conversion. Fixed in
+`9c07f78`: on Windows every character column is read as `SQL_C_WCHAR`, the `wchar_as_utf8`
+quirk (whose premise is the same assumption) is off there, and catalog string reads go the
+same way. Verified at `d364312`: all four probes byte-exact (`68c3a96c6c6f`,
+`e697a5e69cace8aa9e`), the four entries above PASS, `tests/test_windows_text.py` 9/9,
+`ctest` 7/7, zero warnings. No truncation or doubling seen on these four drivers, whose
+`column_size` is in characters; drivers that report bytes are the ones to watch next.
 
 ### PostgreSQL vs the native ADBC driver (`bench/native_threshold.py --database postgres --rows 1000000 --runs 3 --partitions 8`)
 
