@@ -148,3 +148,62 @@ Not verified; expected to work on the generic path.
 | libSQL server (`sqld`) | No ODBC route at all. It was queued on the assumption that sqld still had the PostgreSQL wire listener `psqlodbc` could drive, but `SQLD_PG_LISTEN_ADDR` is silently ignored: sqld serves only its own HTTP/JSON protocol (Hrana) and gRPC, nothing listens on 5432, and a PG startup packet gets `ECONNRESET`. `--pg-listen-addr` is absent from `sqld --help` and no `pgwire` string is in the binary, in `latest` (0.24.33) and in `v0.22.0`, the oldest tag the registry carries — the code was dropped upstream before that. There is no libSQL ODBC driver, and sqliteodbc opens local files, not a remote sqld. See `tests/compat/README.md` |
 | Elasticsearch SQL ODBC | Windows-only driver |
 | Microsoft Text/Excel ODBC | Windows-only; on Linux read CSV/Parquet/Excel through DuckDB's ODBC driver instead |
+
+## Per operating system
+
+The 46 above were verified on Linux (Ubuntu 24.04, unixODBC 2.3.12). The same workload is
+being run on macOS (Apple M4 Max, arm64, macOS 26.5) and Windows (Windows 11 x64, an 8 GB
+i7-8550U laptop; 32-bit build for the 32-bit Access/Excel/Text drivers). One result per
+entry per OS: `PASS (server version)`; `FAIL: <first error>`; `driver unavailable: <what the
+vendor ships for that OS/arch>`; `not runnable here: <why>` — the last two are facts about
+the platform, not gaps in the driver, and are recorded as such. `pending` means not yet run.
+Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHMARKS-windows.md`.
+
+| entry | Linux | macOS arm64 | Windows x64 |
+|---|---|---|---|
+| sqlite | PASS | PASS (SQLite 3.51.0) | PASS (SQLite 3.43.2) |
+| duckdb | PASS | pending | pending |
+| postgres | PASS | PASS (PostgreSQL 15.15) | pending |
+| mariadb | PASS | pending | pending |
+| columnstore | PASS | pending | pending |
+| oracle | PASS | pending | pending |
+| clickhouse | PASS | pending | pending |
+| mssql | PASS | PASS (SQL Server 2022) | PASS (SQL Server 2025 RTM) |
+| azuresqledge | PASS | pending | pending |
+| mysql | PASS | pending | pending |
+| tidb | PASS | pending | pending |
+| dolt | PASS | pending | pending |
+| databend | PASS | pending | pending |
+| percona | PASS | pending | pending |
+| matrixone | PASS | pending | pending |
+| doris | PASS | pending | pending |
+| oceanbase | PASS | pending | pending |
+| greptimedb | PASS | pending | pending |
+| starrocks | PASS | pending | pending |
+| mongodbbi | PASS | pending | pending |
+| db2 | PASS | pending | pending |
+| informix | PASS | pending | pending |
+| monetdb | PASS | pending | pending |
+| vertica | PASS | pending | pending |
+| cockroachdb | PASS | pending | pending |
+| yugabyte | PASS | pending | pending |
+| timescaledb | PASS | pending | pending |
+| citus | PASS | pending | pending |
+| cloudberry | PASS | pending | pending |
+| materialize | PASS | pending | pending |
+| opengauss | PASS | pending | pending |
+| cratedb | PASS | pending | pending |
+| questdb | PASS | pending | pending |
+| risingwave | PASS | pending | pending |
+| spanner | PASS | pending | pending |
+| firebird | PASS | pending | pending |
+| virtuoso | PASS | pending | pending |
+| flightsql | PASS | pending | pending |
+| arcadedb | PASS | pending | pending |
+| influxdb3 | PASS | pending | pending |
+| ignite | PASS | pending | pending |
+| opensearch | PASS | driver unavailable: the project's macOS pkg is x86_64-only (Intel Macs not targeted) | pending |
+| ydb | PASS | pending | pending |
+| dremio | PASS | pending | pending |
+| tdengine | PASS | PASS (3.3.6.13, vendor arm64 client) | pending |
+| access | PASS | pending | pending |
