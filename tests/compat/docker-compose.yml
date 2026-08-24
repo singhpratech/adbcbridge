@@ -62,7 +62,10 @@ services:
     ports: ["127.0.0.1:15436:5432"]
   cockroachdb:
     image: cockroachdb/cockroach:latest
-    command: start-single-node --insecure --cache=128MiB --max-sql-memory=128MiB
+    # --max-go-memory: without it this build sets its Go soft memory limit to 288 MiB
+    # and sits at 30% GC CPU (6-7 cores on an idle node), which poisons every
+    # benchmark on the host; see "GC pressure detected" in its log.
+    command: start-single-node --insecure --cache=128MiB --max-sql-memory=128MiB --max-go-memory=2GiB
     ports: ["127.0.0.1:16257:26257", "127.0.0.1:18080:8080"]
   # Db2 Community Edition needs a privileged container and a few minutes to
   # initialise the "adbc" database on first start.
