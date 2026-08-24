@@ -124,6 +124,20 @@ of Docker Desktop's ~6 GB, and expect to need an administrator to get it back. C
 also leave anonymous volumes behind (11 of them, 992 MB, after ten entries): `docker volume
 prune -af` between entries.
 
+### Tier 3, batch 4 (interim) — main @ 9a652ae
+
+| entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
+|---|---|---:|---:|---:|---:|
+| yugabyte | PASS (`PostgreSQL (via ODBC) 15.12.0`), YugabyteDB 2026.1.1.1 at `--memory=1536m` with the compose memory flags, 278 MB used | 181,786 | 128,431 | 9,768 (10,579) | 528 |
+| opengauss | PASS (`PostgreSQL (via ODBC) 9.2.4`), openGauss 6.0.0 at `--memory=1536m` (503 MB used; the compose 3 GB is not needed), `--shm-size=1g --cap-add SYS_NICE` | 196,872 | 103,289 | 61,544 (58,290) | 1,035 |
+| databend | **FAIL** at the astral check only: `héllo 🚀` stored byte-exact on every write path, read back as `héllo ???` on every read path including pyodbc — Connector/ODBC 8.4.0 decodes Databend's result sets as 3-byte `utf8`, since Databend implements neither `@@character_set_client` nor `@@character_set_connection` (both 0) and ignores `charset=`; the same driver reads 🚀 from MySQL, TiDB, Percona and MariaDB; Linux passes on 9.4. Everything else passes | 334,776 | — | 7,538 (7,705) | — |
+
+openGauss operator note: the `adbc` role must be created *inside* the container as `omm` via
+`gsql`, as the compat README's recipe says — a role created over a remote `psql` session
+authenticates locally but every remote MD5 login then fails with `FATAL: Invalid
+username/password,login denied`. `NO_SSPS=1` tally so far: needed on tidb, mariadb and dolt;
+already in the entry for databend and greptimedb; not needed on percona.
+
 **A Windows-only environment fact, found by CrateDB:** Windows has no system time-zone
 database, so pyarrow's timestamp-with-timezone conversion raises `ArrowInvalid: The
 zoneinfo module or pytz package must be installed` until the `tzdata` PyPI package is

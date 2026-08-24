@@ -100,8 +100,23 @@ progress; this file grows as servers come up. Python's ingest is `matrix_bench.p
 | go | materialize | 10,657 | 121,389 | skipped | skipped |
 | java | materialize | 8,020 | 87,100 | no driver | no driver |
 | csharp | materialize | 6,161 | 95,484 | — | 66,504 |
+| python | yugabyte | 10,579 | 181,786 | 528 | 128,431 |
+| rust | yugabyte | 12,257 | 233,200 | 1,531 | 248,092 |
+| go | yugabyte | 11,629 | 259,748 | skipped | skipped |
+| java | yugabyte | 9,335 | 235,265 | no driver | no driver |
+| csharp | yugabyte | 9,369 | 199,046 | 302 | 153,967 |
+| python | opengauss | 58,290 | 196,872 | 1,035 | 103,289 |
+| rust | opengauss | 55,925 | 250,729 | 4,118 | 244,812 |
+| go | opengauss | 40,932 | 183,759 | skipped | skipped |
+| java | opengauss | 42,759 | 250,543 | no driver | no driver |
+| csharp | opengauss | 66,640 | 196,339 | 497 | 147,673 |
+| python | databend | 7,705 | 334,776 | — | — |
+| rust | databend | 7,248 | 340,704 | — | 341,996 |
+| go | databend | 6,767 | 327,053 | skipped | skipped |
+| java | databend | 6,915 | 324,918 | no driver | no driver |
+| csharp | databend | 7,422 | 287,209 | — | 237,985 |
 
-The first five databases: 24 of 25 cells; tier 3 (Docker Desktop on WSL2, one container at a time at 1 GB) follows below them — Rust's arrow-odbc fetch on tier 3: cockroachdb 198,095, timescaledb 229,103, citus 291,885, cratedb 210,859, questdb 211,570, tidb 342,479, mariadb 299,628, percona 427,781, arcadedb 96,694, risingwave 208,683, materialize 94,970. ArcadeDB is a read-only entry: its ingest cells are empty by construction. Java and C# read ArcadeDB at 4,361 and 9,743 rows/s against ~100,000 for Python, Rust and Go — the same 1.2-1.5M-vs-100k spread the Linux file records for that server, not a Windows effect. `stopped` marks a harness whose *native* row-at-a-time ingest ran at tens of rows/s on CrateDB and Dolt and was stopped after 10 minutes (C# on CrateDB after 30) — the harness prints its row only at the end, so the ADBC numbers for that run are lost with it; `hung` is Java on Dolt, whose ADBC-only run produced nothing in 10 minutes and was killed, unexplained. The sqlite rows were re-taken with the rest of the grid, so they differ from
+The first five databases: 24 of 25 cells; tier 3 (Docker Desktop on WSL2, one container at a time at 1 GB) follows below them — Rust's arrow-odbc fetch on tier 3: cockroachdb 198,095, timescaledb 229,103, citus 291,885, cratedb 210,859, questdb 211,570, tidb 342,479, mariadb 299,628, percona 427,781, arcadedb 96,694, risingwave 208,683, materialize 94,970, yugabyte 238,927, opengauss 218,913, databend 302,666. Databend's rows are measured on an entry whose compat result on Windows is FAIL (astral characters read back as `???` through Connector/ODBC 8.4.0, `docs/COMPATIBILITY.md`); the benchmark carries no astral text, so the rows stand, with that caveat. ArcadeDB is a read-only entry: its ingest cells are empty by construction. Java and C# read ArcadeDB at 4,361 and 9,743 rows/s against ~100,000 for Python, Rust and Go — the same 1.2-1.5M-vs-100k spread the Linux file records for that server, not a Windows effect. `stopped` marks a harness whose *native* row-at-a-time ingest ran at tens of rows/s on CrateDB and Dolt and was stopped after 10 minutes (C# on CrateDB after 30) — the harness prints its row only at the end, so the ADBC numbers for that run are lost with it; `hung` is Java on Dolt, whose ADBC-only run produced nothing in 10 minutes and was killed, unexplained. The sqlite rows were re-taken with the rest of the grid, so they differ from
 the first-day numbers in `BENCHMARKS-windows.md` by the run-to-run variance recorded there.
 Rust's arrow-odbc fetch, not in the table: sqlite 396,258, mssql 896,103, postgres 411,178,
 mysql 489,701. Three words stand for three different kinds of empty native cell — `skipped`
