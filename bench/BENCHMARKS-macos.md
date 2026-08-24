@@ -213,3 +213,21 @@ create-twice → ProgrammingError, GetObjects (catalogs/tables/columns/PK+FK con
   architecture (have 'x86_64', need 'arm64e' or 'arm64e.v1' or 'arm64' or 'arm64')`. It loads
   under Rosetta (`arch -x86_64 python3`), which an Intel-only stack could use; this project does
   not target Intel Macs, so the entry stays Linux-only (where it is built from source).
+
+## Full-matrix campaign (main @ 24dab36) — tier 1, no server
+
+| entry | result | matrix_bench (10,000 / 100,000 rows) |
+|---|---|---|
+| sqlite | PASS (SQLite 3.51.0) | as above |
+| duckdb | PASS (`DuckDB (via ODBC)`, version string empty) — `duckdb_odbc-osx-universal.zip` 1.5.5.0, arm64+x86_64 fat, no external deps, no quarantine attribute | fetch 4,238,635/s (pyodbc 1,299,832), ingest 390,288/s (array 385,861; pyodbc 12,280) — on a **file-backed** database: with the entry's `Database=:memory:` every connection is its own empty DuckDB and the fetch connection finds no table |
+| access | PASS (MDBTOOLS 1.0.1), both `libmdbodbcW` and `libmdbodbc` — mdbtools 1.0.1 built from the release tarball with `--with-unixodbc` (bison ≥ 3 and flex; Apple's bison 2.3 is rejected) | fetch 2,205,341/s on the 3,000-row fixture (timer resolution, not a rate); read-only |
+
+**mdbtools 1.0.1 needed one local patch, and it is an upstream bug**: built without real glib it
+uses `src/libmdb/fakeglib.c`, whose `g_strsplit()` advances `haystack` in its counting loop and
+never resets it, so the split loop starts at end-of-string and `components[0]` is `""`.
+`ExtractDBQ()` then hands the driver an empty path and every `DBQ=` connection fails with
+"Unable to locate database" (a DSN with `Database=` takes another code path and works).
+Reproduced in a ten-line harness; present on upstream `dev` at the time of writing; the fix is
+to count on a local copy of the pointer. Ubuntu's `odbc-mdbtools` links real glib, which is
+why Linux never sees it. Load 5–6 throughout.
+

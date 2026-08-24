@@ -189,7 +189,11 @@ DBS = {
         # sqliteodbc converts UTF-8 through UCS-2 and drops the astral-plane emoji.
         decimal_type="string", ts_precision="ms", astral=False, text_sortable=True),
     "duckdb": dict(
-        env="DUCKDB_ODBC_DRIVER", conn="Driver={drv};Database=:memory:;",
+        # A file, not :memory:: with an in-memory database every ODBC connection is its
+        # own empty DuckDB, so a benchmark that ingests on one connection and reads on
+        # another finds no table (every language harness reported exactly that).  The
+        # compat workload runs on one connection and never noticed.
+        env="DUCKDB_ODBC_DRIVER", conn="Driver={drv};Database=" + os.path.join(TMP, "duck.db") + ";",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
         text_sortable=True),
     "postgres": dict(

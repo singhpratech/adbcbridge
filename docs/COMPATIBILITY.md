@@ -162,7 +162,7 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | entry | Linux | macOS arm64 | Windows x64 |
 |---|---|---|---|
 | sqlite | PASS | PASS (SQLite 3.51.0) | PASS (SQLite 3.43.2) |
-| duckdb | PASS | pending | pending |
+| duckdb | PASS | PASS (DuckDB ODBC 1.5.5.0, universal binary) | pending |
 | postgres | PASS | PASS (PostgreSQL 15.15) | pending |
 | mariadb | PASS | pending | pending |
 | columnstore | PASS | pending | pending |
@@ -206,4 +206,4 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | ydb | PASS | pending | pending |
 | dremio | PASS | pending | pending |
 | tdengine | PASS | PASS (3.3.6.13, vendor arm64 client) | pending |
-| access | PASS | pending | pending |
+| access | PASS | PASS (mdbtools 1.0.1 from source, one local patch: fakeglib `g_strsplit`) | pending |
