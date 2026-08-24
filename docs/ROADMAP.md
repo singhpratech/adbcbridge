@@ -9,16 +9,18 @@ ODBC is the first bridge; the name leaves room for the others.
 | Milestone | Status |
 |---|---|
 | Query, types, NULLs, Unicode, parameters, bulk ingest, metadata, errors | done |
-| Compatibility matrix: SQLite, DuckDB, PostgreSQL, MariaDB, SQL Server, Oracle, ClickHouse | done |
-| Clients verified: Python, Go, Rust, C | done |
-| Clients: Java, C#, R | in progress |
-| More databases: MySQL, Firebird, MonetDB, CockroachDB, MS Access (MDB Tools), Db2, Vertica, Exasol | in progress |
-| Array-bound bulk ingest on every database (then default on) | in progress |
-| ADBC Driver Foundry validation suite: fix driver defects D1–D14 | in progress |
-| Plug-and-play install: `install.sh`, driver manifest, `driver="odbc"` by name | in progress |
+| Compatibility matrix: **46 databases** verified on Linux by one workload (`docs/COMPATIBILITY.md`) | done |
+| Clients measured against all 46: Python, Rust, Go, Java, C# (`bench/LANGUAGE_BENCHMARKS.md`); R smoke-tested | done |
+| Array-bound and multi-row bulk ingest, probed per driver, default on | done |
+| Plug-and-play install: `install.sh`, driver manifest, `driver="odbc"` by name (Linux, macOS) | done |
+| macOS verified on a real machine: SQLite, PostgreSQL 15, SQL Server 2022 (`bench/BENCHMARKS-macos.md`) | done |
+| Windows: first build 2026-08-24 (four MSVC defects, one text-encoding bug found and fixed); SQLite verified (`bench/BENCHMARKS-windows.md`) | done |
+| Windows: prefetch pipeline and parallel ingest — both pthreads, compiled out on `_WIN32`; a Win32 shim (SRWLOCK, CONDITION_VARIABLE, `_beginthreadex`) restores them | next |
+| **Driver bootstrap**: `install.sh` / the Windows and macOS installers fetch the open-licence ODBC drivers a first run needs (sqliteodbc, psqlodbc, MariaDB Connector/ODBC, clickhouse-odbc) so SQLite/PostgreSQL/MySQL work with nothing else installed; vendor drivers (Oracle, Db2, SQL Server, Snowflake…) stay the user's download — their licences do not allow redistribution, and Windows already ships the SQL Server driver | next |
+| ADBC Driver Foundry validation suite: driver defects D1–D14 | in progress |
 | Foundry listing (adbc-drivers.org) | next |
 | Windows + macOS binaries in CI releases | next |
-| Databases that need vendor downloads behind a login: Teradata, SAP HANA, Informix, Snowflake, Databricks/Spark (Simba), Hive | help wanted — the bridge is generic, we need someone with access to run `tests/compat/test_matrix.py` |
+| Databases that need vendor downloads behind a login: Teradata, SAP HANA, Snowflake, Databricks/Spark (Simba), Hive | help wanted |
 
 ## 2. JDBC bridge (`libadbc_driver_jdbc`) — next
 
