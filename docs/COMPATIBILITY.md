@@ -190,20 +190,20 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | timescaledb | PASS | PASS (TimescaleDB, PostgreSQL wire 16.15) | pending |
 | citus | PASS | PASS (Citus, PostgreSQL wire 18.4; amd64 emulated) | pending |
 | cloudberry | PASS | PASS (Apache Cloudberry, PostgreSQL wire 14.4; amd64 emulated) | pending |
-| materialize | PASS | pending | pending |
+| materialize | PASS | PASS (Materialize, PostgreSQL wire 9.5.0) | pending |
 | opengauss | PASS | server not runnable here: enmotech/opengauss arm64's MOT engine panics at start in the Docker Desktop VM (libnuma / `numa_node_of_cpu(0) => -1` / thread identifiers exhausted → `Failed to Initialize core services`), with `--cap-add=SYS_NICE --shm-size=1g` and with `--cpuset-cpus=0-7` | pending |
-| cratedb | PASS | FAIL at 187dfac: `AssertionError: decimal128(28, 3)` — psqlodbc 18 describes a NUMERIC whose precision and scale CrateDB does not report as decimal128(28, 3), where psqlodbc 16 on Linux says decimal128(28, 6); the entry now accepts both — re-run pending | pending |
+| cratedb | PASS | PASS (CrateDB 6.4.3, PostgreSQL wire 14.0.0) — at f9c27dc, after the entry accepted psqlodbc 18's decimal128(28, 3) | pending |
 | questdb | PASS | PASS (QuestDB, PostgreSQL wire 11.3) | pending |
-| risingwave | PASS | pending | pending |
-| spanner | PASS | pending | pending |
+| risingwave | PASS | PASS (RisingWave, PostgreSQL wire 13.14) — compose bind-mount of risingwave.toml refused by Docker Desktop for this account; run with the README's `docker run` and the toml under /private/tmp | pending |
+| spanner | PASS | PASS (Spanner emulator + PGAdapter, PostgreSQL wire 14.1; 300/2,000 rows as on Linux) | pending |
 | firebird | PASS | driver unavailable: firebird-odbc-driver v3-0-1 ships Linux and Windows assets only | pending |
 | virtuoso | PASS | FAIL: the driver (virtodbcu_r.so, Homebrew 7.2.17) aborts the process with SIGABRT inside SQLExecDirect on the first failing statement — isql and raw ODBC die identically, pyodbc's W connect survives | pending |
 | flightsql | PASS | FAIL: Arrow Flight SQL ODBC 0.9.7 (armv8 dmg) aborts the process with SIGABRT inside SQLExecDirect on the first failing statement — isql, raw ODBC and pyodbc die identically | pending |
-| arcadedb | PASS | pending | pending |
+| arcadedb | PASS | PASS (ArcadeDB, PostgreSQL wire 12.0.0; read-only fixture) | pending |
 | influxdb3 | PASS | FAIL: same driver, same abort (fixture loaded fine) | pending |
 | ignite | PASS | driver unavailable: platforms/cpp has only linux/ and win/ OS layers; the Darwin build stops at `sys/sysinfo.h` | pending |
 | opensearch | PASS | driver unavailable: the project's macOS pkg is x86_64-only (Intel Macs not targeted) | pending |
-| ydb | PASS | pending | pending |
+| ydb | PASS | FAIL: psqlodbc 18.00.0002 sends `SHOW DateStyle;` at connect (connection.c:1109) and YDB's PostgreSQL layer answers `unrecognized configuration parameter "datestyle"` — a driver-version incompatibility; psqlodbc 16 (Linux) does not issue it | pending |
 | dremio | PASS | FAIL: same driver, same abort (first-user bootstrap fine) | pending |
 | tdengine | PASS | PASS (3.3.6.13, vendor arm64 client) | pending |
 | access | PASS | PASS (mdbtools 1.0.1 from source, one local patch: fakeglib `g_strsplit`) | pending |
