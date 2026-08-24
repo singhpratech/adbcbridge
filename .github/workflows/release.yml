@@ -1,0 +1,211 @@
+# Copyright 2026 the adbcbridge authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Release: build the driver library on every supported platform, wrap it into
+# the per-language packages, attach everything to a GitHub Release, and (on a
+# tag) publish the Python wheels to PyPI through trusted publishing.
+#
+# Every platform job produces the same three things: the driver library, a
+# Python wheel with it bundled, and the bare library under natives/<rid>/ for
+# the NuGet, Maven and Go packaging jobs that follow. The wheels are tagged
+# py3-none-<platform> -- there is no Python extension module in them, only a
+# C shared library -- and depend on the OS's own ODBC driver manager
+# (unixODBC / iODBC / odbc32), which is deliberately NOT bundled: bundling a
+# foreign libodbc would change which odbcinst.ini the user's drivers are read
+# from. auditwheel/delocate therefore run with that library excluded.
+#
+# Publishing to PyPI needs a trusted publisher configured on the PyPI project
+# for this repository and workflow (environment "pypi"); without it the publish
+# job fails and nothing else is affected. The crates.io, NuGet and Maven Central
+# steps are documented in each package's README and run by a maintainer.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }} (manylinux_2_28)
+    runs-on: ${{ matrix.runner }}
+    container: quay.io/pypa/manylinux_2_28_${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64,  runner: ubuntu-latest,        rid: linux-x64 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm,     rid: linux-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install unixODBC headers
+        run: dnf install -y unixODBC-devel
+      - name: Build the driver
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 4
+          ctest --test-dir build --output-on-failure
+      - name: Build and repair the wheel
+        run: |
+          PY=/opt/python/cp312-cp312/bin/python
+          $PY -m pip install --upgrade build auditwheel
+          ADBCBRIDGE_LIBRARY=$PWD/build/libadbc_driver_odbc.so $PY -m build --wheel python -o wheelhouse-raw
+          $PY -m auditwheel repair --exclude libodbc.so.2 --plat manylinux_2_28_${{ matrix.arch }} -w wheelhouse wheelhouse-raw/*.whl
+          ls -l wheelhouse
+      - name: Stage the bare library
+        run: |
+          mkdir -p natives/${{ matrix.rid }}
+          cp build/libadbc_driver_odbc.so natives/${{ matrix.rid }}/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.rid }}
+          path: wheelhouse/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: natives/
+
+  macos:
+    name: macOS arm64
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install unixodbc
+      - name: Build the driver
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix unixodbc)"
+          cmake --build build --parallel 4
+          ctest --test-dir build --output-on-failure
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and repair the wheel
+        run: |
+          python -m pip install --upgrade build delocate
+          ADBCBRIDGE_LIBRARY=$PWD/build/libadbc_driver_odbc.dylib python -m build --wheel python -o wheelhouse-raw
+          delocate-wheel --exclude libodbc -w wheelhouse -v wheelhouse-raw/*.whl
+          ls -l wheelhouse
+      - name: Stage the bare library
+        run: |
+          mkdir -p natives/osx-arm64
+          cp build/libadbc_driver_odbc.dylib natives/osx-arm64/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-osx-arm64
+          path: wheelhouse/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-osx-arm64
+          path: natives/
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the driver
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel 4
+          ctest --test-dir build -C Release --output-on-failure
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the wheel
+        shell: bash
+        run: |
+          python -m pip install --upgrade build
+          ADBCBRIDGE_LIBRARY=$PWD/build/Release/libadbc_driver_odbc.dll python -m build --wheel python -o wheelhouse
+          ls -l wheelhouse
+      - name: Stage the bare library
+        shell: bash
+        run: |
+          mkdir -p natives/win-x64
+          cp build/Release/libadbc_driver_odbc.dll natives/win-x64/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-win-x64
+          path: wheelhouse/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-win-x64
+          path: natives/
+
+  sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install --upgrade build
+          python -m build --sdist python -o sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: sdist/*.tar.gz
+
+  release:
+    name: GitHub Release
+    needs: [linux, macos, windows, sdist]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Lay out release assets
+        run: |
+          mkdir -p assets
+          cp artifacts/wheel-*/*.whl artifacts/sdist/*.tar.gz assets/
+          for d in artifacts/native-*/*/; do
+            rid=$(basename "$d"); (cd "$d" && tar czf "$OLDPWD/assets/adbcbridge-${GITHUB_REF_NAME}-$rid.tar.gz" .)
+          done
+          ls -l assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true
+
+  pypi:
+    name: Publish to PyPI
+    needs: [linux, macos, windows, sdist]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - run: |
+          mkdir -p dist
+          cp artifacts/wheel-*/*.whl artifacts/sdist/*.tar.gz dist/
+          ls -l dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

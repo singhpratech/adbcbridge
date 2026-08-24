@@ -1,6 +1,6 @@
-# adbcbridge (Python)
+# adbcBridge (Python)
 
-Thin Python wrapper around [adbcbridge](https://adbcbridge.org), the ADBC
+Thin Python wrapper around [adbcBridge](https://adbcbridge.org), the ADBC
 driver for any ODBC data source. It finds the `libadbc_driver_odbc` shared
 library and hands it to `adbc_driver_manager`, so every ODBC driver on the
 machine becomes an Arrow-native ADBC database.
