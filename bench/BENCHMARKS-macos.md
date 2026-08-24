@@ -313,6 +313,33 @@ Driver fix: `no_param_arrays` keyed on MariaDB Connector/ODBC ≥ 3.2 (the Linux
 | spanner | PASS (`PostgreSQL (via ODBC) 14.1.0`), emulator + PGAdapter, 300/2,000 rows — python fetch 81,367/s (pyodbc 112,280), ingest 6,115 (array 7,141; pyodbc 265); the four harness rows first failed (DDL inside a transaction — autocommit off) and pass with `ADBC_BENCH_AUTOCOMMIT=1`: fetch 106,509–126,408/s, ingest 7,061–8,761/s, in `LANGUAGE_BENCHMARKS-macos.md` |
 | arcadedb | PASS (`PostgreSQL (via ODBC) 12.0.0`), read-only fixture — python fetch 289,023/s; the four harnesses first read 0 rows — `conn.py` was recreating `adbc_big` empty per connection (fixed `b883d62`) — and read 274,520–304,373/s with the setup unset |
 
+## Verified at the shipped state — main @ 7d6b043
+
+Fresh `rm -rf build`, `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+-DCMAKE_PREFIX_PATH=<unixODBC prefix>`, `cmake --build build -j`: **0 warnings**.
+macOS 26.5.2 (25F84), Apple M4 Max; Apple clang 21.0.0 (clang-2100.1.1.101, Command Line
+Tools); CMake 4.4.2; unixODBC 2.3.12 from source (`SQLLEN` 8); Python 3.12.12,
+adbc-driver-manager 1.12.0, pyarrow 25.0.1, pyodbc 5.3.0 from source; sqliteodbc 0.99991 over
+system SQLite 3.51.0; psqlodbc 18.00.0002 from source over PostgreSQL 15.15 (Homebrew, local
+cluster).
+
+```
+ctest --test-dir build      100% tests passed, 0 failed out of 8 (1.20 s)
+  adbc_odbc_c_smoke test_utf16 test_types test_sqllen32 test_objects test_errors test_multirow test_partition
+  (the TLS pair is not built on APPLE, by design)
+compat sqlite      PASS  (SQLite (via ODBC) 3.51.0)
+compat postgres    PASS  (PostgreSQL (via ODBC) 15.15.0)
+```
+
+Final macOS tally: **33 pass · 8 fail · 4 no driver for this OS · 1 server not runnable here**
+(46). The eight failures are all on the driver side of the ODBC API, before or beside any
+bridge code: four drivers that abort the process on the first failing statement (Virtuoso,
+Flight SQL, InfluxDB 3, Dremio — the same Flight SQL ODBC binary for three of them), two
+MariaDB Connector/ODBC connect-time `DUAL` probes (Databend, GreptimeDB) and two of its
+prepared/binary-literal path (Doris, StarRocks). The last four pass on Linux through MySQL's
+own Connector/ODBC, which has no arm64 macOS build; building it from source on arm64 is the
+one workaround that would change those four cells, and it is a driver build, not a bridge change.
+
 ## Batch 3: tier 4, the MySQL-wire servers (main @ f9c27dc)
 
 MariaDB Connector/ODBC 3.2.9 (libmaodbc, `SQL_DRIVER_VER 03.02.0009`) + Connector/C 3.4.9 for
