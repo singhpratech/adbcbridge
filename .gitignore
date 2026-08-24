@@ -17,3 +17,6 @@ bench/java/target/
 bench/csharp/bin/
 bench/csharp/obj/
 bench/go/bench_go
+go/internal/native/*/*.so
+go/internal/native/*/*.dylib
+go/internal/native/*/*.dll
