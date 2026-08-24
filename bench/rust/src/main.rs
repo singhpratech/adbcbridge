@@ -262,6 +262,13 @@ fn adbc_count(connection: &mut ManagedConnection, ident: &str) -> Res<i64> {
         return match column.data_type() {
             DataType::Int64 => Ok(as_prim::<arrow_array::types::Int64Type>(column)),
             DataType::Int32 => Ok(as_prim::<arrow_array::types::Int32Type>(column) as i64),
+            // ClickHouse reports COUNT(*) as UInt64, Virtuoso and others as a narrower
+            // unsigned type; the count never approaches i64::MAX, so the cast is safe.
+            DataType::UInt64 => Ok(as_prim::<arrow_array::types::UInt64Type>(column) as i64),
+            DataType::UInt32 => Ok(as_prim::<arrow_array::types::UInt32Type>(column) as i64),
+            DataType::UInt16 => Ok(as_prim::<arrow_array::types::UInt16Type>(column) as i64),
+            DataType::UInt8 => Ok(as_prim::<arrow_array::types::UInt8Type>(column) as i64),
+            DataType::Int16 => Ok(as_prim::<arrow_array::types::Int16Type>(column) as i64),
             DataType::Float64 => Ok(as_prim::<arrow_array::types::Float64Type>(column) as i64),
             DataType::Decimal128(_, 0) => {
                 Ok(as_prim::<arrow_array::types::Decimal128Type>(column) as i64)

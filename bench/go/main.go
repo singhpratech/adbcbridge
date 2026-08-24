@@ -47,6 +47,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -249,6 +250,18 @@ func adbcCount(cnxn adbc.Connection, ident string) (int64, error) {
 		case *array.Int64:
 			return col.Value(0), nil
 		case *array.Int32:
+			return int64(col.Value(0)), nil
+		// ClickHouse reports COUNT(*) as UInt64; the count never approaches
+		// math.MaxInt64, so the conversions below are safe.
+		case *array.Uint64:
+			return int64(col.Value(0)), nil
+		case *array.Uint32:
+			return int64(col.Value(0)), nil
+		case *array.Uint16:
+			return int64(col.Value(0)), nil
+		case *array.Uint8:
+			return int64(col.Value(0)), nil
+		case *array.Int16:
 			return int64(col.Value(0)), nil
 		case *array.Float64:
 			return int64(col.Value(0)), nil
@@ -454,10 +467,18 @@ func die(format string, a ...any) {
 	os.Exit(2)
 }
 
+// errSkipNative marks the database/sql columns that -no-native left unmeasured.
+var errSkipNative = errors.New("skipped (-no-native)")
+
 func main() {
 	rows := flag.Int("rows", 10000, "rows to ingest")
 	fetchRows := flag.Int("fetch-rows", 100000, "rows to read back")
 	reps := flag.Int("reps", 3, "timings to take the median of")
+	// Some ODBC drivers fault inside github.com/alexbrainman/odbc rather than
+	// returning an error -- MariaDB Connector/ODBC segfaults in SQLGetData -- which
+	// takes the whole process down and loses the ADBC columns with it. This skips
+	// the database/sql comparison so those stay measurable.
+	noNative := flag.Bool("no-native", false, "skip the database/sql comparison columns")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		die("expected a database name")
@@ -554,6 +575,9 @@ func main() {
 
 	// 2. database/sql ingest of the same rows into the table ADBC's DDL created.
 	odbcIngestStep := attempt(func() (float64, error) {
+		if *noNative {
+			return 0, errSkipNative
+		}
 		adbcDB, cnxn, err := adbcConnect(driver, uri, setup, false)
 		if err != nil {
 			return 0, err
@@ -611,6 +635,9 @@ func main() {
 			})
 		})
 		odbcFetchStep = attempt(func() (float64, error) {
+			if *noNative {
+				return 0, errSkipNative
+			}
 			sqlDB, err := odbcConnect(uri, setup)
 			if err != nil {
 				return 0, err

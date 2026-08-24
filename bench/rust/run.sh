@@ -18,7 +18,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-OUT="$ROOT/bench/RUST_BENCHMARKS.md"
+# Overridable so concurrent runs on one checkout do not rewrite each other's table,
+# the way langbench.sh's LANG_OUT is.
+OUT="${OUT:-$ROOT/bench/RUST_BENCHMARKS.md}"
 
 ROWS="${ROWS:-10000}"
 FETCH_ROWS="${FETCH_ROWS:-100000}"
