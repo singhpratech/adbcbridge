@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks — Windows
 
-**Status: measured, one machine, one day — five databases and 24 of 25 language cells,
-campaign closed.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
+**Status: measured, one machine — nine databases so far (five native installs, then a
+Docker Desktop tier running one container at a time) and the five-language grid.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
 CI was reporting that to nobody. The first person to build on Windows found ten defects across the repository — driver,
 tests and benchmark harnesses — and all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
 `windows.h` first; `strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT`
@@ -38,29 +38,43 @@ compat postgres  PASS  (PostgreSQL (via ODBC) 16.15.0)
 compat mysql     PASS  (MySQL (via ODBC) 8.4.9)
 ```
 
-## Why the Windows column stops at five
+## The Windows column, in two phases
 
-Five of 46 pass on Windows: SQLite, DuckDB, SQL Server 2025, PostgreSQL 16, MySQL 8.4 — all
-native installs, no containers. The other 41 are recorded in `docs/COMPATIBILITY.md` with
-the reason each did not run, and the reasons are three:
+**Phase 1 — native installs, five pass:** SQLite, DuckDB, SQL Server 2025, PostgreSQL 16,
+MySQL 8.4. Blocked there: MariaDB (its Connector/ODBC MSI is a browser-only download),
+Firebird (its security database needs an administrator to bootstrap), Access (32-bit ACE
+drivers only, recorded above).
 
-- **No container runtime.** 36 entries run from Docker images; Docker Desktop on this box
-  needs WSL2, which needs administrator rights and a reboot, and the user declined. Every one
-  of the PostgreSQL-wire (13) and MySQL-wire (10) entries among them reaches Windows through
-  psqlodbc or MySQL Connector/ODBC — the two client drivers the PostgreSQL and MySQL passes
-  exercised. That is the argument for stopping, stated as an argument and not a measurement:
-  the Windows-specific risk found today lived entirely in the driver manager's client side
-  (narrow-versus-wide entry points, code-page conversion, `SQLLEN` width), one PostgreSQL was
-  enough to expose the worst of it, and a second PostgreSQL-wire server through the same
-  psqlodbc would exercise the same client path against server behaviour already established
-  on Linux. Server-side differences (a wire server that rejects a psqlodbc handshake, as YDB
-  does with 18.x) are not Windows-specific and are recorded on Linux and macOS. The 13
-  entries whose vendor driver was never installed on Windows are a real gap, and are marked
-  as one.
-- **MariaDB Connector/ODBC** is only obtainable through a browser download page; the MSI was
-  not fetched, so MariaDB and ColumnStore are not run.
-- **Firebird** needs an administrator to bootstrap its security database; **Access** needs a
-  64-bit ACE driver that will not install beside 32-bit Office (both recorded above).
+**Phase 2 — Docker Desktop on WSL2.** First declined (administrator rights and a reboot),
+then done: `wsl --install` registered WSL but did not enable Virtual Machine Platform; a
+second elevated `wsl --install --no-distribution` staged it, then a reboot. Docker Desktop
+29.7.2 from winget, engine ready 5 s after launch; its VM disk cost ~6 GB before the first
+image. The VM is capped in `.wslconfig` at 2560 MB / 2 CPUs / no swap so an over-size
+container fails visibly instead of thrashing the host; containers run one at a time at
+`--memory=1g`, each image deleted before the next pull (10–50 s to ready for the psqlodbc
+tier). The 36 container entries are being worked through in tiers; anything that does not
+fit is recorded as `server not runnable here: RAM` with the evidence, not skipped.
+
+### Tier 3, batch 1 — psqlodbc "PostgreSQL Unicode(x64)" 18.00.0002, x64 Release at b5d2791
+
+| entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
+|---|---|---:|---:|---:|---:|
+| cockroachdb | PASS (`PostgreSQL (via ODBC) 18.0.0`), CockroachDB v26.3.0, `--max-go-memory=512MiB`, 235 MB | 155,144 | 109,120 | 16,816 (16,863) | 533 |
+| timescaledb | PASS (`PostgreSQL (via ODBC) 16.15.0`), latest-pg16, hypertable steps | 216,602 | 132,486 | 87,048 (119,999) | 903 |
+| citus | PASS (`PostgreSQL (via ODBC) 18.4.0`), PostgreSQL 18.4 + Citus 14.1.0, distributed-table steps | 266,622 | 145,459 | 132,876 (160,615) | 1,176 |
+| cratedb | PASS (`PostgreSQL (via ODBC) 14.0.0`), CrateDB 6.4.3, 495 MB | 104,449 | 94,266 | 4,136 (5,633) | 108 |
+
+Single samples, no prefetch, no fan-out. The five-language rows are in
+[`LANGUAGE_BENCHMARKS-windows.md`](LANGUAGE_BENCHMARKS-windows.md); Rust's odbc-api
+ingest is where the multi-row batching shows most on this tier — 7.4× on CockroachDB,
+19.7× on TimescaleDB, 141.6× on CrateDB (57 rows/s row by row) — with fetch within 10%.
+
+**A Windows-only environment fact, found by CrateDB:** Windows has no system time-zone
+database, so pyarrow's timestamp-with-timezone conversion raises `ArrowInvalid: The
+zoneinfo module or pytz package must be installed` until the `tzdata` PyPI package is
+installed. It bit CrateDB first only because that was the first Windows entry whose
+workload produces a tz-aware timestamp; any entry with a `timestamptz` column fails the
+same way on a fresh box. The setup line above now includes `tzdata`.
 
 ## Host — first human run, 2026-08-24, main @ 199f40e
 
@@ -82,7 +96,7 @@ git clone https://github.com/singhpratech/adbcbridge; cd adbcbridge
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 cmake --install build --config Release --prefix $PWD\dist
-py -3.12 -m pip install "adbc-driver-manager>=1.7" pyarrow pyodbc pytest
+py -3.12 -m pip install "adbc-driver-manager>=1.7" pyarrow pyodbc pytest tzdata   # tzdata: Windows has no system tz database
 $env:ADBC_ODBC_DRIVER   = "$PWD\build\Release\libadbc_driver_odbc.dll"
 $env:SQLITE_ODBC_DRIVER = "SQLite3 ODBC Driver"        # the name the installer registered
 py -3.12 tests\test_sqlite.py                          # end to end, no server

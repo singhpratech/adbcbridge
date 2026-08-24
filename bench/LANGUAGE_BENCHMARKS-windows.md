@@ -3,7 +3,7 @@
 
 The workload of [`LANGUAGE_BENCHMARKS.md`](LANGUAGE_BENCHMARKS.md) run on **Windows 11
 Pro 24H2, Intel Core i7-8550U (4 cores / 8 threads), 7.7 GB RAM, x64**, the OS's own driver
-manager (odbc32.dll), adbcbridge at `a019213`, x64 Release — a build with **no prefetch
+manager (odbc32.dll), adbcbridge at `a019213` (tier 3 at `b5d2791`), x64 Release — a build with **no prefetch
 pipeline and no ingest fan-out** (both compiled out on `_WIN32`). Same harnesses, same
 columns: ADBC ingest and fetch (rows/s) through `libadbc_driver_odbc.dll`, then that
 language's own ODBC client (Java's is JDBC — sqlite-jdbc — not ODBC). ROWS=10000,
@@ -40,8 +40,28 @@ progress; this file grows as servers come up. Python's ingest is `matrix_bench.p
 | go | mysql | 37,381 | 467,658 | skipped | skipped |
 | java | mysql | 30,400 | 444,488 | no driver | no driver |
 | csharp | mysql | 41,557 | 492,964 | 5,485 | 333,804 |
+| python | cockroachdb | 16,863 | 155,144 | 533 | 109,120 |
+| rust | cockroachdb | 15,266 | 208,366 | 2,055 | 214,104 |
+| go | cockroachdb | 13,392 | 157,819 | skipped | skipped |
+| java | cockroachdb | 14,507 | 159,345 | no driver | no driver |
+| csharp | cockroachdb | 11,826 | 190,613 | 241 | 133,247 |
+| python | timescaledb | 119,999 | 216,602 | 903 | 132,486 |
+| rust | timescaledb | 103,331 | 260,449 | 5,243 | 244,966 |
+| go | timescaledb | 113,592 | 266,786 | skipped | skipped |
+| java | timescaledb | 120,051 | 267,317 | no driver | no driver |
+| csharp | timescaledb | 136,470 | 283,250 | 442 | 184,760 |
+| python | citus | 160,615 | 266,622 | 1,176 | 145,459 |
+| rust | citus | 127,243 | 300,539 | 27,066 | 290,798 |
+| go | citus | 182,180 | 332,711 | skipped | skipped |
+| java | citus | 128,307 | 285,583 | no driver | no driver |
+| csharp | citus | 177,228 | 300,448 | 501 | 183,735 |
+| python | cratedb | 5,633 | 104,449 | 108 | 94,266 |
+| rust | cratedb | 8,105 | 193,169 | 57 | 216,539 |
+| go | cratedb | 9,862 | 59,028 | skipped | skipped |
+| java | cratedb | — | — | — | — |
+| csharp | cratedb | — | — | — | — |
 
-24 of 25 cells. The sqlite rows were re-taken with the rest of the grid, so they differ from
+The first five databases: 24 of 25 cells; tier 3 (Docker Desktop on WSL2, one container at a time at 1 GB) follows below them — CrateDB's C# and Java rows are still running (its row-at-a-time native ingest is ~60 rows/s, so each exceeds a 10-minute window). Rust's arrow-odbc fetch on tier 3: cockroachdb 198,095, timescaledb 229,103, citus 291,885, cratedb 210,859. The sqlite rows were re-taken with the rest of the grid, so they differ from
 the first-day numbers in `BENCHMARKS-windows.md` by the run-to-run variance recorded there.
 Rust's arrow-odbc fetch, not in the table: sqlite 396,258, mssql 896,103, postgres 411,178,
 mysql 489,701. Three words stand for three different kinds of empty native cell — `skipped`
