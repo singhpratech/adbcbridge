@@ -1734,6 +1734,12 @@ docker exec -u omm adbcbridge-opengauss bash -lc "
 "
 ```
 
+Create the role *inside* the container as `omm` through `gsql`, exactly as above: a role
+created over a remote `psql` session authenticates locally, but every remote MD5 login then
+fails with `FATAL: Invalid username/password,login denied` (measured on Windows/Docker Desktop
+and identical to the Linux behaviour).
+
+
 * The password must satisfy openGauss's complexity rule (8+ characters from at least
   three of upper/lower/digit/special), hence `Adbc@2026`.
 * `DBCOMPATIBILITY 'PG'` pins the SQL dialect. It is this image's default
