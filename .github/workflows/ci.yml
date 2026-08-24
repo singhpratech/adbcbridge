@@ -31,12 +31,19 @@ permissions:
 
 jobs:
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.os }}${{ matrix.arch && format(' {0}', matrix.arch) || '' }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        arch: [""]
+        include:
+          # 32-bit Windows is a supported target: the Access, Excel and Text ODBC
+          # drivers on a machine with 32-bit Office are 32-bit only, and ODBC cannot
+          # mix bitness.  SQLLEN is 32 bits wide there, which is what this job checks.
+          - os: windows-latest
+            arch: Win32
     steps:
       - uses: actions/checkout@v4
 
@@ -60,11 +67,18 @@ jobs:
             -DCMAKE_PREFIX_PATH="$(brew --prefix unixodbc)"
 
       - name: Configure
-        if: runner.os != 'macOS'
+        if: runner.os != 'macOS' && matrix.arch == ''
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/dist"
+
+      - name: Configure (Windows x86)
+        if: matrix.arch == 'Win32'
+        run: cmake -S . -B build -A Win32 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/dist"
 
       - name: Build
         run: cmake --build build --config Debug --parallel 4
+
+      - name: C unit tests
+        run: ctest --test-dir build -C Debug --output-on-failure
 
       - name: Install
         run: cmake --install build --config Debug

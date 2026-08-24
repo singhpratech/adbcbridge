@@ -188,3 +188,28 @@ create-twice → ProgrammingError, GetObjects (catalogs/tables/columns/PK+FK con
 * The pyodbc macOS wheel is linked against `/opt/homebrew/opt/unixodbc/lib/libodbc.2.dylib`
   (absolute path); without Homebrew's unixODBC it must be built from source with
   `odbc_config` on PATH.
+
+## Second pass: the two drivers Linux had to build from source (main @ 199f40e)
+
+* **TDengine — PASS** with the vendor's own arm64 client (`TDengine-client-3.3.6.13-macOS-arm64.pkg`)
+  and `taos-connector-odbc` branch 3.3.6 built against it: `tdengine PASS (tdengine (via ODBC)
+  03.03.0613 … build:Linux-arm64 …)`; `matrix_bench` fetch 552,492 rows/s; Rust ADBC fetch 507,308
+  rows/s on the 20,000-row fixture, while `odbc-api` and `arrow-odbc` both fail in `SQLBindCol`
+  (`Column conversion to 'SQL_C_TYPE_TIMESTAMP' not implemented yet`) — the bridge is the only
+  Rust path that reads TDengine at all. Load 3.3–6.5, not idle. Root-free workarounds the run
+  needed: the pkg's dylibs carry a bogus `install_name` (`install_name_tool -id` + ad-hoc
+  `codesign`); `libtaos` `dlopen()`s `libtaosnative.dylib` by bare name and SIP strips
+  `DYLD_LIBRARY_PATH` from anything spawned by `/bin/bash`, so `bench/rust/run.sh` had to run
+  with the client-lib directory as cwd; `TAOS_LOG_DIR`/`TAOS_CONFIG_DIR` in the environment;
+  bison ≥ 3 and pkg-config for the build; and one **local** patch to `taos-odbc`
+  (`src/core/env.c`, `_env_set_odbc_version`): for `SQL_OV_ODBC3_80` — what `odbc-api` asks for —
+  it builds the 01S02 "substituted" record and then aborts the process with `OA_NIY(0)`; with
+  that call removed it returns `SQL_SUCCESS_WITH_INFO` as written. On Linux the harness avoids
+  the abort by not touching `odbc-api` for this entry (`ADBC_BENCH_NO_NATIVE`). The Rust bench
+  also needs `DB=adbc` in `TDENGINE_CONN`.
+* **OpenSearch — recorded, not run.** The project's only macOS artifact
+  (`OpenSearch-SQL-ODBC-Driver-64-bit-1.5.0.0-Darwin.pkg`) is a single-arch **x86_64** dylib
+  linked against the system iODBC; in an arm64 process `dlopen()` answers `incompatible
+  architecture (have 'x86_64', need 'arm64e' or 'arm64e.v1' or 'arm64' or 'arm64')`. It loads
+  under Rosetta (`arch -x86_64 python3`), which an Intel-only stack could use; this project does
+  not target Intel Macs, so the entry stays Linux-only (where it is built from source).

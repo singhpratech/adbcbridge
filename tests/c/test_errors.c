@@ -49,6 +49,34 @@ SQLRETURN SQL_API SQLGetDiagRec(SQLSMALLINT handle_type, SQLHANDLE handle, SQLSM
   return written < full ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
 }
 
+#if defined(_WIN32)
+// On Windows the driver reaches diagnostics through SQLGetDiagRecW (src/odbc_text.c),
+// so the fake has to answer there too -- through the narrow fake above, so both
+// platforms test the same behaviour, plus the UTF-16 conversion the W path adds.
+SQLRETURN SQL_API SQLGetDiagRecW(SQLSMALLINT handle_type, SQLHANDLE handle, SQLSMALLINT rec,
+                                 SQLWCHAR* sqlstate, SQLINTEGER* native, SQLWCHAR* msg,
+                                 SQLSMALLINT buflen, SQLSMALLINT* msg_len) {
+  static char narrow[SQL_MAX_MESSAGE_LENGTH * 4];
+  SQLCHAR state[6] = {0};
+  SQLSMALLINT full = 0;
+  // The narrow fake with a buffer wide enough for the whole message: `full` is then
+  // the untruncated length, exactly as a real driver reports it.
+  SQLRETURN r = SQLGetDiagRec(handle_type, handle, rec, state, native, (SQLCHAR*)narrow,
+                              (SQLSMALLINT)sizeof(narrow), &full);
+  if (!SQL_SUCCEEDED(r)) return r;
+  if (sqlstate) {
+    for (int i = 0; i < 6; i++) sqlstate[i] = (SQLWCHAR)state[i];
+  }
+  size_t have = strlen(narrow);
+  size_t room = buflen > 0 ? (size_t)buflen - 1 : 0;
+  size_t written = have < room ? have : room;
+  for (size_t i = 0; i < written; i++) msg[i] = (SQLWCHAR)(unsigned char)narrow[i];
+  if (buflen > 0) msg[written] = 0;
+  if (msg_len) *msg_len = full;
+  return written < have ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+}
+#endif
+
 // ---------------------------------------------------------------------------
 
 static void TestOverlongMessage(void) {
@@ -72,13 +100,14 @@ static void TestOverlongMessage(void) {
     // The message is re-fetched into a buffer that holds it, so more than the
     // first SQL_MAX_MESSAGE_LENGTH bytes survive -- and, crucially, every byte
     // reported came from a buffer big enough to hold it.  (The ADBC error
-    // message itself is capped at 1 KiB by InternalAdbcSetError.)
+    // message itself is capped at 4 KiB by InternalAdbcSetError -- raised from 1 KiB
+    // when a dlopen() explanation with a long path on macOS outran it.)
     const char* first_y = strchr(error.message, 'y');
     CHECK_TRUE(first_y != NULL);
     if (first_y) {
       size_t run = strspn(first_y, "y");
       CHECK_TRUE(run > (size_t)SQL_MAX_MESSAGE_LENGTH - 1);
-      CHECK_TRUE(run <= 1024);
+      CHECK_TRUE(run <= 4096);
     }
   }
   CHECK_TRUE(memcmp(error.sqlstate, "42000", 5) == 0);

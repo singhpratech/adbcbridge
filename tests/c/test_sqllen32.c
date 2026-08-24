@@ -41,11 +41,16 @@ static void DriverWriteScalar32(void* p, uint32_t value) {
 static void TestScalarsQuirkOff(void) {
   SQLLEN v = -1;
   CHECK_I64(OdbcReadLen(&v, false), -1);
-  v = 1234567890123LL;
-  CHECK_I64(OdbcReadLen(&v, false), 1234567890123LL);
+  // A value past 32 bits can only exist where SQLLEN itself is 64 bits wide; on a
+  // 32-bit build (Windows x86, where SQLLEN is SQLINTEGER) the assignment truncates
+  // before the helper ever sees it, and the helper is not what is under test.
+  if (sizeof(SQLLEN) == 8) {
+    v = 1234567890123LL;
+    CHECK_I64(OdbcReadLen(&v, false), 1234567890123LL);
 
-  SQLULEN u = 4000000000ULL;
-  CHECK_I64((int64_t)OdbcReadULen(&u, false), 4000000000LL);
+    SQLULEN u = 4000000000ULL;
+    CHECK_I64((int64_t)OdbcReadULen(&u, false), 4000000000LL);
+  }
 }
 
 static void TestScalarsQuirkOn(void) {
@@ -112,8 +117,9 @@ static void TestIndicatorArray(void) {
   CHECK_I64(OdbcIndicatorGet(ind, 2, true), 4);
 
   // Reading that same buffer without the quirk is what the bug looked like: the
-  // NULL at row 1 disappears and row 1's length is nonsense.
-  CHECK_TRUE(OdbcIndicatorGet(ind, 1, false) != SQL_NULL_DATA);
+  // NULL at row 1 disappears and row 1's length is nonsense.  Only where SQLLEN is
+  // 8 bytes: on a 32-bit build the unquirked stride *is* 4 bytes and the read is right.
+  if (sizeof(SQLLEN) == 8) CHECK_TRUE(OdbcIndicatorGet(ind, 1, false) != SQL_NULL_DATA);
 }
 
 int main(void) {

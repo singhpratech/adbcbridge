@@ -196,6 +196,59 @@ SQLRETURN SQL_API SQLForeignKeys(SQLHSTMT hstmt, SQLCHAR* pkcat, SQLSMALLINT pkc
   return SQL_SUCCESS;
 }
 
+#if defined(_WIN32)
+// The driver reaches the catalog through the W entry points on Windows
+// (src/odbc_text.c); route them to the narrow fakes above so both platforms test the
+// same rows.  The names the tests pass are ASCII, so narrowing is a byte copy.
+static SQLCHAR* Narrow(const SQLWCHAR* w, SQLSMALLINT len, char* buf, size_t cap) {
+  if (!w) return NULL;
+  size_t n = 0;
+  if (len == SQL_NTS) {
+    while (w[n] && n + 1 < cap) { buf[n] = (char)w[n]; n++; }
+  } else {
+    while (n < (size_t)len && n + 1 < cap) { buf[n] = (char)w[n]; n++; }
+  }
+  buf[n] = '\0';
+  return (SQLCHAR*)buf;
+}
+#define NARROW(name) char name##_b[256]; SQLCHAR* name##_n = Narrow(name, name##_len, name##_b, sizeof(name##_b))
+
+SQLRETURN SQL_API SQLTablesW(SQLHSTMT hstmt, SQLWCHAR* cat, SQLSMALLINT cat_len, SQLWCHAR* sch,
+                             SQLSMALLINT sch_len, SQLWCHAR* tbl, SQLSMALLINT tbl_len,
+                             SQLWCHAR* type, SQLSMALLINT type_len) {
+  NARROW(cat); NARROW(sch); NARROW(tbl); NARROW(type);
+  return SQLTables(hstmt, cat_n, cat_n ? SQL_NTS : 0, sch_n, sch_n ? SQL_NTS : 0, tbl_n,
+                   tbl_n ? SQL_NTS : 0, type_n, type_n ? SQL_NTS : 0);
+}
+
+SQLRETURN SQL_API SQLColumnsW(SQLHSTMT hstmt, SQLWCHAR* cat, SQLSMALLINT cat_len, SQLWCHAR* sch,
+                              SQLSMALLINT sch_len, SQLWCHAR* tbl, SQLSMALLINT tbl_len,
+                              SQLWCHAR* col, SQLSMALLINT col_len) {
+  NARROW(cat); NARROW(sch); NARROW(tbl); NARROW(col);
+  return SQLColumns(hstmt, cat_n, cat_n ? SQL_NTS : 0, sch_n, sch_n ? SQL_NTS : 0, tbl_n,
+                    tbl_n ? SQL_NTS : 0, col_n, col_n ? SQL_NTS : 0);
+}
+
+SQLRETURN SQL_API SQLPrimaryKeysW(SQLHSTMT hstmt, SQLWCHAR* cat, SQLSMALLINT cat_len,
+                                  SQLWCHAR* sch, SQLSMALLINT sch_len, SQLWCHAR* tbl,
+                                  SQLSMALLINT tbl_len) {
+  NARROW(cat); NARROW(sch); NARROW(tbl);
+  return SQLPrimaryKeys(hstmt, cat_n, cat_n ? SQL_NTS : 0, sch_n, sch_n ? SQL_NTS : 0, tbl_n,
+                        tbl_n ? SQL_NTS : 0);
+}
+
+SQLRETURN SQL_API SQLForeignKeysW(SQLHSTMT hstmt, SQLWCHAR* pkcat, SQLSMALLINT pkcat_len,
+                                  SQLWCHAR* pksch, SQLSMALLINT pksch_len, SQLWCHAR* pktbl,
+                                  SQLSMALLINT pktbl_len, SQLWCHAR* fkcat, SQLSMALLINT fkcat_len,
+                                  SQLWCHAR* fksch, SQLSMALLINT fksch_len, SQLWCHAR* fktbl,
+                                  SQLSMALLINT fktbl_len) {
+  (void)pkcat; (void)pkcat_len; (void)pksch; (void)pksch_len; (void)pktbl; (void)pktbl_len;
+  NARROW(fkcat); NARROW(fksch); NARROW(fktbl);
+  return SQLForeignKeys(hstmt, NULL, 0, NULL, 0, NULL, 0, fkcat_n, fkcat_n ? SQL_NTS : 0, fksch_n,
+                        fksch_n ? SQL_NTS : 0, fktbl_n, fktbl_n ? SQL_NTS : 0);
+}
+#endif
+
 SQLRETURN SQL_API SQLGetConnectAttr(SQLHDBC hdbc, SQLINTEGER attr, SQLPOINTER value,
                                     SQLINTEGER buflen, SQLINTEGER* out_len) {
   (void)hdbc;

@@ -25,7 +25,7 @@
 
 #include <arrow-adbc/adbc.h>
 
-static size_t kErrorBufferSize = 1024;
+static size_t kErrorBufferSize = 4096;  // dlopen() explanations with long paths outran 1 KiB
 
 int InternalAdbcStatusCodeToErrno(AdbcStatusCode code) {
   switch (code) {
