@@ -33,6 +33,7 @@
 
 #include "odbc_internal.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -94,6 +95,36 @@ SQLRETURN OdbcForeignKeysUtf8(SQLHSTMT hstmt, const char* fcat, SQLSMALLINT fcat
 
 #else  // _WIN32
 
+// UTF-8 -> UTF-16 units.  Self-contained rather than OdbcUtf8ToUtf16Into (odbc_bind.c),
+// because this file is also linked into the C unit tests, which do not carry
+// odbc_bind.c.  A malformed byte becomes U+FFFD and the scan moves on one byte, so
+// bad input can only shorten the output, never overrun it.
+static size_t Utf8ToUtf16(SQLWCHAR* o, const char* s, size_t n) {
+  size_t i = 0, u = 0;
+  while (i < n) {
+    unsigned char b = (unsigned char)s[i];
+    uint32_t c;
+    size_t k;
+    if (b < 0x80) { c = b; k = 1; }
+    else if ((b & 0xE0) == 0xC0 && i + 1 < n) { c = ((b & 0x1F) << 6) | (s[i + 1] & 0x3F); k = 2; }
+    else if ((b & 0xF0) == 0xE0 && i + 2 < n) {
+      c = ((b & 0x0F) << 12) | ((s[i + 1] & 0x3F) << 6) | (s[i + 2] & 0x3F); k = 3;
+    } else if ((b & 0xF8) == 0xF0 && i + 3 < n) {
+      c = ((b & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) | ((s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F);
+      k = 4;
+    } else { c = 0xFFFD; k = 1; }
+    if (c >= 0x10000) {
+      c -= 0x10000;
+      o[u++] = (SQLWCHAR)(0xD800 + (c >> 10));
+      o[u++] = (SQLWCHAR)(0xDC00 + (c & 0x3FF));
+    } else {
+      o[u++] = (SQLWCHAR)c;
+    }
+    i += k;
+  }
+  return u;
+}
+
 // UTF-8 -> UTF-16, NUL-terminated, malloc'd; NULL stays NULL (a NULL catalog argument
 // means "no restriction" and must be passed through as NULL).  `len` is SQL_NTS or a
 // byte count.
@@ -106,7 +137,7 @@ static SQLWCHAR* ToW(const char* s, SQLSMALLINT len, SQLSMALLINT* out_len) {
   // Every UTF-8 byte yields at most one UTF-16 unit.
   SQLWCHAR* w = malloc((n + 1) * sizeof(SQLWCHAR));
   if (!w) return NULL;
-  int64_t units = OdbcUtf8ToUtf16Into(w, s, (int64_t)n);
+  size_t units = Utf8ToUtf16(w, s, n);
   w[units] = 0;
   if (out_len) *out_len = (SQLSMALLINT)units;
   return w;
