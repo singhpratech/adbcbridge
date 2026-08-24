@@ -146,8 +146,18 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT hstmt, SQLUSMALLINT col, SQLSMALLINT targe
     if (ind) *ind = (SQLLEN)sizeof(SQLBIGINT);
     return SQL_SUCCESS;
   }
-  if (target_type != SQL_C_CHAR) return SQL_ERROR;
   size_t len = strlen(text);
+  if (target_type == SQL_C_WCHAR) {
+    // What the driver asks for on Windows (src/odbc_text.c).  ASCII fixtures: a byte
+    // is a unit.  buflen and the indicator are in bytes, as ODBC has them.
+    if (buflen < (SQLLEN)((len + 1) * sizeof(SQLWCHAR))) return SQL_ERROR;
+    SQLWCHAR* w = (SQLWCHAR*)value;
+    for (size_t i = 0; i < len; i++) w[i] = (SQLWCHAR)(unsigned char)text[i];
+    w[len] = 0;
+    if (ind) *ind = (SQLLEN)(len * sizeof(SQLWCHAR));
+    return SQL_SUCCESS;
+  }
+  if (target_type != SQL_C_CHAR) return SQL_ERROR;
   if (buflen <= (SQLLEN)len) return SQL_ERROR;  // the tests never truncate
   memcpy(value, text, len + 1);
   if (ind) *ind = (SQLLEN)len;

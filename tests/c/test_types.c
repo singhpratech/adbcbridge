@@ -159,9 +159,19 @@ static void TestClassifyStringy(void) {
 static void TestClassifyBindWidth(void) {
   // A driver that cannot get back to a clipped value: a length-less type, and any
   // declared width past max_bind_bytes, are read with SQLGetData instead.
+  // On Windows every character column is read as SQL_C_WCHAR (the driver manager
+  // transcodes the narrow path to the ANSI code page), so the kind and the width
+  // differ there: (n + 1) UTF-16 units instead of n * 4 + 1 UTF-8 bytes.
+#if defined(_WIN32)
+  const int char_kind = FETCH_WCHAR;
+#define CHAR_WIDTH(n) (((n) + 1) * (int64_t)sizeof(SQLWCHAR))
+#else
+  const int char_kind = FETCH_CHAR;
+#define CHAR_WIDTH(n) ((n) * 4 + 1)
+#endif
   struct OdbcColumn c = Classify(SQL_VARCHAR, 20, 0, NULL);
   CHECK_TRUE(c.bound);
-  CHECK_I64(c.elem_size, 20 * 4 + 1);
+  CHECK_I64(c.elem_size, CHAR_WIDTH(20));
   CHECK_TRUE(!Classify(SQL_LONGVARCHAR, 20, 0, NULL).bound);
   CHECK_TRUE(!Classify(SQL_WLONGVARCHAR, 20, 0, NULL).bound);
   CHECK_TRUE(!Classify(SQL_LONGVARBINARY, 20, 0, NULL).bound);
@@ -175,13 +185,14 @@ static void TestClassifyBindWidth(void) {
   repair.refetch_repair = true;
   repair.long_bind_bytes = ADBC_ODBC_DEFAULT_LONG_BIND_BYTES;
   c = Classify(SQL_LONGVARCHAR, 65536, 0, &repair);
-  CHECK_I64(c.kind, FETCH_CHAR);
+  CHECK_I64(c.kind, char_kind);
   CHECK_TRUE(c.bound);
   CHECK_I64(c.elem_size, ADBC_ODBC_DEFAULT_LONG_BIND_BYTES);
   // Inside max_bind_bytes the declared width is honoured as it always was.
   c = Classify(SQL_LONGVARCHAR, 2000, 0, &repair);
   CHECK_TRUE(c.bound);
-  CHECK_I64(c.elem_size, 2000 * 4 + 1);
+  CHECK_I64(c.elem_size, CHAR_WIDTH(2000));
+#undef CHAR_WIDTH
   // SQL_C_WCHAR buffers stay a whole number of UTF-16 code units.
   repair.long_bind_bytes = 4095;
   c = Classify(SQL_WLONGVARCHAR, 16777215, 0, &repair);
