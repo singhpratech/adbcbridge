@@ -35,13 +35,39 @@ Note that being excluded is not evidence the form would have failed: CockroachDB
 YugabyteDB both answer the semantic check correctly. The rule is the brief's — default to
 off for anything not verified — not a claim that each excluded server is broken.
 
+### A note on partitioned reads
+
+[`ExecutePartitions`](../README.md#partitioned-reads-executepartitions) splits one query
+across N connections, which is where adbcbridge's read-path win against the native
+PostgreSQL driver comes from. Which split a server gets is decided per table, from the
+catalog, and never guessed — anything unprovable falls back to a single partition, which
+is exactly what not calling `ExecutePartitions` would have done. Three strategies, and a
+fallback:
+
+* **`ctid`** — the PostgreSQL heap split. Best where it exists: no index needed, balanced
+  in bytes, read sequentially. Tried first, and taken by any relation with a heap.
+* **`key range`** — `MIN`/`MAX` of the leading primary-key column, cut into half-open
+  intervals. Needs a single-table primary key whose leading column is an integer,
+  `NOT NULL` and ordered. Gate built from `SQLPrimaryKeys` + `SQLColumns`, so it is not
+  tied to any one server's system tables.
+* **`yb_hash_code`** — YugabyteDB's tablet hash, for its default hash-partitioned primary
+  key, where a key range would be a `Seq Scan` with a `Storage Filter` and 2.2x slower
+  (measured).
+* **`one partition`** — no heap and no usable key, so the read stays on one connection.
+
+Only PostgreSQL, CockroachDB and YugabyteDB have been measured live, and the rows below
+say so where they have. Everything not mentioned falls where its table shape puts it: a
+heap gets `ctid`, a heapless table with a suitable primary key gets a key range, and a
+table with neither gets one partition. The numbers are in
+[`bench/BENCHMARKS.md`](../bench/BENCHMARKS.md#splitting-a-table-that-has-no-heap).
+
 ## Verified
 
 | Database | Wire / driver | Matrix | Notes |
 |---|---|---|---|
 | SQLite 3.45 | sqliteodbc | PASS | native delegation to `adbc_driver_sqlite` when installed |
 | DuckDB | duckdb-odbc | PASS | no usable parameter arrays |
-| PostgreSQL 16 | psqlodbc | PASS | native delegation to `adbc_driver_postgresql` when installed; bulk ingest sends one array parameter per column (`INSERT … SELECT * FROM unnest(?::t[], …)`) rather than K row-groups of cells — a server quirk keyed on `version()`, so no other PG-wire server here gets it |
+| PostgreSQL 16 | psqlodbc | PASS | native delegation to `adbc_driver_postgresql` when installed; bulk ingest sends one array parameter per column (`INSERT … SELECT * FROM unnest(?::t[], …)`) rather than K row-groups of cells — a server quirk keyed on `version()`, so no other PG-wire server here gets it; partitioned reads split on `ctid` (1.21x native at 1 M rows, 1.55x at 10 M), and a **declaratively partitioned parent** — which has no heap of its own and used to get one partition — now takes the key-range split, 1.36x native |
 | MariaDB 11 | MariaDB Connector/ODBC | PASS | |
 | MariaDB ColumnStore 23.02 | MariaDB Connector/ODBC (MariaDB wire) | PASS | columnar engine inside MariaDB 11.1: standard-SQL ingest DDL (`LONG VARCHAR`/`BIT` rejected), no `VARBINARY` column type; needs `columnstore_cache_inserts=ON` (bound-parameter inserts are ~2 rows/s without it) and `provision` to start the backend processes; ingest 14.9k rows/s (54.6k with array binding), fetch 1.41M rows/s |
 | MySQL 8.4 | MySQL Connector/ODBC | PASS | driver executes parameter arrays row by row |
@@ -50,10 +76,10 @@ off for anything not verified — not a claim that each excluded server is broke
 | Oracle 23ai Free | Instant Client ODBC | PASS | no `SQL_C_SBIGINT` |
 | IBM Db2 12.1 | Db2 clidriver | PASS | 32-bit `SQLLEN`; ingest DDL spells an Arrow string as the widest `VARCHAR`, not the `LONG VARCHAR` the driver names (deprecated, unsortable, ~700x slower to write) |
 | ClickHouse 26 | clickhouse-odbc | PASS | one HTTP request per row on ingest |
-| CockroachDB 26 | psqlodbc (PG wire) | PASS | `version()` is CockroachDB's own, so the PostgreSQL array-ingest form stays off and ingest uses the multi-row `INSERT` (verified) |
+| CockroachDB 26 | psqlodbc (PG wire) | PASS | `version()` is CockroachDB's own, so the PostgreSQL array-ingest form stays off and ingest uses the multi-row `INSERT` (verified); **no `ctid`** (`42703`), so partitioned reads use the key-range split — measured 5.1x at N=8 and 6.5x at N=16 over a single connection on 1 M rows. **`adbc_driver_postgresql` cannot read this server at all** (it needs binary `COPY TO`, which CockroachDB does not implement), so there is no native ADBC alternative to compare against |
 | Percona Server 8.4 | MySQL Connector/ODBC (MySQL wire) | PASS | drop-in MySQL fork: same entry as MySQL, no quirks; ingest 21.1k rows/s, fetch 1.18M rows/s |
-| YugabyteDB 2026.1 | psqlodbc (PG wire) | PASS | `version()` carries `-YB-`, so the PostgreSQL array-ingest form stays off (verified) |
-| TimescaleDB 2.29 | psqlodbc (PG wire) | PASS | an extension on stock PostgreSQL, so the array-ingest form applies and is used (verified) |
+| YugabyteDB 2026.1 | psqlodbc (PG wire) | PASS | `version()` carries `-YB-`, so the PostgreSQL array-ingest form stays off (verified); **no `ctid`** (`0A000`), and its default `PRIMARY KEY (id)` is hash-partitioned, so partitioned reads split on `yb_hash_code()` — 2.6x over a single connection, and 2.2x better than a key range, which YugabyteDB would run as a `Seq Scan` with a `Storage Filter`. Against the native driver it reaches 1.18–1.22x at 4 M rows, i.e. on the 1.2x bar rather than over it, and 0.94x at 1 M: the server is the bottleneck there, not psqlodbc |
+| TimescaleDB 2.29 | psqlodbc (PG wire) | PASS | an extension on stock PostgreSQL, so the array-ingest form applies and is used (verified); a plain table has a heap and takes the `ctid` split, while a hypertable is a partitioned parent with none and takes the key-range split if it has a suitable primary key (not timed) |
 | Citus 14.1 (PostgreSQL 18) | psqlodbc (PG wire) | PASS | no quirks; an extension on stock PostgreSQL, so the array-ingest form applies and is used, distributed tables included (verified); the single container must be registered as its own worker (`citus_set_coordinator_host` + `shouldhaveshards`) before `create_distributed_table()` works; ingest 107k rows/s (array binding), fetch 1.86M rows/s |
 | CrateDB 6.4 | psqlodbc (PG wire) | PASS | `version()` is CrateDB's own, so the PostgreSQL array-ingest form stays off (verified); eventually consistent (`REFRESH TABLE`); no binary or `DATE` column type; ingest 50.0k rows/s (45.6k with array binding), fetch 726k rows/s |
 | QuestDB 10 | psqlodbc (PG wire) | PASS | own type system behind the PG wire: standard-SQL ingest DDL, `true`/`false` boolean params, no usable parameter arrays; `SQLColumns` fails, `GetObjects` describes a zero-row SELECT instead |

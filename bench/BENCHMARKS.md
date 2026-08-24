@@ -1035,6 +1035,11 @@ query across several connections, and PostgreSQL's `ctid` makes an exact split c
 [Partitioned reads](../README.md#partitioned-reads-executepartitions) in the README for
 the mechanism and the rules for when the driver refuses to split.
 
+`ctid` is only the first of three strategies. It is also the least portable one, and
+[Splitting a table that has no heap](#splitting-a-table-that-has-no-heap) below covers
+the PostgreSQL-wire servers that do not have it — CockroachDB and YugabyteDB — along with
+the measurements that decided which mechanism each of them gets.
+
 Reproduce with:
 
 ```sh
@@ -1137,6 +1142,230 @@ The practical reading is that N should be roughly the number of cores you can sp
 four to eight is where the returns are, and that a bigger table pushes the useful N up
 (the 10 M numbers scale better than the 1 M ones at every step, because the fixed
 per-connection cost is amortised further).
+
+### Splitting a table that has no heap
+
+`ctid` carried the section above, and `ctid` is a PostgreSQL heap detail. Fourteen of the
+databases in the compatibility matrix reach their server through psqlodbc over the
+PostgreSQL wire, and several of them do not store tables in a heap at all:
+
+| server | `SELECT ctid FROM t` |
+|---|---|
+| PostgreSQL 16.15 | works |
+| CockroachDB v26.3 | `42703  column "ctid" does not exist` |
+| YugabyteDB 2026.1 (PG 15 engine) | `0A000  system column "ctid" is not supported yet` |
+
+Those servers used to take the single-partition fallback, which means adbcbridge went
+into the comparison against `adbc_driver_postgresql` — the driver their users actually
+reach for — with its one advantage switched off. Two more strategies now cover them; see
+[Partitioned reads](../README.md#partitioned-reads-executepartitions) for the mechanism
+and the rules. What follows is what each is worth, measured.
+
+#### Which strategy, measured against the alternatives
+
+Four candidate mechanisms, all four measured on the same table at the same partition
+count by handing hand-built descriptors to `ReadPartition` (a descriptor is just
+`magic + SQL`, so an alternative split can be timed without implementing it). Every
+variant was checksum-verified against the single-partition read; all matched.
+
+**CockroachDB v26.3, `src1m` = 1 M rows, `PRIMARY KEY (id)`, N=8:**
+
+| split | median | min | max | vs single partition |
+|---|---:|---:|---:|---:|
+| **key range on `id`** (what the driver picks) | **0.464 s** | 0.462 | 0.498 | **9.9x** |
+| `LIMIT`/`OFFSET` with `ORDER BY id` | 1.378 s | 1.372 | 1.423 | 3.4x |
+| `mod(abs(id), 8) = k` | 1.722 s | 1.690 | 1.758 | 2.7x |
+| single partition | 4.618 s | 4.586 | 4.801 | 1.0x |
+
+**YugabyteDB 2026.1, `src1000000pk` = 1 M rows, default `PRIMARY KEY (id)`, N=8:**
+
+| split | median | min | max | vs single partition |
+|---|---:|---:|---:|---:|
+| **`yb_hash_code(id)` range** (what the driver picks) | **0.234 s** | 0.216 | 0.236 | **2.6x** |
+| `mod(abs(id), 8) = k` | 0.495 s | 0.475 | 0.500 | 1.2x |
+| key range on `id` | 0.510 s | 0.434 | 0.535 | 1.2x |
+| single partition | 0.613 s | 0.590 | 0.648 | 1.0x |
+| `LIMIT`/`OFFSET` with `ORDER BY id` | 0.753 s | 0.707 | 0.843 | **0.8x — slower than not splitting** |
+
+Three things fall out of those two tables.
+
+**A key range is the right general split, and it needs the index.** On CockroachDB, where
+the primary key *is* the table's storage order, `WHERE id >= a AND id < b` is a scan of
+`src1m@src1m_pkey` with tight spans and the split is worth 9.9x. The modulo split — which
+balances perfectly and needs no `MIN`/`MAX` probe — is 3.7x slower than the key range,
+because it is not an index condition and every slice scans the whole table. That is why
+this driver does not offer one, and why the key-range strategy insists on the *primary
+key* rather than any convenient integer column.
+
+**`LIMIT`/`OFFSET` is the trap it looks like.** It is 3.0x worse than a key range on
+CockroachDB and, on YugabyteDB, actually *slower than a single connection*: the server
+must produce and discard `OFFSET` rows for every slice, so the total work is quadratic in
+the partition count. (It is also not stable without a total order, which is why the
+`ORDER BY` is in there at all — and the `ORDER BY` is itself part of the cost.)
+
+**On YugabyteDB the key range is a 2.2x mistake, and that is what the hash check is for.**
+YugabyteDB's default `PRIMARY KEY (id)` is *hash*-partitioned. `EXPLAIN` on a range
+predicate against it says:
+
+```
+Seq Scan on yh  (cost=21.07..84.56 rows=5 width=40)
+  Storage Filter: ((id >= 10) AND (id < 20))
+```
+
+— eight slices, eight full table scans. Against `yb_hash_code(id)`, the same table gives
+`Index Scan using yh_pkey ... Index Cond`. The driver reads `pg_index.indoption`, where
+YugabyteDB records hash partitioning as bit `0x4`, and refuses to emit a key-range
+predicate without it. Both forms are *correct*; only one is fast, and the difference is
+2.2x here. A table created as `PRIMARY KEY (id ASC)` takes the ordinary key-range path.
+
+#### CockroachDB: no native driver reaches it at all
+
+The headline for CockroachDB is not a ratio. `adbc_driver_postgresql` cannot read one row
+from it:
+
+```
+INVALID_ARGUMENT: [libpq] Failed to execute query: could not begin COPY:
+ERROR: unimplemented: binary format for COPY TO not implemented
+```
+
+The native driver reads by asking for `COPY … WITH (FORMAT binary)` and decoding
+PostgreSQL's binary tuples straight into Arrow, and CockroachDB does not implement binary
+`COPY TO`. Every `SELECT` fails, including the ones this benchmark would need to build its
+own reference. So there is no native ADBC baseline to hold to 1.2x — there is no native
+ADBC path at all, and adbcbridge is the only one.
+
+What can be measured is what partitioning is worth against adbcbridge's own single
+connection:
+
+| N | median | min | max | Mrow/s | vs N=1 |
+|---|---:|---:|---:|---:|---:|
+| 1 | 4.563 s | 4.218 | 4.815 | 0.22 | 1.00x |
+| 2 | 2.470 s | 2.348 | 2.557 | 0.40 | 1.85x |
+| 4 | 1.395 s | 1.328 | 1.469 | 0.72 | 3.27x |
+| 8 | 0.897 s | 0.885 | 0.928 | 1.12 | **5.09x** |
+| 16 | 0.699 s | 0.659 | 0.829 | 1.43 | **6.53x** |
+
+That is the best scaling of any server in this file — near-linear to N=8 — because a
+single-connection CockroachDB read is slow enough (0.22 Mrow/s) that there is a great deal
+of headroom to recover, and a primary-index range scan divides cleanly.
+
+**Read those absolute numbers with care.** This single-node CockroachDB
+(`cockroachdb/cockroach:latest`, `start-single-node --insecure --cache=128MiB
+--max-sql-memory=128MiB`) burns **7.8 cores at idle** on this 20-core host, measured from
+its own cgroup `cpu.stat` with no client connected, and never dropped below about 7 in
+twenty minutes of watching — even on a freshly created, empty cluster. So roughly 40% of
+the machine was gone before any of these runs started. The ratios between partition counts
+are the result; the absolute seconds would be better on a machine the server was not
+already saturating.
+
+#### YugabyteDB: the split works, the speed-up does not arrive
+
+YugabyteDB *does* have a working native ADBC path, so it has a real ratio. Measured with
+`bench/native_threshold.py` — mean of interleaved runs, one fresh process each, after the
+import fix:
+
+| rows | N | runs | ours (mean) | native (mean) | spread ours | spread native | ratio | verdict |
+|---:|---:|---:|---:|---:|---|---|---:|---|
+| 1 M | 8 | 3 | 0.372 s | 0.352 s | 0.298–0.416 | 0.343–0.365 | 0.94x | **FAIL** |
+| 4 M | 8 | 3 | 0.883 s | 1.074 s | 0.882–0.884 | 1.034–1.123 | 1.22x | PASS (marginal) |
+| 4 M | 8 | 5 | 0.859 s | 1.039 s | 0.847–0.879 | 1.015–1.088 | 1.21x | PASS (marginal) |
+| 4 M | 16 | 5 | 0.844 s | 0.997 s | 0.819–0.879 | 0.937–1.083 | 1.18x | **FAIL** |
+
+**The honest reading: YugabyteDB is on the bar, not over it.** At 1 M rows it is behind
+the native driver; at 4 M it lands between 1.18x and 1.22x depending on the partition
+count and the repeat, which straddles the 1.20x threshold rather than clearing it. Two
+runs that differ only in partition count give a PASS and a FAIL. Calling that a pass would
+be reading the third significant figure of a measurement that does not have three
+significant figures.
+
+The partition sweep says where the ceiling is:
+
+| N | median | min | max | vs native |
+|---|---:|---:|---:|---:|
+| 1 | 0.597 s | 0.575 | 0.630 | 0.58x |
+| 2 | 0.458 s | 0.455 | 0.532 | 0.75x |
+| 4 | 0.407 s | 0.374 | 0.415 | 0.85x |
+| 8 | 0.374 s | 0.343 | 0.389 | 0.92x |
+| 16 | 0.371 s | 0.353 | 0.402 | 0.93x |
+| native `adbc_driver_postgresql` | 0.345 s | 0.329 | 0.375 | 1.00x |
+
+N=1 to N=8 buys only **1.6x**, against PostgreSQL's 3.4x and CockroachDB's 5.1x, and it is
+flat past N=4. Two measurements say why, and a third rules out the obvious suspect.
+
+**It is not the tablet count.** The obvious guess is that a single-node `yugabyted` puts
+the whole table on one tablet, so eight hash ranges queue behind one RocksDB —
+`yb_table_properties()` confirms `num_tablets = 1`. Rebuilding the same rows as
+`SPLIT INTO 8 TABLETS` changes nothing: 0.602 s at N=1 and 0.399 s at N=8, the same
+1.5x and the same ceiling.
+
+**It is that the server, not the client, is the bottleneck — and splitting makes the
+server do more work.** Client CPU from `os.times()` against the container's cgroup:
+
+| N | wall | client CPU | server CPU | cores busy | one slice alone |
+|---|---:|---:|---:|---:|---:|
+| 1 | 0.630 s | 0.570 s | 0.529 s | 1.7 | 0.615 s |
+| 2 | 0.392 s | 0.560 s | 0.740 s | 3.3 | 0.378 s |
+| 4 | 0.322 s | 0.800 s | 1.243 s | 6.3 | 0.269 s |
+| 8 | 0.291 s | 0.960 s | 2.134 s | 10.6 | 0.183 s |
+
+Compare that with the PostgreSQL numbers earlier in this section, where the client costs
+**4.3x** the server (7.79 s against 1.83 s at N=1) — that lopsidedness is exactly what
+makes partitioning pay there, because the expensive half is the half being multiplied
+across cores. On YugabyteDB the two halves are **about equal** at N=1 (0.570 s against
+0.529 s): psqlodbc's text decoding is no longer the dominant cost, because YSQL plus
+DocDB is expensive in its own right. And going eight ways multiplies the *server's* CPU by
+**4.0x** (0.529 s to 2.134 s) while the client's grows only 1.7x — each slice re-pays a
+distributed read path's per-scan setup. Parallelising a bottleneck you are also inflating
+does not get you 3.4x.
+
+So the strategy is doing its job — `yb_hash_code` is 2.6x better than a single connection
+and 2.2x better than the next-best split — and it still only reaches parity, because on
+YugabyteDB the thing partitioning is good at removing is not what the time is going on.
+
+#### Setup for this section
+
+`tests/compat/docker-compose.yml` as checked in: `cockroachdb/cockroach:latest`
+(v26.3) on 16257, `yugabytedb/yugabyte:latest` (2026.1, PG 15 engine) on 15433 with the
+tserver capped at 768 MB. Tables are `(id bigint, val double precision, txt varchar(64),
+dt date)` with `PRIMARY KEY (id)` — the two heapless servers need a primary key for there
+to be anything to split, and a real table on either of them has one; PostgreSQL's
+`src1m`/`src10m` deliberately keep no primary key so that their `ctid` numbers stay
+comparable with the rest of this file. `ANALYZE`d. Same host as the rest of the file.
+**The two servers were measured one at a time**, with the other container stopped, because
+CockroachDB's idle CPU (above) would otherwise land on YugabyteDB's numbers. The
+PostgreSQL and YugabyteDB runs were taken at a host one-minute load average of 1.2–4.4;
+the CockroachDB runs could not be, for the reason given above. A desktop compositor sat at
+about 2.6 cores throughout.
+
+Reproduce:
+
+```sh
+docker compose -f tests/compat/docker-compose.yml up -d cockroachdb yugabyte
+POSTGRES_ODBC_DRIVER=/path/to/psqlodbcw.so \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python bench/native_threshold.py --database yugabyte --rows 4000000 \
+      --runs 5 --partitions 8 --axes fetch
+POSTGRES_ODBC_DRIVER=/path/to/psqlodbcw.so \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python bench/partition_bench.py --pg postgresql://root@127.0.0.1:16257/defaultdb \
+      --table src1m --parts 1,2,4,8,16 --reps 5 --skip-native --skip-floor
+```
+
+#### What the split probe costs
+
+Choosing a strategy costs metadata round trips — `SQLPrimaryKeys`, `SQLColumns`, one
+`pg_index` query, and one `SELECT MIN(k), MAX(k)` where the extent is not fixed. Median of
+five `ExecutePartitions` calls on an already-open connection, asking for 8 partitions:
+
+| server | table | strategy | `ExecutePartitions` |
+|---|---|---|---:|
+| PostgreSQL | `src1m` | `ctid` | 0.3 ms |
+| PostgreSQL | partitioned parent | key range | 2.5 ms |
+| YugabyteDB | `src1000000pk` | `yb_hash_code` | 5.7 ms |
+
+The first call on a fresh connection is dearer (2.2 ms / 5.2 ms / 55 ms) because psqlodbc
+caches catalog information per connection. Against reads of 0.2–4.6 s these are noise, and
+the fallback path pays only the part of the probe that fails.
 
 ### Prefetch: measured, and largely worthless
 
@@ -1360,6 +1589,14 @@ mssql and db2.
 
 ## The 1.2x threshold against the native drivers
 
+> **Correction, 2026-08-23.** The fetch figures in this section were measured with a
+> harness bug that charged the native driver for something we were not charged for, and
+> have been re-measured. See [A harness bug that inflated every fetch
+> ratio](#a-harness-bug-that-inflated-every-fetch-ratio) below for what it was and what
+> the numbers became. The short version: PostgreSQL fetch at 1 M rows was reported as
+> 1.83x and is really **1.21x**; at 10 M it was 1.64x and is really **1.55x**. Both are
+> still passes; the first is a much narrower one than was claimed.
+
 The bar: **mean of three runs, at least 1.2x faster than the native ADBC driver, on both
 fetch and ingest.** `bench/native_threshold.py` measures exactly that and prints
 `PASS`/`FAIL` against it. It runs a fresh process per timed run and interleaves the sides
@@ -1370,6 +1607,34 @@ committing for ingest. Correctness is checked alongside speed: each ingest is co
 against the source table by row count and a per-column checksum computed **in SQL on the
 server** (so it does not depend on the driver under test), and each fetch against a
 reference read. A checksum mismatch is a `FAIL` whatever the clock says.
+
+### A harness bug that inflated every fetch ratio
+
+A fresh process per timed run is what keeps a warmed-up allocator or an already-loaded
+shared library from carrying a measurement — but it also turns Python's `import` into a
+per-run cost, and the two sides did not pay it in the same place. `bridge_fetch`
+imported `adbc_driver_manager` *before* starting its clock; `native_fetch` started its
+clock and then called `native_connect`, which imported `adbc_driver_postgresql.dbapi`
+*inside* it. Measured on this host, in a fresh process:
+
+| module | import |
+|---|---:|
+| `adbc_driver_manager` | 0.002 s |
+| `adbc_driver_postgresql.dbapi` | 0.129–0.151 s |
+
+So roughly **0.14 s of shared-library loading was inside the native driver's clock and
+outside ours**, every run. On a 1 M-row read that is most of the reported gap. It was
+caught because `bench/partition_bench.py` — which imports both drivers before timing
+anything, and runs in one warm process — disagreed with `native_threshold.py` about
+YugabyteDB by exactly that much (0.92x against 1.29x).
+
+The fix (`warm_imports`, called at the top of every worker) imports both drivers before
+any clock starts, so what the clock covers is the connection and the query. The two
+harnesses now agree. Everything below this line is post-fix.
+
+Our own numbers did not move — PostgreSQL 1 M fetch was 0.186 s before and 0.187 s
+after. The native side went from 0.339 s to 0.227 s. The ingest axis had the same
+asymmetry and is also re-measured; it failed before and fails by more now.
 
 ```
 ADBC_ODBC_DRIVER=build/libadbc_driver_odbc.so POSTGRES_ODBC_DRIVER=/path/psqlodbcw.so \
@@ -1395,17 +1660,43 @@ Ingest here is the **array form** described in
 [PostgreSQL array ingest](#postgresql-array-ingest-what-it-buys-and-what-it-does-not);
 the figures the multi-row `INSERT` reached before it are in that section.
 
-| rows | axis | ours (mean) | native (mean) | spread ours | spread native | ratio | verdict |
-|---:|---|---:|---:|---|---|---:|---|
-| 1 M | fetch, 8 partitions | 0.186 s | 0.339 s | 0.168–0.200 | 0.334–0.346 | **1.83x faster** | **PASS** |
-| 1 M | ingest, 1 connection | 1.264 s | 0.357 s | 1.208–1.321 | 0.341–0.372 | 0.28x (3.5x slower) | **FAIL** |
-| 1 M | ingest, 12 connections | 0.354 s | 0.331 s | 0.328–0.372 | 0.325–0.342 | 0.94x | **FAIL** |
-| 1 M | ingest, 16 connections | 0.317 s | 0.322 s | 0.309–0.331 | 0.317–0.325 | 1.02x (0.9–1.0x over repeats) | **FAIL** |
-| 10 M | fetch, 12 partitions | 1.265 s | 2.074 s | 1.263–1.268 | 2.059–2.089 | **1.64x faster** | **PASS** |
-| 10 M | ingest, 16 connections | 3.486 s | 2.417 s | 3.193–3.751 | 2.366–2.478 | 0.69x (1.44x slower) | **FAIL** |
+Fetch re-measured 2026-08-23 after the import fix, mean of three interleaved runs, one
+fresh process each, host one-minute load average 1.2–1.4 throughout (quiet by the
+standards of this machine). Ingest rows are as previously measured and carry the same
+inflation on the native side — they failed before and fail by more now, so they have not
+been re-run.
 
-Fetch clears the bar at both sizes. Ingest does not, at any connection count — it reaches
-parity at 1 M rows and stays about 1.4x behind at 10 M.
+| rows | table | axis | ours (mean) | native (mean) | spread ours | spread native | ratio | verdict |
+|---:|---|---|---:|---:|---|---|---:|---|
+| 1 M | plain heap | fetch, 8 partitions (`ctid`) | 0.187 s | 0.227 s | 0.160–0.222 | 0.221–0.234 | **1.21x faster** | **PASS** (narrow) |
+| 1 M | partitioned parent | fetch, 8 partitions (key range) | 0.172 s | 0.234 s | 0.162–0.185 | 0.228–0.241 | **1.36x faster** | **PASS** |
+| 10 M | plain heap | fetch, 12 partitions (`ctid`) | 1.237 s | 1.919 s | 1.218–1.257 | 1.905–1.933 | **1.55x faster** | **PASS** |
+| 1 M | plain heap | ingest, 1 connection | 1.264 s | 0.357 s | 1.208–1.321 | 0.341–0.372 | 0.28x (3.5x slower) | **FAIL** |
+| 1 M | plain heap | ingest, 12 connections | 0.354 s | 0.331 s | 0.328–0.372 | 0.325–0.342 | 0.94x | **FAIL** |
+| 1 M | plain heap | ingest, 16 connections | 0.317 s | 0.322 s | 0.309–0.331 | 0.317–0.325 | 1.02x | **FAIL** |
+| 10 M | plain heap | ingest, 16 connections | 3.486 s | 2.417 s | 3.193–3.751 | 2.366–2.478 | 0.69x (1.44x slower) | **FAIL** |
+
+Fetch clears the bar at both sizes, but 1 M is now a narrow pass rather than a
+comfortable one: the fixed per-read costs the partitions cannot divide (eight
+connections, eight plans) are a large share of a 0.19 s read and a small one of a 1.24 s
+read, which is why 10 M is the stronger result. Ingest does not clear the bar at any
+connection count.
+
+The second row is new. A **declaratively partitioned parent** has no heap of its own, so
+`pg_relation_size` reports zero blocks and it used to get exactly one partition — 0.42x
+native. The key-range strategy gives it eight, and the slices prune to individual child
+partitions, which is why it beats the plain heap table of the same size.
+
+| variant | median | min | max | vs native |
+|---|---:|---:|---:|---:|
+| adbcbridge, N=1 (what a partitioned parent used to get) | 0.513 s | 0.496 | 0.520 | 0.42x |
+| adbcbridge, N=2 | 0.296 s | 0.281 | 0.319 | 0.74x |
+| adbcbridge, N=4 | 0.191 s | 0.179 | 0.209 | 1.14x |
+| **adbcbridge, N=8** | **0.164 s** | 0.154 | 0.194 | **1.33x** |
+| native `adbc_driver_postgresql` | 0.218 s | 0.209 | 0.222 | 1.00x |
+
+(`bench/partition_bench.py`, median of 5 in one warm process, 1 M rows over four child
+partitions. The 1.33x here and the 1.36x above are the same result measured two ways.)
 
 ### SQLite
 
