@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# adbcbridge roadmap
+# adbcBridge roadmap
 
-adbcbridge turns legacy database connectivity layers into Arrow-native ADBC drivers.
+adbcBridge turns legacy database connectivity layers into Arrow-native ADBC drivers.
 ODBC is the first bridge; the name leaves room for the others.
 
 ## 1. ODBC bridge (`libadbc_driver_odbc`) — now

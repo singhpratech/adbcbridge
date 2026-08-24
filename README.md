@@ -1,4 +1,4 @@
-# adbcbridge
+# adbcBridge
 
 **An [ADBC](https://arrow.apache.org/adbc/) driver for any ODBC data source.**
 Written in plain C11 — one shared library that turns every ODBC driver on your
