@@ -606,3 +606,19 @@ services:
       - ./fixtures/mongodbbi.drdl:/etc/mongodbbi.drdl:ro
     mem_limit: 2g
     ports: ["127.0.0.1:13315:3307"]
+
+  # Oracle and ClickHouse were long-lived standalone containers on the Linux host and
+  # were missing here; these are the same images, environment and ports.  Both are in
+  # the extra profile.  gvenzl/oracle-free publishes arm64 as well as amd64.
+  oracle:
+    profiles: ["extra"]
+    image: gvenzl/oracle-free:slim
+    environment: { ORACLE_PASSWORD: adbc, APP_USER: adbc, APP_USER_PASSWORD: adbc }
+    ports: ["127.0.0.1:11521:1521"]
+    mem_limit: 3g
+  clickhouse:
+    profiles: ["extra"]
+    image: clickhouse/clickhouse-server:latest
+    environment: { CLICKHOUSE_USER: adbc, CLICKHOUSE_PASSWORD: adbc, CLICKHOUSE_DB: adbc, TZ: UTC }
+    ports: ["127.0.0.1:18123:8123", "127.0.0.1:19000:9000"]
+    ulimits: { nofile: { soft: 262144, hard: 262144 } }
