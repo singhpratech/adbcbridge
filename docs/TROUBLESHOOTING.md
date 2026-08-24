@@ -208,3 +208,51 @@ the wide buffer harmlessly; one that under-reports would truncate — none of SQ
 DuckDB, msodbcsql or psqlodbc does either. If a text column on Windows comes back
 truncated, that is where to look.
 
+
+## macOS: a vendor driver built for iODBC (empty diagnostics, or "Lost connection during query")
+
+### What you see
+
+Through a bridge built against unixODBC, a driver such as MySQL Connector/ODBC for
+macOS fails every call with an *empty* diagnostic — `[H000] [ (0) (SQLDriverConnect)` —
+and pyodbc fails the same way. Through a bridge built against iODBC (before `60b05e8`)
+it connects, then the first statement with a non-ASCII character fails server-side:
+`[08S01] (2013) Lost connection to MySQL server during query`, the server logging
+something like `Utf8Error { valid_up_to: 63 }`.
+
+### What is actually happening
+
+macOS has two ODBC driver managers with **different `SQLWCHAR` widths**: unixODBC's is
+two bytes (UTF-16), iODBC's is `wchar_t`, four bytes, one code point per unit. A driver
+compiled against one cannot be loaded through the other, whatever `install_name_tool`
+says: the wide entry points exchange text in the wrong unit size, and the diagnostic
+strings come back unreadable — hence the empty error. MySQL Connector/ODBC 26.7.1 for
+macOS arm64 links `@rpath/libiodbcinst.dylib`; it is an iODBC driver. (So are some
+others — OpenSearch's macOS pkg links `/usr/lib/libiodbc`.) Relinking such a driver to
+unixODBC is **not** a valid recipe.
+
+The second symptom was the bridge's own bug: its UTF-8 ↔ `SQLWCHAR` codecs assumed
+UTF-16 and wrote surrogate pairs into four-byte slots. Since `60b05e8` every codec
+honours `sizeof(SQLWCHAR)` — the tests are built a second time with a four-byte
+`SQLWCHAR` (`test_utf16_wchar32`, `test_multirow_wchar32`) to keep it that way.
+
+### What works
+
+Build the bridge against iODBC and use the vendor driver through it:
+
+```sh
+# iODBC 3.52.16 from the openlink/iODBC tag: ./configure --disable-gui && make install
+cmake -S . -B build-iodbc -DCMAKE_BUILD_TYPE=Release \
+  -DODBC_INCLUDE_DIR=<iodbc>/include -DODBC_LIBRARY=<iodbc>/lib/libiodbc.dylib
+cmake --build build-iodbc && ctest --test-dir build-iodbc
+# The connector as downloaded needs its quarantine flag cleared, rpaths for
+# libiodbcinst.dylib and its bundled libssl, and a fresh ad-hoc signature:
+xattr -c <connector>/lib/*.so <connector>/lib/*.dylib <connector>/lib/plugin/*.so
+install_name_tool -add_rpath <iodbc>/lib -add_rpath <connector>/lib <connector>/lib/libmyodbc26w.so
+codesign -f -s - <connector>/lib/libmyodbc26w.so
+```
+
+Then `Driver=<connector>/lib/libmyodbc26w.so;...` in the connection string, with
+`ADBC_ODBC_DRIVER` pointing at `build-iodbc/libadbc_driver_odbc.dylib`. One bridge build
+per driver manager: a unixODBC-built bridge for unixODBC drivers (psqlodbc, sqliteodbc,
+the MariaDB connector, ...), an iODBC-built one for iODBC drivers.
