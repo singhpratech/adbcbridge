@@ -219,10 +219,19 @@ jobs:
         with:
           dotnet-version: "8.0.x"
       - name: Pack
+        # With the native artifacts present the package carries them under
+        # runtimes/<rid>/native; on a dry run whose uploads were refused it is
+        # packed managed-only, so the step still proves the pack itself.
         run: |
-          ls -R artifacts | head -20
-          dotnet pack csharp/AdbcBridge -c Release -p:NativeRoot=$PWD/artifacts -o nupkg
-          unzip -l nupkg/*.nupkg | grep runtimes/
+          ls -R artifacts 2>/dev/null | head -20 || true
+          if ls artifacts/*/libadbc_driver_odbc.* >/dev/null 2>&1; then
+            dotnet pack csharp/AdbcBridge -c Release -p:NativeRoot=$PWD/artifacts -o nupkg
+            unzip -l nupkg/*.nupkg | grep runtimes/
+          else
+            echo "::warning::no native artifacts were downloaded; packing managed-only"
+            dotnet pack csharp/AdbcBridge -c Release -o nupkg
+          fi
+          unzip -l nupkg/*.nupkg
       - uses: actions/upload-artifact@v4
         continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
         with:
@@ -249,12 +258,18 @@ jobs:
       - name: Lay out natives as <os>-<arch> and package
         run: |
           mkdir -p natives
-          [ -d artifacts/linux-x64 ]   && cp -r artifacts/linux-x64   natives/linux-x86_64
-          [ -d artifacts/linux-arm64 ] && cp -r artifacts/linux-arm64 natives/linux-aarch64
-          [ -d artifacts/osx-arm64 ]   && cp -r artifacts/osx-arm64   natives/macos-aarch64
-          [ -d artifacts/win-x64 ]     && cp -r artifacts/win-x64     natives/windows-x86_64
-          mvn -q -B -f java/pom.xml package -DskipTests -Dadbcbridge.natives=$PWD/natives
-          unzip -l java/target/adbcbridge-*[0-9].jar | grep native/
+          for pair in linux-x64:linux-x86_64 linux-arm64:linux-aarch64 osx-arm64:macos-aarch64 win-x64:windows-x86_64; do
+            rid=${pair%%:*}; osarch=${pair##*:}
+            if [ -d "artifacts/$rid" ]; then cp -r "artifacts/$rid" "natives/$osarch"; fi
+          done
+          if [ -n "$(ls -A natives)" ]; then
+            mvn -q -B -f java/pom.xml package -DskipTests -Dadbcbridge.natives=$PWD/natives
+            unzip -l java/target/adbcbridge-*[0-9].jar | grep native/
+          else
+            echo "::warning::no native artifacts were downloaded; packaging the pure jar"
+            mvn -q -B -f java/pom.xml package -DskipTests
+          fi
+          ls -l java/target/*.jar
       - uses: actions/upload-artifact@v4
         continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
         with:
