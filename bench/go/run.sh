@@ -18,6 +18,12 @@
 # database/sql comparison columns — the same sql.h the driver itself is built
 # against. Point GOMODCACHE/GOCACHE somewhere writable if $HOME is not.
 #
+# On Windows ADBC's drivermgr is cgo-only and MSVC cannot serve cgo: without a GCC
+# (mingw-w64, e.g. `winget install BrechtSanders.WinLibs.POSIX.UCRT`) Go silently sets
+# CGO_ENABLED=0, the package compiles to a stub, and the build fails with
+# `undefined: drivermgr.Driver` -- a missing toolchain, not a version mismatch. Set
+# CGO_ENABLED=1 once GCC is on PATH; adbc.h's dllexport warnings under GCC are harmless.
+#
 # Knobs: ROWS, FETCH_ROWS, REPS, PYTHON, GO.
 set -euo pipefail
 
@@ -27,7 +33,8 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 ROWS="${ROWS:-10000}"
 FETCH_ROWS="${FETCH_ROWS:-100000}"
 REPS="${REPS:-3}"
-PYTHON="${PYTHON:-python3}"
+# Windows installs no `python3`; fall back to `python` when it is missing.
+PYTHON="${PYTHON:-$(command -v python3 >/dev/null 2>&1 && echo python3 || echo python)}"
 GO="${GO:-go}"
 
 # The table this language ingests into; conn.py spells it for the database.

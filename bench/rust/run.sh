@@ -25,7 +25,8 @@ OUT="${OUT:-$ROOT/bench/RUST_BENCHMARKS.md}"
 ROWS="${ROWS:-10000}"
 FETCH_ROWS="${FETCH_ROWS:-100000}"
 REPS="${REPS:-3}"
-PYTHON="${PYTHON:-python3}"
+# Windows installs no `python3`; fall back to `python` when it is missing.
+PYTHON="${PYTHON:-$(command -v python3 >/dev/null 2>&1 && echo python3 || echo python)}"
 
 if [ $# -eq 0 ]; then
     echo "usage: $0 <dbname> [dbname ...]" >&2

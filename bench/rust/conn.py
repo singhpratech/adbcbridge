@@ -39,6 +39,8 @@ import test_matrix as m  # noqa: E402
 pa = m.pa  # pyarrow, already imported the way test_matrix has to import it
 
 TABLE = os.environ.get("ADBC_BENCH_TABLE", "adbc_bench_rs") + os.environ.get("ADBC_MATRIX_SUFFIX", "")
+# The table a read-only entry (ArcadeDB, TDengine) is measured against.
+READONLY_TABLE = "adbc_big"
 
 
 def setup_env(cfg):
@@ -56,6 +58,14 @@ def setup_env(cfg):
             dropped += 1
         else:
             keep.append(stmt)
+    if dropped and READONLY_TABLE:
+        # The short statements around the fixture load are its DROP TYPE / CREATE TYPE /
+        # CREATE PROPERTY; applied without the INSERTs they recreate the read-only
+        # table empty, and every harness then reads 0 rows.  Leave the table alone.
+        table = READONLY_TABLE.lower()
+        rebuilt = [s for s in keep if table in s.lower()]
+        keep = [s for s in keep if table not in s.lower()]
+        dropped += len(rebuilt)
     if dropped:
         sys.stderr.write("conn.py: %d fixture-load statement(s) left out of %s's setup -- run "
                          "tests/compat/test_matrix.py first\n" % (dropped, cfg.get("env", "?")))
@@ -105,7 +115,7 @@ def main(name):
         (prefix + "_REFRESH", cfg.get("refresh", "")),
         # A read-only entry: nothing to ingest, read the fixture's largest table.
         (prefix + "_READONLY_TABLE",
-         "adbc_big" if cfg.get("read_only") or not cfg.get("ingest_create", True) else ""),
+         READONLY_TABLE if cfg.get("read_only") or not cfg.get("ingest_create", True) else ""),
     ]
     for kv in cfg.get("unicode_env", "").split():
         out.append(tuple(kv.split("=", 1)))

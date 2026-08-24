@@ -170,7 +170,7 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | clickhouse | PASS | PASS (ClickHouse 26.7.5.10, clickhouse-odbc 1.5.5 macOS zip, arm64) | pending |
 | mssql | PASS | PASS (SQL Server 2022) | PASS (SQL Server 2025 RTM 17.0.1000.7, msodbcsql 18) |
 | azuresqledge | PASS | PASS (SQL Server 15.00.2000, arm64 image, msodbcsql 18.6.2.1 arm64) | pending |
-| mysql | PASS | PASS (MySQL 8.4.11 arm64, MariaDB Connector/ODBC 3.2.9) — after the maodbc ≥ 3.2 quirk (`187dfac`): at 24dab36 the connector's array path misreported the row count | pending |
+| mysql | PASS | PASS (MySQL 8.4.11 arm64, MariaDB Connector/ODBC 3.2.9) — after the maodbc ≥ 3.2 quirk (`187dfac`): at 24dab36 the connector's array path misreported the row count | PASS (MySQL 8.4.9 x64, MySQL Connector/ODBC 8.4.0; `héllo`/`日本語` byte-exact both ways, `column_size` in characters) |
 | tidb | PASS | pending | pending |
 | dolt | PASS | pending | pending |
 | databend | PASS | pending | pending |

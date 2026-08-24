@@ -28,9 +28,10 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 ROWS="${ROWS:-10000}"
 FETCH_ROWS="${FETCH_ROWS:-100000}"
 REPS="${REPS:-3}"
-PYTHON="${PYTHON:-python3}"
+# Windows installs no `python3`; fall back to `python` when it is missing.
+PYTHON="${PYTHON:-$(command -v python3 >/dev/null 2>&1 && echo python3 || echo python)}"
 MVN="${MVN:-mvn}"
-JAVA="${JAVA:-java}"
+JAVA="${JAVA:-java}"   # JAVA_HOME alone is not enough: java must be on PATH or JAVA set
 
 # The table this language ingests into; conn.py spells it for the database.
 export ADBC_BENCH_TABLE="${ADBC_BENCH_TABLE:-adbc_bench_java}"
@@ -45,7 +46,14 @@ fi
 : "${ADBC_ODBC_DRIVER:?set it to the built libadbc_driver_odbc.so}"
 
 "$MVN" -B -q -f "$HERE/pom.xml" package -DskipTests
-CLASSPATH="$HERE/target/classes:$(cat "$HERE/target/classpath.txt")"
+# Maven writes target/classpath.txt in the JVM's own spelling (on Windows: C:\ paths
+# joined with ';'), so only the prefix has to be spelled the same way -- a Git-Bash
+# /c/... path with a ':' separator gives ClassNotFoundException, which looks like a
+# build failure and is not.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) CLASSPATH="$(cygpath -w "$HERE/target/classes");$(cat "$HERE/target/classpath.txt")" ;;
+    *) CLASSPATH="$HERE/target/classes:$(cat "$HERE/target/classpath.txt")" ;;
+esac
 
 # Arrow's off-heap allocator needs this on JDK 17+, as tests/java documents.
 run() {

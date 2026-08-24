@@ -57,6 +57,7 @@ PostgreSQL on the same 8 GB machine: the EDB installer or Docker Desktop with
 | sqlite | PASS | `SQLite (via ODBC) 3.43.2` |
 | duckdb | PASS | `DuckDB (via ODBC) ` (the driver reports no version; duckdb_odbc 1.5.5.0) |
 | mssql | PASS | `Microsoft SQL Server (via ODBC) 17.00.1000` — SQL Server 2025 RTM, native install, Windows auth, `Trusted_Connection=yes;TrustServerCertificate=yes` |
+| mysql | PASS | `MySQL (via ODBC) 8.4.9` — winget's `Oracle.MySQL` binaries, `mysqld --initialize-insecure` and a standalone `mysqld` on a spare port (no service, no admin); MySQL Connector/ODBC 8.4.0. Byte-exact probe (validated against PostgreSQL first): `VARCHAR(50)` reports `column_size` 50, `TEXT` 65535, `héllo` and `日本語` round-trip exactly on read and on a bound-parameter write read back with pyodbc. Needs no `LD_PRELOAD`-style workaround, unlike the connector under pyarrow on Linux |
 | postgres | PASS | `PostgreSQL (via ODBC) 16.15.0` — native install, psqlodbc 18.00.0002 "PostgreSQL Unicode(x64)"; **FAIL at 199f40e–9c07f78** with `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9`, see the second bug below |
 
 ### Python: adbcbridge vs pyodbc (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`)
@@ -67,6 +68,7 @@ PostgreSQL on the same 8 GB machine: the EDB installer or Docker Desktop with
 | duckdb | 74,005 (array 73,952) | 590 | 592,742 | 267,814 |
 | mssql | 31,269 (array 36,209) | 21,468 | 583,138 | 270,097 |
 | postgres | 86,343 (array 151,542) | 9,506 | 235,955 | 151,745 |
+| mysql | 38,535 (array 42,144) | 6,145 | 397,443 | 269,100 |
 
 All at main @ d364312, x64 Release, **single sample each**, servers as native Windows installs.
 **Run-to-run variance on this machine swamps build-to-build comparison**: two postgres
@@ -111,6 +113,52 @@ same way. Verified at `d364312`: all four probes byte-exact (`68c3a96c6c6f`,
 `e697a5e69cace8aa9e`), the four entries above PASS, `tests/test_windows_text.py` 9/9,
 `ctest` 7/7, zero warnings. No truncation or doubling seen on these four drivers, whose
 `column_size` is in characters; drivers that report bytes are the ones to watch next.
+
+### Five languages, one database (`bench/*/run.sh sqlite`, ROWS=10000 FETCH_ROWS=100000 REPS=1)
+
+The full grid runs on Windows: [`LANGUAGE_BENCHMARKS-windows.md`](LANGUAGE_BENCHMARKS-windows.md).
+First cells, SQLite, adbcbridge ingest / fetch rows/s and then the language's own ODBC client:
+
+| language | ADBC ingest | ADBC fetch | native ingest | native fetch | native client |
+|---|---:|---:|---:|---:|---|
+| python | 209,082 | 456,214 | 146,264 | 254,287 | pyodbc |
+| go | 266,413 | 426,972 | 119,186 | 268,775 | alexbrainman/odbc |
+| rust | 196,713 | 414,294 | 243,985 | 485,325 | odbc-api (arrow-odbc fetch 404,126) |
+| csharp | 177,166 | 223,620 | 64,308 | 170,062 | System.Data.Odbc |
+| java | 80,041 | 216,175 | 25,177 | 362,294 | JDBC (sqlite-jdbc, not ODBC) |
+
+Single samples on the 4-core laptop. C# and Rust ran unmodified (Rust's first build:
+4 min 22 s). Three harness defects the first Windows run found, all fixed on main:
+
+1. `bench/java/run.sh` joined the classpath with `:` and a Git-Bash `/c/...` prefix, which
+   a Windows JVM cannot read — `ClassNotFoundException: org.adbcbridge.bench.Bench`, which
+   looks like a build failure. Maven's own `target/classpath.txt` was already right (`C:\`
+   paths, `;`); the runner now spells the prefix the same way. `JAVA_HOME` alone is not
+   enough: `java` must be on `PATH` or `JAVA` set.
+2. Go: ADBC's `drivermgr` is cgo-only and MSVC cannot serve cgo. Without a GCC Go sets
+   `CGO_ENABLED=0` and the build fails with `undefined: drivermgr.Driver`, which reads as
+   a version mismatch. mingw-w64 (WinLibs GCC 16.1.0) and `CGO_ENABLED=1` fix it; the
+   `dllexport attribute ignored` warnings from `adbc.h` under GCC are harmless noise.
+3. Every runner defaulted to `python3`, which Windows does not install; they fall back to
+   `python` now.
+
+### Getting servers and drivers onto Windows
+
+Not "run the installer": what actually worked on this box, 2026-08-24.
+
+- **Every ODBC driver MSI needs an interactive UAC accept** (silent install fails with
+  `Error 1925`), one round trip per driver — the real rate limiter here, not the 8 GB.
+- **MySQL**: winget's `Oracle.MySQL` is binaries only (no service, datadir or config);
+  `mysqld --initialize-insecure` and a standalone `mysqld` on a spare port need no admin.
+  **Connector/ODBC 9.x is not downloadable** — every documented 9.x URL on dev.mysql.com and
+  cdn.mysql.com returns 404; **8.4.0 from cdn.mysql.com** is what exists.
+- **MariaDB**: the server is the good citizen (`winget install MariaDB.Server --custom
+  "PORT=13307 PASSWORD=adbc"` gives a configured, running service), the **Connector/ODBC
+  MSI is not scriptably downloadable** (not in winget, not on archive.mariadb.org or the
+  mirrors — a JavaScript download page only), so a person has to fetch it.
+- **Firebird**: server 5.0.4 zip and ODBC driver 3.5.0-rc1 win-x64 MSI are both on GitHub;
+  the server runs standalone from the zip on a spare port without admin, but its sample
+  security database needs a SYSDBA created before first use.
 
 ### PostgreSQL vs the native ADBC driver (`bench/native_threshold.py --database postgres --rows 1000000 --runs 3 --partitions 8`)
 
