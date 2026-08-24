@@ -29,10 +29,14 @@ tripping over each other's table.
 
 Exits 1 with a message on stderr if the database's `*_ODBC_DRIVER` variable is unset.
 """
-import os, pathlib, shlex, sys
+import os
+import pathlib
+import shutil, pathlib, shlex, sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tests" / "compat"))
 import test_matrix as m  # noqa: E402
+
+pa = m.pa  # pyarrow, already imported the way test_matrix has to import it
 
 TABLE = os.environ.get("ADBC_BENCH_TABLE", "adbc_bench_rs") + os.environ.get("ADBC_MATRIX_SUFFIX", "")
 
@@ -50,12 +54,32 @@ def main(name):
     # MySQL Connector/ODBC needs for a server still on mysql_native_password.  Formatting
     # {drv} alone here raised KeyError on those entries (dolt, matrixone, greptimedb,
     # tidb, databend, ...), so no language benchmark could reach them.
+    # A file-based entry reads a checked-in fixture (Access); put it where the
+    # connection string names it, as test_matrix.py and matrix_bench.py do.
+    if cfg.get("fixture"):
+        shutil.copy(pathlib.Path(m.__file__).parent / "fixtures" / cfg["fixture"],
+                    os.path.join(m.TMP, cfg["fixture"]))
     uri = m.conn_uri(name, cfg, drv)
     ident = cfg.get("ident", lambda x: x)
     out = [
         (prefix + "_CONN", uri),
         (prefix + "_TABLE", ident(TABLE)),
         (prefix + "_SETUP", "\n".join(cfg.get("setup", []))),
+        # The entry's `ingest_types`, for the two payload columns a server can refuse:
+        # int32 (Spanner has no int4) and date32 (CrateDB has no date storage type).
+        # The bench has no boolean column, and its float64 column takes the driver's
+        # own float8 DDL everywhere, so the other remaps entries carry are not sent.
+        (prefix + "_INGEST_TYPES", ",".join(
+            "%s=%s" % (f, t) for f, t, sent in (
+                ("int32", "int64", cfg.get("ingest_types", {}).get(pa.int32()) == pa.int64()),
+                ("date32", "timestamp_us",
+                 cfg.get("ingest_types", {}).get(pa.date32()) == pa.timestamp("us")),
+            ) if sent)),
+        # The statement that makes a write visible to the next scan ("{}" = table).
+        (prefix + "_REFRESH", cfg.get("refresh", "")),
+        # A read-only entry: nothing to ingest, read the fixture's largest table.
+        (prefix + "_READONLY_TABLE",
+         "adbc_big" if cfg.get("read_only") or not cfg.get("ingest_create", True) else ""),
     ]
     for kv in cfg.get("unicode_env", "").split():
         out.append(tuple(kv.split("=", 1)))

@@ -92,11 +92,14 @@ Planned: conformance suite, prebuilt binaries.
 The bridge runs within 7% of the raw ODBC floor; the remaining cost is the ODBC driver itself.
 
 That floor is also the ceiling for a single connection, so beating a native ADBC driver
-means doing work it does not: splitting one query across several connections. On 10 M
-rows of PostgreSQL, adbcbridge is 0.30–0.36× the native `adbc_driver_postgresql` on one
-connection, reaches parity at four partitions and **1.42–1.79×** at eight to twelve —
-six independent rounds, each the median of interleaved A/B/C repetitions, every read
-checksum-compared against the single-connection result. See
+means doing work it does not: splitting one query across several connections. Against
+the native `adbc_driver_postgresql`, adbcbridge on one connection is 0.30–0.36× on 10 M
+rows; at eight partitions it reads 1 M rows **1.2–1.5× faster on a quiet host** and
+10 M rows 1.55× faster — mean of three, a fresh process per run, sides interleaved,
+every read checksum-compared against a reference. The same 1 M read on a host with
+46 idle containers came in at 0.97×, so the number to plan around is the low end, and
+bulk *ingest* does not clear parity at all (0.73–1.02×: an `INSERT` writes twice the
+WAL of the `COPY` the native driver uses). See
 [Partitioned reads](#partitioned-reads-executepartitions) and `bench/BENCHMARKS.md`.
 
 ### Bulk ingest

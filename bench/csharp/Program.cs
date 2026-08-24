@@ -133,14 +133,24 @@ internal static class Bench
             Environment.GetEnvironmentVariable(prefix + "_TABLE") ?? table,
             table,
         }.Distinct().ToArray();
+        IngestTypes = Environment.GetEnvironmentVariable(prefix + "_INGEST_TYPES") ?? "";
+        RefreshSql = Environment.GetEnvironmentVariable(prefix + "_REFRESH") ?? "";
+        // <DB>_READONLY_TABLE: the entry has no DDL/DML through this driver (a
+        // read-only ODBC driver, or a server that refuses the table ingest would
+        // create), so there is nothing to ingest and the fetch reads the fixture's
+        // largest table instead -- what matrix_bench.py does on a read_only entry.
+        // Its row count is whatever the table holds, and fetch_rows says so.
+        string roTable = Environment.GetEnvironmentVariable(prefix + "_READONLY_TABLE") ?? "";
+        bool readOnly = roTable.Length > 0;
+        Step readOnlyStep = Step.Failed("read-only entry: nothing to ingest");
 
         // Ingest a single row and find out which spelling of the table and
         // column names reaches what that produced, so nothing downstream has to
         // guess: the ingest quotes every identifier, which on a case-folding
         // database makes the lower-cased spelling the only one that resolves.
-        string ident = candidates[0];
-        string select = "SELECT id, val, txt, dt FROM " + candidates[0];
-        Step probe = Attempt(() =>
+        string ident = readOnly ? roTable : candidates[0];
+        string select = readOnly ? "SELECT * FROM " + roTable : "SELECT id, val, txt, dt FROM " + candidates[0];
+        Step probe = readOnly ? Step.Failed("") : Attempt(() =>
         {
             using Session session = Session.Open(autoCommit: false);
             DropTable(session, candidates, autoCommit: false);
@@ -186,13 +196,13 @@ internal static class Bench
             throw new InvalidOperationException(
                 "the benchmark table has no readable id/val/txt/dt columns");
         });
-        if (probe.Error is not null)
+        if (!string.IsNullOrEmpty(probe.Error))
         {
             Console.Error.WriteLine($"{database}: {probe.Error}");
         }
 
         // 1. adbc ingest: drop, ingest --rows rows, commit, verify the count.
-        Step adbcIngest = Attempt(() =>
+        Step adbcIngest = readOnly ? readOnlyStep : Attempt(() =>
         {
             using Session session = Session.Open(autoCommit: false);
             double seconds = Repeat(reps, () =>
@@ -215,7 +225,7 @@ internal static class Bench
         Step skipped = Step.Failed("skipped: ADBC_BENCH_NO_NATIVE");
 
         // 2. System.Data.Odbc ingest into the table ADBC's DDL created.
-        Step odbcIngest = noNative ? skipped : Attempt(() =>
+        Step odbcIngest = readOnly ? readOnlyStep : noNative ? skipped : Attempt(() =>
         {
             using Session session = Session.Open(autoCommit: false);
             using OdbcConnection odbc = OdbcConnect();
@@ -230,8 +240,14 @@ internal static class Bench
             return seconds;
         });
 
-        // Load the bigger table the two fetch steps read back.
-        Step loaded = Attempt(() =>
+        // Load the bigger table the two fetch steps read back -- or, on a read-only
+        // entry, count the one that is already there.
+        Step loaded = readOnly ? Attempt(() =>
+        {
+            using Session session = Session.Open(autoCommit: true);
+            fetchRows = (int)AdbcCount(session, ident);
+            return 0;
+        }) : Attempt(() =>
         {
             using Session session = Session.Open(autoCommit: false);
             DropTable(session, candidates, autoCommit: false);
@@ -256,11 +272,14 @@ internal static class Bench
             });
         }
 
-        // Leave nothing of ours behind on a shared server.
+        // Leave nothing of ours behind on a shared server (the read-only fixture is not ours).
         try
         {
-            using Session session = Session.Open(autoCommit: true);
-            DropTable(session, candidates, autoCommit: true);
+            if (!readOnly)
+            {
+                using Session session = Session.Open(autoCommit: true);
+                DropTable(session, candidates, autoCommit: true);
+            }
         }
         catch (Exception)
         {
@@ -304,32 +323,89 @@ internal static class Bench
     /// The benchmark table: `(id int32, val float64, txt utf8, dt date32)`, the
     /// same shape and values bench/matrix_bench.py and bench/rust use.
     /// </summary>
+    /// <summary>
+    /// <c>&lt;DB&gt;_INGEST_TYPES</c> from bench/rust/conn.py: the compat entry's
+    /// <c>ingest_types</c>, the Arrow types to send in place of the payload's own for
+    /// a server whose generated DDL cannot hold them -- CrateDB has no date storage
+    /// type (<c>date32=timestamp_us</c>), Spanner no int4 (<c>int32=int64</c>). The
+    /// same substitution matrix_bench.py applies.
+    /// </summary>
+    private static string IngestTypes = "";
+
+    /// <summary>
+    /// <c>&lt;DB&gt;_REFRESH</c>: the statement that makes a committed write visible to
+    /// the next scan on an eventually consistent store, <c>{}</c> standing for the
+    /// table (RisingWave's FLUSH, CrateDB's REFRESH TABLE). Run before every row count.
+    /// </summary>
+    private static string RefreshSql = "";
+
+    private static bool Remapped(string from) =>
+        IngestTypes.Split(',').Any(pair => pair.StartsWith(from + "=", StringComparison.Ordinal));
+
     private static RecordBatch MakeBatch(int n)
     {
-        Int32Array.Builder ids = new Int32Array.Builder().Reserve(n);
         DoubleArray.Builder values = new DoubleArray.Builder().Reserve(n);
         StringArray.Builder texts = new StringArray.Builder().Reserve(n);
-        ArrowBuffer.Builder<int> dates = new ArrowBuffer.Builder<int>(Math.Max(n, 1));
         for (int i = 0; i < n; i++)
         {
-            ids.Append(i);
             values.Append(i * 0.5);
             texts.Append("row-" + i.ToString("D12", CultureInfo.InvariantCulture));
-            dates.Append(i % 20_000);
+        }
+
+        IArrowArray ids;
+        if (Remapped("int32"))
+        {
+            Int64Array.Builder b = new Int64Array.Builder().Reserve(n);
+            for (int i = 0; i < n; i++)
+            {
+                b.Append(i);
+            }
+            ids = b.Build();
+        }
+        else
+        {
+            Int32Array.Builder b = new Int32Array.Builder().Reserve(n);
+            for (int i = 0; i < n; i++)
+            {
+                b.Append(i);
+            }
+            ids = b.Build();
+        }
+
+        IArrowArray dt;
+        if (Remapped("date32"))
+        {
+            // The same day count, at midnight, in microseconds.
+            ArrowBuffer.Builder<long> micros = new ArrowBuffer.Builder<long>(Math.Max(n, 1));
+            for (int i = 0; i < n; i++)
+            {
+                micros.Append((i % 20_000) * 86_400L * 1_000_000L);
+            }
+            dt = new TimestampArray(
+                new TimestampType(TimeUnit.Microsecond, (string?)null),
+                micros.Build(), ArrowBuffer.Empty, n, 0, 0);
+        }
+        else
+        {
+            ArrowBuffer.Builder<int> dates = new ArrowBuffer.Builder<int>(Math.Max(n, 1));
+            for (int i = 0; i < n; i++)
+            {
+                dates.Append(i % 20_000);
+            }
+            // Date32 straight from day counts, so the values match the other ports
+            // byte for byte rather than going through a calendar type.
+            dt = new Date32Array(dates.Build(), ArrowBuffer.Empty, n, 0, 0);
         }
 
         Schema schema = new Schema.Builder()
-            .Field(new Field("id", Int32Type.Default, true))
+            .Field(new Field("id", ids.Data.DataType, true))
             .Field(new Field("val", DoubleType.Default, true))
             .Field(new Field("txt", StringType.Default, true))
-            .Field(new Field("dt", Date32Type.Default, true))
+            .Field(new Field("dt", dt.Data.DataType, true))
             .Build();
-        // Date32 straight from day counts, so the values match the other ports
-        // byte for byte rather than going through a calendar type.
-        Date32Array dt = new Date32Array(dates.Build(), ArrowBuffer.Empty, n, 0, 0);
         return new RecordBatch(
             schema,
-            new IArrowArray[] { ids.Build(), values.Build(), texts.Build(), dt },
+            new IArrowArray[] { ids, values.Build(), texts.Build(), dt },
             n);
     }
 
@@ -573,6 +649,13 @@ internal static class Bench
 
     private static void Verify(Session session, string ident, int want)
     {
+        if (RefreshSql.Length > 0)
+        {
+            // The template quotes the name itself (CrateDB: REFRESH TABLE "{}"), so
+            // it takes the bare spelling, not the quoted one ident may carry.
+            Execute(session, RefreshSql.Replace("{}", ident.Trim('"')));
+        }
+
         long got = AdbcCount(session, ident);
         if (got != want)
         {

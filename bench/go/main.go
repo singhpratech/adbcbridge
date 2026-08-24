@@ -77,23 +77,75 @@ var benchSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "dt", Type: arrow.FixedWidthTypes.Date32, Nullable: true},
 }, nil)
 
+// <DB>_INGEST_TYPES from bench/rust/conn.py: the compat entry's `ingest_types`, the
+// Arrow types to send in place of the payload's own for a server whose generated
+// DDL cannot hold them -- CrateDB has no date storage type (date32=timestamp_us),
+// Spanner no int4 (int32=int64). The same substitution matrix_bench.py applies, so
+// the five languages ingest the same shape there too.
+var ingestTypes string
+
+// <DB>_REFRESH: the statement that makes a committed write visible to the next scan
+// on an eventually consistent store, "{}" standing for the table (RisingWave's
+// FLUSH, CrateDB's REFRESH TABLE). Run before every row count.
+var refreshSQL string
+
+func remapped(from string) bool {
+	for _, pair := range strings.Split(ingestTypes, ",") {
+		if strings.HasPrefix(pair, from+"=") {
+			return true
+		}
+	}
+	return false
+}
+
 // makeRecord builds n rows of the benchmark payload. The caller releases it.
 func makeRecord(n int) arrow.Record {
-	bld := array.NewRecordBuilder(memory.DefaultAllocator, benchSchema)
+	schema := benchSchema
+	if ingestTypes != "" {
+		fields := make([]arrow.Field, len(benchSchema.Fields()))
+		copy(fields, benchSchema.Fields())
+		if remapped("int32") {
+			fields[0].Type = arrow.PrimitiveTypes.Int64
+		}
+		if remapped("date32") {
+			fields[3].Type = &arrow.TimestampType{Unit: arrow.Microsecond}
+		}
+		schema = arrow.NewSchema(fields, nil)
+	}
+	bld := array.NewRecordBuilder(memory.DefaultAllocator, schema)
 	defer bld.Release()
-	ids := bld.Field(0).(*array.Int32Builder)
 	vals := bld.Field(1).(*array.Float64Builder)
 	txts := bld.Field(2).(*array.StringBuilder)
-	dts := bld.Field(3).(*array.Date32Builder)
-	ids.Reserve(n)
 	vals.Reserve(n)
 	txts.Reserve(n)
-	dts.Reserve(n)
 	for i := 0; i < n; i++ {
-		ids.Append(int32(i))
 		vals.Append(float64(i) * 0.5)
 		txts.Append(fmt.Sprintf("row-%012d", i))
-		dts.Append(arrow.Date32(i % 20000))
+	}
+	switch ids := bld.Field(0).(type) {
+	case *array.Int32Builder:
+		ids.Reserve(n)
+		for i := 0; i < n; i++ {
+			ids.Append(int32(i))
+		}
+	case *array.Int64Builder:
+		ids.Reserve(n)
+		for i := 0; i < n; i++ {
+			ids.Append(int64(i))
+		}
+	}
+	switch dts := bld.Field(3).(type) {
+	case *array.Date32Builder:
+		dts.Reserve(n)
+		for i := 0; i < n; i++ {
+			dts.Append(arrow.Date32(i % 20000))
+		}
+	case *array.TimestampBuilder:
+		dts.Reserve(n)
+		for i := 0; i < n; i++ {
+			// The same day count, at midnight, in microseconds.
+			dts.Append(arrow.Timestamp(int64(i%20000) * 86400 * 1000000))
+		}
 	}
 	return bld.NewRecord()
 }
@@ -527,68 +579,86 @@ func main() {
 	// (Oracle, Db2) can also answer to the upper-cased one, which conn.py
 	// passes in <DB>_TABLE from the compat matrix's `ident` hook.
 	candidates := dedup([]string{`"` + table + `"`, envOr(prefix+"_TABLE", table), table})
+	ingestTypes = os.Getenv(prefix + "_INGEST_TYPES")
+	refreshSQL = os.Getenv(prefix + "_REFRESH")
+	// <DB>_READONLY_TABLE: the entry has no DDL/DML through this driver (a read-only
+	// ODBC driver, or a server that refuses the table ingest would create), so there
+	// is nothing to ingest and the fetch reads the fixture's largest table instead --
+	// what matrix_bench.py does on a read_only entry. Its row count is whatever the
+	// table holds, and the fetch_rows in the output says so.
+	roTable := os.Getenv(prefix + "_READONLY_TABLE")
 
 	// Ingest a single row and find out which spelling of the table and column
 	// names reaches what that produced, so nothing downstream has to guess.
 	ident, query := candidates[0], "SELECT id, val, txt, dt FROM "+candidates[0]
-	probe := attempt(func() (float64, error) {
-		db, cnxn, err := adbcConnect(driver, uri, setup, false)
-		if err != nil {
-			return 0, err
-		}
-		defer db.Close()
-		defer cnxn.Close()
-		dropTable(cnxn, candidates, false)
-		rec := makeRecord(1)
-		defer rec.Release()
-		if _, err := adbcIngest(cnxn, table, rec); err != nil {
-			return 0, err
-		}
-		found := ""
-		for _, c := range candidates {
-			if _, err := adbcCount(cnxn, c); err == nil {
-				found = c
-				break
+	if roTable != "" {
+		ident, query = roTable, "SELECT * FROM "+roTable
+	}
+	probe := step{}
+	if roTable == "" {
+		probe = attempt(func() (float64, error) {
+			db, cnxn, err := adbcConnect(driver, uri, setup, false)
+			if err != nil {
+				return 0, err
 			}
-		}
-		if found == "" {
-			return 0, fmt.Errorf("ingested %s but no spelling of the name selects from it", table)
-		}
-		ident = found
-		for _, sql := range []string{
-			`SELECT "id", "val", "txt", "dt" FROM ` + found,
-			"SELECT id, val, txt, dt FROM " + found,
-		} {
-			if _, err := adbcFetch(cnxn, sql); err == nil {
-				query = sql
-				return 0, nil
+			defer db.Close()
+			defer cnxn.Close()
+			dropTable(cnxn, candidates, false)
+			rec := makeRecord(1)
+			defer rec.Release()
+			if _, err := adbcIngest(cnxn, table, rec); err != nil {
+				return 0, err
 			}
-		}
-		return 0, fmt.Errorf("the benchmark table has no readable id/val/txt/dt columns")
-	})
+			found := ""
+			for _, c := range candidates {
+				if _, err := adbcCount(cnxn, c); err == nil {
+					found = c
+					break
+				}
+			}
+			if found == "" {
+				return 0, fmt.Errorf("ingested %s but no spelling of the name selects from it", table)
+			}
+			ident = found
+			for _, sql := range []string{
+				`SELECT "id", "val", "txt", "dt" FROM ` + found,
+				"SELECT id, val, txt, dt FROM " + found,
+			} {
+				if _, err := adbcFetch(cnxn, sql); err == nil {
+					query = sql
+					return 0, nil
+				}
+			}
+			return 0, fmt.Errorf("the benchmark table has no readable id/val/txt/dt columns")
+		})
+	}
 	if probe.err != "" {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", dbName, probe.err)
 	}
 
 	// 1. adbc ingest: drop, ingest -rows rows, commit, verify the count.
-	adbcIngestStep := attempt(func() (float64, error) {
-		db, cnxn, err := adbcConnect(driver, uri, setup, false)
-		if err != nil {
-			return 0, err
-		}
-		defer db.Close()
-		defer cnxn.Close()
-		secs, err := repeat(*reps, func() (float64, error) {
-			dropTable(cnxn, candidates, false)
-			rec := makeRecord(*rows)
-			defer rec.Release()
-			return adbcIngest(cnxn, table, rec)
+	readOnly := step{err: "read-only entry: nothing to ingest"}
+	adbcIngestStep := readOnly
+	if roTable == "" {
+		adbcIngestStep = attempt(func() (float64, error) {
+			db, cnxn, err := adbcConnect(driver, uri, setup, false)
+			if err != nil {
+				return 0, err
+			}
+			defer db.Close()
+			defer cnxn.Close()
+			secs, err := repeat(*reps, func() (float64, error) {
+				dropTable(cnxn, candidates, false)
+				rec := makeRecord(*rows)
+				defer rec.Release()
+				return adbcIngest(cnxn, table, rec)
+			})
+			if err != nil {
+				return 0, err
+			}
+			return secs, verify(cnxn, ident, *rows)
 		})
-		if err != nil {
-			return 0, err
-		}
-		return secs, verify(cnxn, ident, *rows)
-	})
+	}
 
 	// ADBC_BENCH_NO_NATIVE: skip the database/sql comparison entirely and leave its
 	// columns empty. Some ODBC drivers take the whole process down from the plain
@@ -602,7 +672,9 @@ func main() {
 
 	// 2. database/sql ingest of the same rows into the table ADBC's DDL created.
 	odbcIngestStep := skipped
-	if !skipNative {
+	if roTable != "" {
+		odbcIngestStep = readOnly
+	} else if !skipNative {
 		odbcIngestStep = attempt(func() (float64, error) {
 			adbcDB, cnxn, err := adbcConnect(driver, uri, setup, false)
 			if err != nil {
@@ -631,22 +703,41 @@ func main() {
 		})
 	}
 
-	// Load the bigger table the two fetch steps read back.
-	loaded := attempt(func() (float64, error) {
-		db, cnxn, err := adbcConnect(driver, uri, setup, false)
-		if err != nil {
-			return 0, err
-		}
-		defer db.Close()
-		defer cnxn.Close()
-		dropTable(cnxn, candidates, false)
-		rec := makeRecord(*fetchRows)
-		defer rec.Release()
-		if _, err := adbcIngest(cnxn, table, rec); err != nil {
-			return 0, err
-		}
-		return 0, verify(cnxn, ident, *fetchRows)
-	})
+	// Load the bigger table the two fetch steps read back -- or, on a read-only
+	// entry, count the one that is already there.
+	var loaded step
+	if roTable != "" {
+		loaded = attempt(func() (float64, error) {
+			db, cnxn, err := adbcConnect(driver, uri, setup, true)
+			if err != nil {
+				return 0, err
+			}
+			defer db.Close()
+			defer cnxn.Close()
+			n, err := adbcCount(cnxn, ident)
+			if err != nil {
+				return 0, err
+			}
+			*fetchRows = int(n)
+			return 0, nil
+		})
+	} else {
+		loaded = attempt(func() (float64, error) {
+			db, cnxn, err := adbcConnect(driver, uri, setup, false)
+			if err != nil {
+				return 0, err
+			}
+			defer db.Close()
+			defer cnxn.Close()
+			dropTable(cnxn, candidates, false)
+			rec := makeRecord(*fetchRows)
+			defer rec.Release()
+			if _, err := adbcIngest(cnxn, table, rec); err != nil {
+				return 0, err
+			}
+			return 0, verify(cnxn, ident, *fetchRows)
+		})
+	}
 
 	adbcFetchStep, odbcFetchStep := step{err: loaded.err}, step{err: loaded.err}
 	if loaded.err == "" {
@@ -676,8 +767,8 @@ func main() {
 		}
 	}
 
-	// Leave nothing of ours behind on a shared server.
-	if db, cnxn, err := adbcConnect(driver, uri, setup, true); err == nil {
+	// Leave nothing of ours behind on a shared server (the read-only fixture is not ours).
+	if db, cnxn, err := adbcConnect(driver, uri, setup, true); err == nil && roTable == "" {
 		dropTable(cnxn, candidates, true)
 		cnxn.Close()
 		db.Close()
@@ -718,6 +809,13 @@ func main() {
 }
 
 func verify(cnxn adbc.Connection, ident string, want int) error {
+	if refreshSQL != "" {
+		// The template quotes the name itself (CrateDB: REFRESH TABLE "{}"), so it
+		// takes the bare spelling, not the quoted one ident may carry.
+		if err := adbcExec(cnxn, strings.ReplaceAll(refreshSQL, "{}", strings.Trim(ident, `"`))); err != nil {
+			return fmt.Errorf("refresh: %w", err)
+		}
+	}
 	got, err := adbcCount(cnxn, ident)
 	if err != nil {
 		return err

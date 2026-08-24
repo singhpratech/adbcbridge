@@ -40,13 +40,17 @@ import org.apache.arrow.adbc.core.BulkIngestMode;
 import org.apache.arrow.adbc.driver.jni.JniDriver;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.Float8Vector;
 import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.TimeStampMicroVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
+import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.Types;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.arrow.vector.util.Text;
@@ -106,22 +110,75 @@ public final class Bench {
               Field.nullable("txt", Types.MinorType.VARCHAR.getType()),
               Field.nullable("dt", Types.MinorType.DATEDAY.getType())));
 
+  /**
+   * {@code <DB>_INGEST_TYPES} from bench/rust/conn.py: the compat entry's {@code ingest_types},
+   * the Arrow types to send in place of the payload's own for a server whose generated DDL
+   * cannot hold them -- CrateDB has no date storage type ({@code date32=timestamp_us}), Spanner
+   * no int4 ({@code int32=int64}). The same substitution matrix_bench.py applies.
+   */
+  private static String ingestTypes = "";
+
+  /**
+   * {@code <DB>_REFRESH}: the statement that makes a committed write visible to the next scan on
+   * an eventually consistent store, {@code {}} standing for the table (RisingWave's FLUSH,
+   * CrateDB's REFRESH TABLE). Run before every row count.
+   */
+  private static String refreshSql = "";
+
+  private static boolean remapped(String from) {
+    for (String pair : ingestTypes.split(",")) {
+      if (pair.startsWith(from + "=")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Build {@code n} rows of the benchmark payload. The caller closes the root. */
   private static VectorSchemaRoot makeRoot(BufferAllocator allocator, int n) {
-    VectorSchemaRoot root = VectorSchemaRoot.create(SCHEMA, allocator);
-    IntVector ids = (IntVector) root.getVector("id");
+    Schema schema =
+        new Schema(
+            Arrays.asList(
+                Field.nullable(
+                    "id",
+                    remapped("int32")
+                        ? Types.MinorType.BIGINT.getType()
+                        : Types.MinorType.INT.getType()),
+                Field.nullable("val", Types.MinorType.FLOAT8.getType()),
+                Field.nullable("txt", Types.MinorType.VARCHAR.getType()),
+                Field.nullable(
+                    "dt",
+                    remapped("date32")
+                        ? new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)
+                        : Types.MinorType.DATEDAY.getType())));
+    VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
     Float8Vector values = (Float8Vector) root.getVector("val");
     VarCharVector texts = (VarCharVector) root.getVector("txt");
-    DateDayVector dates = (DateDayVector) root.getVector("dt");
-    ids.allocateNew(n);
-    values.allocateNew(n);
-    texts.allocateNew(n);
-    dates.allocateNew(n);
+    root.allocateNew();
     for (int i = 0; i < n; i++) {
-      ids.setSafe(i, i);
       values.setSafe(i, i * 0.5);
       texts.setSafe(i, text(i).getBytes(StandardCharsets.UTF_8));
-      dates.setSafe(i, i % 20_000);
+    }
+    if (root.getVector("id") instanceof BigIntVector ids) {
+      for (int i = 0; i < n; i++) {
+        ids.setSafe(i, i);
+      }
+    } else {
+      IntVector ids = (IntVector) root.getVector("id");
+      for (int i = 0; i < n; i++) {
+        ids.setSafe(i, i);
+      }
+    }
+    if (root.getVector("dt") instanceof TimeStampMicroVector stamps) {
+      for (int i = 0; i < n; i++) {
+        // The same day count, at midnight, in microseconds.
+        stamps.setSafe(i, (i % 20_000) * 86_400L * 1_000_000L);
+      }
+    } else {
+      DateDayVector dates = (DateDayVector) root.getVector("dt");
+      for (int i = 0; i < n; i++) {
+        dates.setSafe(i, i % 20_000);
+      }
     }
     root.setRowCount(n);
     return root;
@@ -304,6 +361,11 @@ public final class Bench {
   }
 
   private static void verify(Session session, String ident, int want) throws Exception {
+    if (!refreshSql.isEmpty()) {
+      // The template quotes the name itself (CrateDB: REFRESH TABLE "{}"), so it takes
+      // the bare spelling, not the quoted one ident may carry.
+      execute(session.connection, refreshSql.replace("{}", ident.replace("\"", "")));
+    }
     long got = adbcCount(session, ident);
     if (got != want) {
       throw new IllegalStateException("wrong row count " + got + " != " + want);
@@ -617,11 +679,26 @@ public final class Bench {
       }
     }
 
+    ingestTypes = System.getenv(prefix + "_INGEST_TYPES") == null ? "" : System.getenv(prefix + "_INGEST_TYPES");
+    refreshSql = System.getenv(prefix + "_REFRESH") == null ? "" : System.getenv(prefix + "_REFRESH");
+    // <DB>_READONLY_TABLE: the entry has no DDL/DML through this driver (a read-only ODBC
+    // driver, or a server that refuses the table ingest would create), so there is nothing
+    // to ingest and the fetch reads the fixture's largest table instead -- what
+    // matrix_bench.py does on a read_only entry. Its row count is whatever the table
+    // holds, and fetch_rows in the output says so.
+    final String roTable =
+        System.getenv(prefix + "_READONLY_TABLE") == null ? "" : System.getenv(prefix + "_READONLY_TABLE");
+    final boolean readOnly = !roTable.isEmpty();
+    final Step readOnlyStep = Step.failed("read-only entry: nothing to ingest");
+
     // Ingest a single row and find out which spelling of the table and column names
     // reaches what that produced, so nothing downstream has to guess.
-    final String[] resolved = {candidates.get(0), "SELECT id, val, txt, dt FROM " + candidates.get(0)};
+    final String[] resolved = {
+      readOnly ? roTable : candidates.get(0),
+      readOnly ? "SELECT * FROM " + roTable : "SELECT id, val, txt, dt FROM " + candidates.get(0)
+    };
     Step probe =
-        attempt(
+        readOnly ? Step.ok(0) : attempt(
             () -> {
               try (Session session = new Session(false)) {
                 dropTable(session, candidates, false);
@@ -672,7 +749,7 @@ public final class Bench {
 
     // 1. adbc ingest: drop, ingest --rows rows, commit, verify the count.
     Step adbcIngestStep =
-        attempt(
+        readOnly ? readOnlyStep : attempt(
             () -> {
               try (Session session = new Session(false)) {
                 double seconds =
@@ -693,7 +770,9 @@ public final class Bench {
     Properties jdbcProperties = new Properties();
     String url = jdbcUrl(db, prefix, jdbcProperties);
     Step jdbcIngestStep =
-        url == null
+        readOnly
+            ? readOnlyStep
+            : url == null
             ? Step.failed("no JDBC URL for " + db + "; set " + prefix + "_JDBC")
             : attempt(
                 () -> {
@@ -714,19 +793,30 @@ public final class Bench {
                   }
                 });
 
-    // Load the bigger table the two fetch steps read back.
+    // Load the bigger table the two fetch steps read back -- or, on a read-only entry,
+    // count the one that is already there.
+    final int[] counted = {readRows};
     Step loaded =
-        attempt(
-            () -> {
-              try (Session session = new Session(false)) {
-                dropTable(session, candidates, false);
-                try (VectorSchemaRoot root = makeRoot(session.allocator, readRows)) {
-                  adbcIngest(session, table, root);
-                }
-                verify(session, ident, readRows);
-                return 0;
-              }
-            });
+        readOnly
+            ? attempt(
+                () -> {
+                  try (Session session = new Session(true)) {
+                    counted[0] = (int) adbcCount(session, ident);
+                    return 0;
+                  }
+                })
+            : attempt(
+                () -> {
+                  try (Session session = new Session(false)) {
+                    dropTable(session, candidates, false);
+                    try (VectorSchemaRoot root = makeRoot(session.allocator, readRows)) {
+                      adbcIngest(session, table, root);
+                    }
+                    verify(session, ident, readRows);
+                    return 0;
+                  }
+                });
+    final int fetchCount = counted[0];
 
     Step adbcFetchStep = loaded;
     Step jdbcFetchStep = loaded;
@@ -736,7 +826,7 @@ public final class Bench {
               () -> {
                 try (Session session = new Session(true)) {
                   return repeat(
-                      repetitions, () -> timed(readRows, () -> adbcFetch(session, select)));
+                      repetitions, () -> timed(fetchCount, () -> adbcFetch(session, select)));
                 }
               });
       jdbcFetchStep =
@@ -746,17 +836,20 @@ public final class Bench {
                   () -> {
                     try (Connection jdbc = jdbcConnect(url, jdbcProperties)) {
                       return repeat(
-                          repetitions, () -> timed(readRows, () -> jdbcFetch(jdbc, select)));
+                          repetitions, () -> timed(fetchCount, () -> jdbcFetch(jdbc, select)));
                     }
                   });
     }
 
-    // Leave nothing of ours behind on a shared server.
-    try (Session session = new Session(true)) {
-      dropTable(session, candidates, true);
-    } catch (Exception ignored) {
-      // Best effort.
+    // Leave nothing of ours behind on a shared server (the read-only fixture is not ours).
+    if (!readOnly) {
+      try (Session session = new Session(true)) {
+        dropTable(session, candidates, true);
+      } catch (Exception ignored) {
+        // Best effort.
+      }
     }
+    fetchRows = fetchCount;
 
     System.out.println(
         String.format(

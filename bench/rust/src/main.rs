@@ -47,7 +47,7 @@
 
 use std::env;
 use std::error::Error;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use adbc_core::options::{
@@ -55,8 +55,11 @@ use adbc_core::options::{
 };
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
 use adbc_driver_manager::{ManagedConnection, ManagedDriver};
-use arrow_array::{Array, Date32Array, Float64Array, Int32Array, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow_array::{
+    Array, Date32Array, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
+    TimestampMicrosecondArray,
+};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use odbc_api::buffers::{BufferDesc, ColumnarDynBuffer};
 use odbc_api::BindParamDesc;
 use odbc_api::{sys::Date, ConnectionOptions, Cursor, Environment, Nullability, ResultSetMetadata};
@@ -120,26 +123,61 @@ fn die(message: &str) -> ! {
 
 // ------------------------------------------------------------- the payload
 
+/// `<DB>_INGEST_TYPES` from `bench/rust/conn.py`: the compat entry's `ingest_types`,
+/// the Arrow types to send in place of the payload's own for a server whose generated
+/// DDL cannot hold them -- CrateDB has no date storage type (`date32=timestamp_us`),
+/// Spanner no int4 (`int32=int64`). The same substitution `matrix_bench.py` applies.
+static INGEST_TYPES: OnceLock<String> = OnceLock::new();
+
+/// `<DB>_REFRESH`: the statement that makes a committed write visible to the next
+/// scan on an eventually consistent store, `{}` standing for the table (RisingWave's
+/// `FLUSH`, CrateDB's `REFRESH TABLE`). Run before every row count.
+static REFRESH_SQL: OnceLock<String> = OnceLock::new();
+
+fn remapped(from: &str) -> bool {
+    INGEST_TYPES
+        .get()
+        .map(|s| s.split(',').any(|pair| pair.starts_with(&format!("{from}="))))
+        .unwrap_or(false)
+}
+
 /// The benchmark table: `(id int32, val float64, txt utf8, dt date32)`, the
 /// same shape and values `bench/matrix_bench.py` uses.
 fn make_batch(n: usize) -> RecordBatch {
+    let (id_type, id): (DataType, Arc<dyn Array>) = if remapped("int32") {
+        (DataType::Int64, Arc::new(Int64Array::from_iter_values((0..n).map(|i| i as i64))))
+    } else {
+        (DataType::Int32, Arc::new(Int32Array::from_iter_values((0..n).map(|i| i as i32))))
+    };
+    let (dt_type, dt): (DataType, Arc<dyn Array>) = if remapped("date32") {
+        // The same day count, at midnight, in microseconds.
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            Arc::new(TimestampMicrosecondArray::from_iter_values(
+                (0..n).map(|i| (i % 20_000) as i64 * 86_400 * 1_000_000),
+            )),
+        )
+    } else {
+        (
+            DataType::Date32,
+            Arc::new(Date32Array::from_iter_values((0..n).map(|i| (i % 20_000) as i32))),
+        )
+    };
     let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, true),
+        Field::new("id", id_type, true),
         Field::new("val", DataType::Float64, true),
         Field::new("txt", DataType::Utf8, true),
-        Field::new("dt", DataType::Date32, true),
+        Field::new("dt", dt_type, true),
     ]));
-    let id = Int32Array::from_iter_values((0..n).map(|i| i as i32));
     let val = Float64Array::from_iter_values((0..n).map(|i| i as f64 * 0.5));
     let txt = StringArray::from_iter_values((0..n).map(|i| format!("row-{i:012}")));
-    let dt = Date32Array::from_iter_values((0..n).map(|i| (i % 20_000) as i32));
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(id) as Arc<dyn Array>,
+            id,
             Arc::new(val),
             Arc::new(txt),
-            Arc::new(dt),
+            dt,
         ],
     )
     .expect("build the benchmark batch")
@@ -257,6 +295,21 @@ fn adbc_ingest(connection: &mut ManagedConnection, table: &str, batch: RecordBat
 }
 
 /// Drain `sql` into Arrow batches through the bridge and count the rows.
+/// Refresh if the entry needs it, then check the row count.
+fn verify(connection: &mut ManagedConnection, ident: &str, want: usize) -> Res<()> {
+    if let Some(refresh) = REFRESH_SQL.get().filter(|s| !s.is_empty()) {
+        // The template quotes the name itself (CrateDB: REFRESH TABLE "{}"), so it
+        // takes the bare spelling, not the quoted one `ident` may carry.
+        let bare = ident.trim_matches('"');
+        exec(connection, &refresh.replace("{}", bare)).map_err(|e| format!("refresh: {e}"))?;
+    }
+    let got = adbc_count(connection, ident)?;
+    if got != want as i64 {
+        return Err(format!("wrong row count {got} != {want}").into());
+    }
+    Ok(())
+}
+
 fn adbc_fetch(connection: &mut ManagedConnection, sql: &str) -> Res<usize> {
     let mut statement = connection.new_statement()?;
     statement.set_sql_query(sql)?;
@@ -612,6 +665,16 @@ fn main() {
     ];
     candidates.dedup();
     let drops = candidates.clone();
+    let _ = INGEST_TYPES.set(env::var(format!("{prefix}_INGEST_TYPES")).unwrap_or_default());
+    let _ = REFRESH_SQL.set(env::var(format!("{prefix}_REFRESH")).unwrap_or_default());
+    // `<DB>_READONLY_TABLE`: the entry has no DDL/DML through this driver (a read-only
+    // ODBC driver, or a server that refuses the table ingest would create), so there
+    // is nothing to ingest and the fetch reads the fixture's largest table instead --
+    // what `matrix_bench.py` does on a `read_only` entry. Its row count is whatever
+    // the table holds, and `fetch_rows` in the output says so.
+    let ro_table = env::var(format!("{prefix}_READONLY_TABLE")).unwrap_or_default();
+    let read_only = !ro_table.is_empty();
+    let mut args = args;
 
     let environment = Environment::new().unwrap_or_else(|e| die(&format!("ODBC environment: {e}")));
 
@@ -625,7 +688,9 @@ fn main() {
     // names reaches what that produced, so nothing downstream has to guess: the
     // ingest quotes every identifier, which on a case-folding database (Oracle,
     // Db2) makes the lower-cased spelling the only one that resolves.
-    let (ident, select) = attempt(|| {
+    let (ident, select) = if read_only {
+        (ro_table.clone(), format!("SELECT * FROM {ro_table}"))
+    } else { attempt(|| {
         let mut connection = adbc_connect(&driver, &uri, &setup, false)?;
         drop_table(&mut connection, &drops, false);
         adbc_ingest(&mut connection, &table, make_batch(1))?;
@@ -648,21 +713,19 @@ fn main() {
         let ident = candidates[0].clone();
         let select = format!("SELECT id, val, txt, dt FROM {ident}");
         (ident, select)
-    });
+    }) };
 
     // 1. adbc ingest: drop, ingest --rows rows, commit, verify the count.
-    let adbc_ingest_step: Step = attempt(|| {
+    let read_only_step = || -> Step { Err("read-only entry: nothing to ingest".to_string()) };
+    let adbc_ingest_step: Step = if read_only { read_only_step() } else { attempt(|| {
         let mut connection = adbc_connect(&driver, &uri, &setup, false)?;
         let secs = repeat(args.reps, || {
             drop_table(&mut connection, &drops, false);
             adbc_ingest(&mut connection, &table, make_batch(args.rows))
         })?;
-        let got = adbc_count(&mut connection, &ident)?;
-        if got != args.rows as i64 {
-            return Err(format!("wrong row count {got} != {}", args.rows).into());
-        }
+        verify(&mut connection, &ident, args.rows)?;
         Ok(secs)
-    });
+    }) };
 
     // ADBC_BENCH_NO_NATIVE: skip the odbc-api comparison entirely and leave its
     // columns empty. Some ODBC drivers abort the whole process from the plain ODBC
@@ -673,7 +736,7 @@ fn main() {
     let skipped = || -> Step { Err("skipped: ADBC_BENCH_NO_NATIVE".to_string()) };
 
     // 2. odbc-api ingest of the same rows into the table ADBC's DDL created.
-    let odbc_ingest_step: Step = if no_native { skipped() } else { attempt(|| {
+    let odbc_ingest_step: Step = if read_only { read_only_step() } else if no_native { skipped() } else { attempt(|| {
         let mut adbc = adbc_connect(&driver, &uri, &setup, false)?;
         let odbc = odbc_connect(&environment, &uri, &setup, false)?;
         let secs = repeat(args.reps, || {
@@ -682,24 +745,24 @@ fn main() {
             adbc_ingest(&mut adbc, &table, make_batch(0))?;
             odbc_api_ingest(&odbc, &ident, args.rows)
         })?;
-        let got = adbc_count(&mut adbc, &ident)?;
-        if got != args.rows as i64 {
-            return Err(format!("wrong row count {got} != {}", args.rows).into());
-        }
+        verify(&mut adbc, &ident, args.rows)?;
         Ok(secs)
     })};
 
-    // Load the bigger table the three fetch steps read back.
-    let loaded = attempt(|| {
+    // Load the bigger table the three fetch steps read back -- or, on a read-only
+    // entry, count the one that is already there.
+    let loaded = if read_only {
+        attempt(|| {
+            let mut connection = adbc_connect(&driver, &uri, &setup, true)?;
+            args.fetch_rows = adbc_count(&mut connection, &ident)? as usize;
+            Ok(())
+        })
+    } else { attempt(|| {
         let mut connection = adbc_connect(&driver, &uri, &setup, false)?;
         drop_table(&mut connection, &drops, false);
         adbc_ingest(&mut connection, &table, make_batch(args.fetch_rows))?;
-        let got = adbc_count(&mut connection, &ident)?;
-        if got != args.fetch_rows as i64 {
-            return Err(format!("wrong row count {got} != {}", args.fetch_rows).into());
-        }
-        Ok(())
-    });
+        verify(&mut connection, &ident, args.fetch_rows)
+    }) };
 
     let (adbc_fetch_step, odbc_fetch_step, arrow_fetch_step): (Step, Step, Step) = match &loaded {
         Err(e) => (Err(e.clone()), Err(e.clone()), Err(e.clone())),
@@ -725,9 +788,11 @@ fn main() {
         ),
     };
 
-    // Leave nothing of ours behind on a shared server.
-    if let Ok(mut connection) = adbc_connect(&driver, &uri, &setup, true) {
-        drop_table(&mut connection, &drops, true);
+    // Leave nothing of ours behind on a shared server (the read-only fixture is not ours).
+    if !read_only {
+        if let Ok(mut connection) = adbc_connect(&driver, &uri, &setup, true) {
+            drop_table(&mut connection, &drops, true);
+        }
     }
 
     println!(
