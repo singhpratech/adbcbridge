@@ -3,7 +3,7 @@
 
 The workload of [`LANGUAGE_BENCHMARKS.md`](LANGUAGE_BENCHMARKS.md) run on **Windows 11
 Pro 24H2, Intel Core i7-8550U (4 cores / 8 threads), 7.7 GB RAM, x64**, the OS's own driver
-manager (odbc32.dll), adbcbridge at `a019213` (tier 3 at `b5d2791` and `ffecd7a`), x64 Release — a build with **no prefetch
+manager (odbc32.dll), adbcbridge at `a019213` (tier 3 at `b5d2791`, `ffecd7a` and `9a652ae`), x64 Release — a build with **no prefetch
 pipeline and no ingest fan-out** (both compiled out on `_WIN32`). Same harnesses, same
 columns: ADBC ingest and fetch (rows/s) through `libadbc_driver_odbc.dll`, then that
 language's own ODBC client (Java's is JDBC — sqlite-jdbc — not ODBC). ROWS=10000,
@@ -80,8 +80,28 @@ progress; this file grows as servers come up. Python's ingest is `matrix_bench.p
 | go | dolt | 29,653 | 389,574 | skipped | skipped |
 | java | dolt | hung | hung | no driver | no driver |
 | csharp | dolt | stopped | stopped | stopped | stopped |
+| python | percona | 12,319 | 177,759 | 339 | 149,370 |
+| rust | percona | 25,916 | 421,338 | 1,020 | 414,096 |
+| go | percona | 25,786 | 359,564 | skipped | skipped |
+| java | percona | 18,779 | 356,111 | no driver | no driver |
+| csharp | percona | 26,822 | 414,062 | 1,087 | 285,388 |
+| python | arcadedb | — | 84,639 | — | — |
+| rust | arcadedb | — | 97,606 | — | 107,369 |
+| go | arcadedb | — | 104,034 | skipped | skipped |
+| java | arcadedb | — | 4,361 | no driver | no driver |
+| csharp | arcadedb | — | 9,743 | — | — |
+| python | risingwave | 14,532 | 187,927 | 414 | 121,140 |
+| rust | risingwave | 18,783 | 213,715 | 1,034 | 213,193 |
+| go | risingwave | 19,571 | 212,143 | skipped | skipped |
+| java | risingwave | 16,367 | 202,135 | no driver | no driver |
+| csharp | risingwave | 17,831 | 211,085 | 395 | 164,493 |
+| python | materialize | 10,409 | 110,188 | 545 | 73,957 |
+| rust | materialize | 11,507 | 110,483 | — | 104,812 |
+| go | materialize | 10,657 | 121,389 | skipped | skipped |
+| java | materialize | 8,020 | 87,100 | no driver | no driver |
+| csharp | materialize | 6,161 | 95,484 | — | 66,504 |
 
-The first five databases: 24 of 25 cells; tier 3 (Docker Desktop on WSL2, one container at a time at 1 GB) follows below them — Rust's arrow-odbc fetch on tier 3: cockroachdb 198,095, timescaledb 229,103, citus 291,885, cratedb 210,859, questdb 211,570, tidb 342,479, mariadb 299,628. `stopped` marks a harness whose *native* row-at-a-time ingest ran at tens of rows/s on CrateDB and Dolt and was stopped after 10 minutes (C# on CrateDB after 30) — the harness prints its row only at the end, so the ADBC numbers for that run are lost with it; `hung` is Java on Dolt, whose ADBC-only run produced nothing in 10 minutes and was killed, unexplained. The sqlite rows were re-taken with the rest of the grid, so they differ from
+The first five databases: 24 of 25 cells; tier 3 (Docker Desktop on WSL2, one container at a time at 1 GB) follows below them — Rust's arrow-odbc fetch on tier 3: cockroachdb 198,095, timescaledb 229,103, citus 291,885, cratedb 210,859, questdb 211,570, tidb 342,479, mariadb 299,628, percona 427,781, arcadedb 96,694, risingwave 208,683, materialize 94,970. ArcadeDB is a read-only entry: its ingest cells are empty by construction. Java and C# read ArcadeDB at 4,361 and 9,743 rows/s against ~100,000 for Python, Rust and Go — the same 1.2-1.5M-vs-100k spread the Linux file records for that server, not a Windows effect. `stopped` marks a harness whose *native* row-at-a-time ingest ran at tens of rows/s on CrateDB and Dolt and was stopped after 10 minutes (C# on CrateDB after 30) — the harness prints its row only at the end, so the ADBC numbers for that run are lost with it; `hung` is Java on Dolt, whose ADBC-only run produced nothing in 10 minutes and was killed, unexplained. The sqlite rows were re-taken with the rest of the grid, so they differ from
 the first-day numbers in `BENCHMARKS-windows.md` by the run-to-run variance recorded there.
 Rust's arrow-odbc fetch, not in the table: sqlite 396,258, mssql 896,103, postgres 411,178,
 mysql 489,701. Three words stand for three different kinds of empty native cell — `skipped`

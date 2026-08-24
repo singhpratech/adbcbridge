@@ -98,6 +98,32 @@ of rows/s on CrateDB and Dolt, so 10,000 rows exceeds a 10-minute window (C# on 
 was still going after 30); the language file marks them `stopped`. Java on Dolt hung on
 the ADBC-only path for over 10 minutes and was killed — recorded as `hung`, unexplained.
 
+### Tier 3, batch 3 — percona/arcadedb at ffecd7a, risingwave/materialize at 9a652ae (ctest 7/7, zero warnings)
+
+| entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
+|---|---|---:|---:|---:|---:|
+| percona | PASS (`MySQL (via ODBC) 8.4.11-11`), Connector/ODBC 8.4.0, default connection string | 177,759 | 149,370 | 9,738 (12,319) | 339 |
+| arcadedb | PASS (`PostgreSQL (via ODBC) 12.0.0`), read-only fixture | 84,639 | — | — | — |
+| risingwave | PASS (`PostgreSQL (via ODBC) 13.1400.0`), RisingWave 3.0.3, toml bind-mounted, 56 MB used of 1.5 GB | 187,927 | 121,140 | 15,227 (14,532) | 414 |
+| materialize | PASS (`PostgreSQL (via ODBC) 9.5.0`), v26.38.2 at `--memory=1536m`, 872 MB used | 110,188 | 73,957 | 9,950 (10,409) | 545 |
+
+Materialize's harness rows need `ADBC_BENCH_AUTOCOMMIT=1` (0 rows in all four languages
+without it), as on Linux and macOS. From Git Bash, a bind-mount path must be protected with
+`MSYS_NO_PATHCONV=1` or the `-v` argument is rewritten.
+
+**Docker Desktop's WSL disk never shrinks.** After ten images pulled and deleted one at a
+time, `docker system df` showed nothing, yet `docker_data.vhdx` under `%LOCALAPPDATA%` was
+13.2 GB and host free space had fallen to 5.3 GB: the VHDX grows monotonically, `docker
+rmi` frees space *inside* it for reuse but returns none to Windows. `wsl --manage
+docker-desktop --set-sparse true` is refused on WSL 2.7.12 ("currently disabled due to
+potential data corruption", `--allow-unsafe` not forced); `Optimize-VHD` / `diskpart
+compact vdisk` need administrator rights. `wsl --shutdown` recovered 5.3 → 8.9 GB (the
+VM's working memory), and since the allocated space is reused the file stops growing as
+long as images are deleted between pulls. Budget ~13 GB of VHDX for a tier-3 sweep on top
+of Docker Desktop's ~6 GB, and expect to need an administrator to get it back. Containers
+also leave anonymous volumes behind (11 of them, 992 MB, after ten entries): `docker volume
+prune -af` between entries.
+
 **A Windows-only environment fact, found by CrateDB:** Windows has no system time-zone
 database, so pyarrow's timestamp-with-timezone conversion raises `ArrowInvalid: The
 zoneinfo module or pytz package must be installed` until the `tzdata` PyPI package is
