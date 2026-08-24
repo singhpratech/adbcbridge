@@ -81,6 +81,12 @@ driver default, the same setting every other language here runs with — not its
   the bulk ingest is several times faster: the driver binds the whole batch as
   parameter arrays. Against clients that *do* batch — Rust's
   `ColumnarBulkInserter`, JDBC's `executeBatch` — it is in the same league.
+- **One server can cost the read an order of magnitude, and it shows in every
+  language at once.** Oracle's fetch column is 66k–122k rows/s against 1.1M–2.4M
+  everywhere else, because the string column is a `CLOB` there and this ODBC
+  driver has to be read a row at a time (see below). The five bindings stay
+  within 1.9× of each other while doing it — the ratio between them barely
+  moves, which is the point of running the same workload from all five.
 - **A native-protocol client can still win a read.** pgjdbc reads PostgreSQL
   over its own wire protocol rather than ODBC, so its fetch beats the bridge's;
   that is a protocol difference, not driver overhead. Where the comparison stays
@@ -172,10 +178,10 @@ driver default, the same setting every other language here runs with — not its
 | java | tdengine | — | — | — | — |
 | go | tdengine | — | — | — | — |
 | python | duckdb | 305,140 | — | — | — |
-| rust | duckdb | 307,568 | — | — | — |
-| csharp | duckdb | 301,677 | — | — | — |
-| java | duckdb | 277,168 | — | — | — |
-| go | duckdb | 331,034 | — | — | — |
+| rust | duckdb | 336,638 | — | — | — |
+| csharp | duckdb | 316,437 | — | — | — |
+| java | duckdb | 201,602 | — | — | — |
+| go | duckdb | 309,410 | — | — | — |
 | python | columnstore | 58,205 | 1,269,570 | — | — |
 | rust | columnstore | 54,005 | 1,098,912 | 471,175 | 1,412,067 |
 | csharp | columnstore | 57,592 | 1,103,138 | 9,985 | 510,386 |
@@ -267,7 +273,7 @@ table, with `adbc.odbc.delegate=never`, and the reason recorded rather than the
 workload changed. The python row exists in several of these because
 `bench/matrix_bench.py` connects with **autocommit on**, where the other four
 benchmarks turn autocommit off and commit once — which is the workload, and
-which three of these servers cannot do.
+which several of these servers cannot do.
 
 | Database | What fails, and whose fault it is |
 |---|---|
@@ -277,28 +283,78 @@ which three of these servers cannot do.
 | **greptimedb** | *Server, surfaced by the ODBC driver.* GreptimeDB has no transactions (`SQL_TC_NONE`), so MySQL Connector/ODBC rejects `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)` with `NotImplemented` and the connection never opens. Every step of all four benchmarks fails at connect. |
 | **opensearch** | *Driver.* The OpenSearch SQL ODBC driver is read-only and refuses `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT)` too, so the four autocommit-off benchmarks cannot connect. There is no `CREATE TABLE`/`INSERT` in the SQL plugin either, so no ingest exists to time. |
 | **arcadedb**, **tdengine** | *Benchmark harness, and the entry.* Both entries are `read_only` — ArcadeDB has no `CREATE TABLE` (its DDL is `CREATE DOCUMENT TYPE` plus one `CREATE PROPERTY` per column) and every TDengine table must start with a `TIMESTAMP` primary key, which no generated DDL emits — so there is no create-mode ingest for any language. On top of that `bench/rust/conn.py` exports the entry's `setup` through the environment, and for these two `setup` *is* the literal bulk load (100,000 rows / 20,000 rows), so the benchmark binaries cannot even be exec'd: `Argument list too long` (E2BIG). |
-| **oracle** | *ODBC driver.* Any row-array (block) fetch of a character column segfaults inside Oracle's own `libsqora.so.23.1`, in `bcoReturnColData` ← `bcoCacheFetchNext` ← `SQLFetch`, and takes the process with it — from every language and from plain `adbc_driver_manager`, and `tests/compat/test_matrix.py oracle` segfaults identically. It is the *second* `SQLFetch` that dies: 1,000 rows read fine, 2,000 do not, and `adbc.odbc.batch_size=1` reads all 20,000 rows of the same column. The numeric and `DATE` columns read fine at any size. The ingest column above is the full 10,000-row workload; only the fetch step was shortened, so the process survived to print it. |
+| **duckdb** (fetch, and every native column) | *The entry, plus the driver's model.* The compat entry connects with `Database=:memory:`, so **every ODBC connection is its own empty DuckDB**. The ingest step creates its table, fills it and checks the count inside one connection, so its number is real; the fetch step opens a fresh connection, where that table has never existed. All five bindings report the read as `[ODBC] SQLExecDirect failed`, and the driver's own text under it is `[42000] ODBC_DuckDB->PrepareStmt / Catalog Error: Table with name adbc_bench_rs does not exist!`. The native columns are `—` for exactly the same reason and not because the comparison was skipped: `System.Data.Odbc`, `database/sql` and `odbc-api` each carry the same `[42000] ODBC_DuckDB->PrepareStmt` out of their `SQLPrepare`/`SQLExecDirect`. |
+| **cratedb** (rust, csharp, java, go) | *Server, meeting the generated DDL.* These four harnesses always build the batch with a `date32` column, and bulk-ingest DDL takes its type names from psqlodbc's `SQLGetTypeInfo` — PostgreSQL's. CrateDB has no DATE storage type, so `CREATE TABLE "adbc_bench_rs" ("id" int4, "val" float8, "txt" text, "dt" date)` is refused with ``[XX000] ERROR: Type `date` does not support storage``, and every step after it fails with the table missing. The python row exists because `matrix_bench.py` applies the compat entry's `ingest_types` remap (`date32 -> timestamp[us]`) before it builds the batch. |
+| **spanner** (rust, csharp, java, go) | *Server, meeting the generated DDL.* The same shape one column over: Spanner has no 32-bit integer type and psqlodbc names `int4` for one, so `CREATE TABLE "adbc_bench_rs" ("id" int4, "val" float8, "txt" text, "dt" date, "adbc_ingest_key" bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY)` fails with `[P0001] ERROR: Type <int4> is not supported; use bigint or int8 instead.` Only `matrix_bench.py` applies the entry's `ingest_types` (`int32 -> int64`), so only the python row has numbers. (The primary key in that DDL is the driver's own doing — Spanner requires one — and is not what fails.) |
+| **ignite** | *Server.* Every Ignite table must have a primary key and a create-mode ingest generates none, so `CREATE TABLE adbc_bench_go (id INTEGER, val DOUBLE, txt VARCHAR, dt DATE)` is refused with `[42000] No PRIMARY KEY defined for CREATE TABLE.` — which is what the compat entry records as `ingest_create=False`. There is no ingest to time in any language, and with no table to read the four harnesses have no fetch either; the python fetch is the entry's pre-loaded `adbc_big`. |
+| **mongodbbi** | *Server, surfaced by the ODBC driver.* mongosqld has no transactions, so MySQL Connector/ODBC refuses `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)` with `[HYC00] (4000) [MySQL][ODBC 9.4(w) Driver]Transactions are not enabled.` and the connection never opens — every step of the four autocommit-off benchmarks fails at connect, exactly as on greptimedb. The entry is `read_only` besides: mongosqld is a query engine with no DDL and no DML, so there is no ingest to time from any language. |
+| **flightsql**, **dremio** | *Driver.* Both are driven by the Arrow Flight SQL ODBC driver, which answers `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT)` with `[HYC00] (100) [Apache Arrow][Flight SQL] (100) Optional feature not implemented.`, so the four autocommit-off benchmarks cannot open a connection at all. Both entries are `read_only` for a second reason from the same driver — it has no `SQLBindParameter` — so no ingest could reach either server anyway. The python fetch is the entry's pre-loaded `adbc_big`. |
+| **monetdb** (all four, without `ADBC_BENCH_AUTOCOMMIT=1`) | *Driver.* MonetDBODBClib's `SQLEndTran` is a no-op. With autocommit off the ingest returns a rate (rust measured 189,937 rows/s) and its row-count check passes on the connection that wrote the rows, but the next connection finds nothing: `ERROR [42S02] [MonetDB][ODBC Driver 11.55.7]INSERT INTO: no such table 'adbc_bench_cs'`, `... SELECT: no such table 'adbc_bench_cs'`. The four monetdb rows above were therefore taken with `ADBC_BENCH_AUTOCOMMIT=1`, which is the autocommit-on setting `matrix_bench.py` — and so the python row — uses everywhere. |
+| **monetdb** (rust native) | *Client.* `odbc-api` cannot open this DSN at all: `ODBC emitted an error calling 'SQLDriverConnect': State: IM005, Native error: 0, Message: [unixODBC][Driver Manager]Driver's SQLAllocHandle on SQL_HANDLE_DBC failed`. The bridge, pyodbc, `System.Data.Odbc` and `database/sql` all reach the same MonetDBODBClib through the same unixODBC. |
+| **mssql**, **percona**, **columnstore**, **yugabyte**, **monetdb** (go native) | *Binding.* `bench_go` dies before it prints anything, so each of these was re-run with `-no-native`, which keeps both ADBC columns and leaves the `database/sql` ones empty. Two shapes, neither in the driver's path. On mssql, percona and monetdb it is arrow-go's own finalizer: `SIGSEGV … signal arrived during cgo execution` on the finalizer goroutine, in `cdata.initReader.func2 -> _Cfunc_ArrowArrayStreamRelease`, while the main goroutine sits in the `database/sql` step (`odbcFetch` for the first two, the closing cleanup connect for monetdb) — an `ArrowArrayStream` from an earlier ADBC read being finalised long after the step that produced it. On yugabyte it is psqlodbc: SIGSEGV under `alexbrainman/odbc`'s `(*Stmt).Close -> (*ODBCStmt).releaseHandle` while closing the prepared `INSERT`, the same crash the questdb row above records. On columnstore it is maodbc: `double free or corruption (!prev)`, SIGABRT, in `rows.Close` at the end of the `database/sql` read. |
+| **oracle** (csharp native fetch) | *Client.* `System.Data.Odbc` raises `Unable to cast object of type 'System.Decimal' to type 'System.Int32'` — Oracle stores the `id` column as `NUMBER`, which comes back as a `decimal`, and the comparison reads it as `int`. The same shape as the vertica row below. Go hit the arrow-go finalizer crash on its first oracle run too (`free(): invalid pointer` in `ArrowArrayStreamRelease`); the repeat of the same command finished, and the go oracle row is that run, native columns included. |
 | **azuresqledge** (csharp) | *Undetermined, reproducible.* `bench_cs` aborts with glibc's `corrupted double-linked list (not small)` before printing anything, on every one of six full-workload runs. It needs both halves of the workload: `--rows 10000 --fetch-rows 1000` and `--rows 100 --fetch-rows 100000` both finish, `--rows 10000 --fetch-rows 100000` crashes even at `--reps 1`. Rust, Java and Go run the same workload against the same msodbcsql18 and the same server without trouble. |
 | **db2** (csharp fetch) | *Binding.* `[ODBC] SQLGetData failed` on all 4 runs of the 100,000-row read, while python, rust, go and java read the same 100,000 rows through the same driver and server. Size-dependent: 5,000 and 50,000 rows read fine from C#, 100,000 fails even at `--reps 1`. The `System.Data.Odbc` comparison fails separately with `Arithmetic operation resulted in an overflow` — the clidriver's 32-bit `SQLLEN` reaching a client that assumes 64-bit. |
 | **db2** (go/csharp native fetch) | *Driver/client.* `alexbrainman/odbc` reports `SQLGetDiagRec failed: ret=-2`; both are the 32-bit `SQLLEN` again. The `odbc-api` numbers in the rust row are for the same reason not to be read as real throughput. |
 | **matrixone** (go native) | *Server.* MatrixOne rejects the quoted-identifier `INSERT`/`SELECT` that `database/sql` prepares with `SQL parser error`. |
 | **vertica** (csharp native fetch) | *Client.* `System.Data.Odbc` raises `Unable to cast object of type 'System.Int64' to type 'System.Int32'` — Vertica has one 64-bit integer type and the comparison reads it as `int`. |
 
+**Oracle's fetch column used to be empty, and what filling it costs.** It was
+`—` in all five languages because the read *crashed the process*: any row-array
+fetch of a character column segfaulted inside Oracle's own `libsqora.so.23.1`
+(`bcoReturnColData` ← `bcoCacheFetchNext` ← `SQLFetch`), from every binding and
+from plain `adbc_driver_manager`. The driver no longer moves
+`SQL_ATTR_ROW_ARRAY_SIZE` on SQORA: the reader settles the rowset before the
+first fetch and never changes it again — no probe-then-restore for bind-width
+adaptation, no collapse to one row to repair a truncated value. Nothing on this
+driver can repair one anyway (`SQLGetData` above array size 1 and
+`SQLSetPos(SQL_POSITION)` at any size both answer HY109, and
+`SQLFetchScroll(SQL_FETCH_ABSOLUTE)` answers HY106), so a column whose declared
+width is a type maximum rather than a real bound stays unbound and is read with
+`SQLGetData` — one row at a time.
+
+This benchmark's `txt` is an Arrow string, and generated ingest DDL spells that
+`CLOB` on Oracle (`user_tab_columns` reads `id NUMBER, val FLOAT, txt CLOB, dt
+DATE`); a `CLOB` is `SQL_LONGVARCHAR` of column size 2,147,483,647, so this read
+is exactly the shape that gives its block cursor up. That is the whole of the
+cost: the five ADBC fetch rates are 66k–122k rows/s where the same four columns
+read 1.1M–2.4M rows/s from servers whose strings are ordinary `VARCHAR`.
+`odbc-api` reads the *same* result set at 136,334 rows/s and `arrow-odbc` at
+145,299 (see [`RUST_BENCHMARKS.md`](RUST_BENCHMARKS.md)), within the same band —
+so what is being paid for is the row-at-a-time protocol, not the Arrow layer on
+top of it. A result set with no LOB column keeps the full block cursor and is
+untouched.
+
 The C# ADBC *fetch* is the one step in this table that is not reliable. Besides
-the two rows above it failed intermittently with a bare `[ODBC] SQLFetch failed`
+its two rows in the table above it failed intermittently with a bare `[ODBC] SQLFetch failed`
 on postgres (2 runs in 4) and once on timescaledb, both of which then read the
 same 100,000 rows on a re-run — and it is the only binding here that does so.
 Its two hard failures (Db2's `SQLGetData`, Azure SQL Edge's heap corruption) are
 both at 100,000 rows and both go away below ~50,000, which is the same shape.
 
-For **arcadedb**, **opensearch** and **tdengine** the python *ADBC fetch* is not
-the table above but the entry's pre-loaded `adbc_big` read end to end (100,000
-documents for the first two, 20,000 rows for TDengine), which is what
-`matrix_bench.py` times on a `read_only` entry. It is comparable with itself
-across runs, not with the other rows.
+For **arcadedb**, **opensearch**, **tdengine**, **mongodbbi**, **flightsql**,
+**ignite** and **dremio** the python *ADBC fetch* is not the table above but the
+entry's pre-loaded `adbc_big` read end to end — 100,000 rows for all of them
+except TDengine, which holds 20,000 — which is what `matrix_bench.py` times on a
+`read_only` entry (and on `ignite`, which is write-refusing rather than
+read-only). Those figures are comparable with themselves across runs, not with
+the other rows: the table is `(a, b)`, not the four-column one every other row
+reads.
 
 These numbers were taken on a host shared with two other benchmark agents, load
 average 2.5–7.9 and swap exhausted. The ingest column moves ±25–60% run to run
 on the fast servers (postgres ADBC ingest measured 483k and 603k for rust, 402k
 and 728k for csharp in separate runs); the fetch column is stable to a few
 percent. Read them as ratios.
+
+The sixteen databases added or re-measured after that — every row from
+**oracle** down — were taken on the same host with 36 containers up, at a
+one-minute load average between 1.8 and 5.2 (`uptime` before and after each
+database; it was 18.1 when the session started and had drained by the first
+run). The same caveat holds, and **columnstore** is the worst of it: four
+consecutive rust runs of the identical command read 50,835, 12,124, 14,687 and
+54,005 rows/s of ADBC ingest, a 4.5× spread, while its `odbc-api` comparison
+stayed inside 421k–472k after one 907k outlier. The recorded columnstore row is
+the last of those four, which is the one that agrees with the other four
+languages. Every other database's ingest column repeated inside the usual
+±25–60%, and no fetch number moved more than a few percent between runs.

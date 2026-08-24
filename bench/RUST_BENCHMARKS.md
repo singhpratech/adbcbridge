@@ -30,16 +30,34 @@ reads the same result set fine. MySQL Connector/ODBC needs the same
 `LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6` the compat matrix documents in
 [`tests/compat/README.md`](../tests/compat/README.md).
 
-Two rows no longer read the way the paragraph above describes. **oracle**'s fetch
-columns are `—` because the read *crashes the process*: any row-array fetch of a
-character column segfaults inside Oracle's own `libsqora.so.23.1`
-(`bcoReturnColData` under `SQLFetch`), from every language and from plain
-`adbc_driver_manager`, and `tests/compat/test_matrix.py oracle` segfaults
-identically. Its ingest columns are the ordinary 10,000-row workload — only the
-fetch step was shortened so the run survived to print them. And **db2**'s
-`odbc-api`/`arrow-odbc` columns now return numbers rather than panicking, but the
+Three rows do not read the way the paragraph above describes. **oracle**'s fetch
+columns were `—` because the read used to *crash the process*: any row-array fetch
+of a character column segfaulted inside Oracle's own `libsqora.so.23.1`
+(`bcoReturnColData` under `SQLFetch`). The driver now settles the rowset before the
+first fetch and never moves it on SQORA, and reads a column with no real declared
+width — the `txt` column here, which generated ingest DDL spells `CLOB` — with
+`SQLGetData`, one row at a time. All three fetch columns are numbers again, and
+all three are an order of magnitude below what the same four columns read from a
+server whose strings are ordinary `VARCHAR`: that is the price of the row-at-a-time
+path, and `odbc-api` and `arrow-odbc` pay it too. **monetdb**'s `odbc-api` and
+`arrow-odbc` columns are `—` because that crate cannot open the DSN at all
+(`SQLDriverConnect` → `IM005 … Driver's SQLAllocHandle on SQL_HANDLE_DBC failed`),
+though the bridge and pyodbc both connect through the same unixODBC; the monetdb
+row also needs `ADBC_BENCH_AUTOCOMMIT=1`, because MonetDBODBClib's `SQLEndTran` is
+a no-op and an autocommit-off ingest leaves nothing behind. And **db2**'s
+`odbc-api`/`arrow-odbc` columns return numbers rather than panicking, but the
 32-bit `SQLLEN` they are reading through has not changed, so they are not
 throughput to compare against the ADBC column.
+
+Four of the databases below have no ADBC column at all. **cratedb** and **spanner**
+refuse the generated ingest DDL (``Type `date` does not support storage`` and
+`Type <int4> is not supported; use bigint or int8 instead`), **ignite** refuses any
+`CREATE TABLE` without a primary key, and **mongodbbi**, **flightsql** and
+**dremio** refuse `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)` so the connection
+never opens. **duckdb** has an ingest but no fetch: the entry connects with
+`Database=:memory:`, so the table the ingest wrote is gone from the next
+connection. [`LANGUAGE_BENCHMARKS.md`](LANGUAGE_BENCHMARKS.md) quotes each of these
+in full.
 
 | Database | ADBC ingest | odbc-api ingest | Ingest × | ADBC fetch | odbc-api fetch | arrow-odbc fetch | Fetch × |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -68,10 +86,10 @@ throughput to compare against the ADBC column.
 | cratedb (PostgreSQL) | — | — | — | — | — | — | — |
 | spanner (PostgreSQL) | — | — | — | — | — | — | — |
 | monetdb (monetdb) | 110,307 | — | — | 1,418,697 | — | — | — |
-| duckdb (DuckDB) | 307,568 | — | — | — | — | — | — |
 | ignite (Apache Ignite) | — | — | — | — | — | — | — |
 | oracle (Oracle) | 30,547 | 1,853 | 16.5× | 103,686 | 136,334 | 145,299 | 0.8× |
 | mongodbbi (MySQL) | — | — | — | — | — | — | — |
 | flightsql (sqlflite) | — | — | — | — | — | — | — |
 | dremio (Dremio Server) | — | — | — | — | — | — | — |
 | columnstore (MariaDB) | 54,005 | 471,175 | 0.1× | 1,098,912 | 1,412,067 | 1,126,513 | 0.8× |
+| duckdb (DuckDB) | 336,638 | — | — | — | — | — | — |
