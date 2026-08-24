@@ -74,16 +74,34 @@ def run(cmd, **kw):
     return proc
 
 
-def child_env(manifest_dir=None, xdg_config_home=None):
-    """A clean environment: only the manifest location under test is visible."""
+# Where the ADBC driver manager looks for a *user* manifest, relative to the
+# directory the test controls: $XDG_CONFIG_HOME/adbc/drivers on Linux, but
+# ~/Library/Application Support/ADBC/Drivers on macOS -- the manager does not
+# read XDG_CONFIG_HOME there, so the test has to move HOME instead.
+DARWIN = sys.platform == "darwin"
+USER_MANIFEST_SUBDIR = (
+    pathlib.Path("Library/Application Support/ADBC/Drivers") if DARWIN
+    else pathlib.Path("adbc/drivers")
+)
+
+
+def child_env(manifest_dir=None, user_config_root=None):
+    """A clean environment: only the manifest location under test is visible.
+
+    `user_config_root` is the directory that stands in for XDG_CONFIG_HOME (Linux)
+    or HOME (macOS); USER_MANIFEST_SUBDIR below it is where the manifest goes.
+    """
     env = dict(os.environ)
     # Never let an ambient manifest location leak into the child.
     env.pop("ADBC_DRIVER_PATH", None)
     env.pop("XDG_CONFIG_HOME", None)
     if manifest_dir is not None:
         env["ADBC_DRIVER_PATH"] = str(manifest_dir)
-    if xdg_config_home is not None:
-        env["XDG_CONFIG_HOME"] = str(xdg_config_home)
+    if user_config_root is not None:
+        if DARWIN:
+            env["HOME"] = str(user_config_root)
+        else:
+            env["XDG_CONFIG_HOME"] = str(user_config_root)
     return env
 
 
@@ -180,8 +198,8 @@ def test_install_prefix_flow(tmp, build):
 def test_install_sh_flow(tmp):
     """install.sh, found via the user config dir with an empty environment."""
     prefix = tmp / "prefix-b"
-    xdg = tmp / "xdg"
-    manifest_dir = xdg / "adbc/drivers"
+    xdg = tmp / "xdg"  # stands in for XDG_CONFIG_HOME, or for HOME on macOS
+    manifest_dir = xdg / USER_MANIFEST_SUBDIR
 
     env = dict(os.environ)
     env.update(
@@ -197,9 +215,9 @@ def test_install_sh_flow(tmp):
     assert lib.is_file(), f"manifest points at missing library {lib}"
     assert prefix in lib.parents, f"{lib} is not inside {prefix}"
 
-    # Nothing set but XDG_CONFIG_HOME: the driver manager must find the
-    # manifest on its own. This is the "plug and play" claim.
-    proc = connect_by_name(tmp / "b.db", child_env(xdg_config_home=xdg))
+    # Nothing set but XDG_CONFIG_HOME (HOME on macOS): the driver manager must
+    # find the manifest on its own. This is the "plug and play" claim.
+    proc = connect_by_name(tmp / "b.db", child_env(user_config_root=xdg))
     assert proc.returncode == 0, (
         f"connect via user config dir failed:\n{proc.stdout}{proc.stderr}"
     )
@@ -209,8 +227,8 @@ def test_install_sh_flow(tmp):
     # a manifest installed elsewhere on the machine could be what actually
     # answered above.
     empty = tmp / "xdg-empty"
-    (empty / "adbc/drivers").mkdir(parents=True)
-    proc = connect_by_name(tmp / "c.db", child_env(xdg_config_home=empty))
+    (empty / USER_MANIFEST_SUBDIR).mkdir(parents=True)
+    proc = connect_by_name(tmp / "c.db", child_env(user_config_root=empty))
     assert proc.returncode != 0, (
         "control failed: connecting by name succeeded with no manifest "
         f"installed, so the test above proves nothing:\n{proc.stdout}"

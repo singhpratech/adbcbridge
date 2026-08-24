@@ -1710,6 +1710,15 @@ with the same harness: 0.593x, slower still, with the native side itself driftin
 "parity" row above is the best of a range whose low end is 0.73x, and that is the
 number to plan around.
 
+The same afternoon the first non-Linux run came in (`bench/BENCHMARKS-macos.md`): an
+Apple M4 Max, 16 cores, PostgreSQL 15 on the same machine, psqlodbc 18 built from source,
+host not idle. There the native driver reads 1 M rows in **0.19 s (6.4 M rows/s)** and the
+bridge at eight partitions takes 0.314 s -- **0.60x**, both checksums correct; ingest 0.50x.
+That is the other half of the honest statement: the partitioned read beats the native
+driver on one Linux box where libpq's single stream tops out around 4 M rows/s, and does
+not on a machine where that stream runs at 6.4 M rows/s. **The claim is "1.2-1.5x on the
+Linux reference host, quiet"; it is not "faster than native".**
+
 Fetch clears the bar at both sizes, but 1 M is now a narrow pass rather than a
 comfortable one: the fixed per-read costs the partitions cannot divide (eight
 connections, eight plans) are a large share of a 0.19 s read and a small one of a 1.24 s

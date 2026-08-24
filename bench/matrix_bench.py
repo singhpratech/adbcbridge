@@ -359,6 +359,26 @@ for name in ([] if args.render else (args.dbs or list(m.DBS))):
             print("            %s: %s" % (k, r[k]["error"]))
 
 out = HERE / "MATRIX_BENCHMARKS.md"
+# A run names a few databases and the cache holds only what this checkout has run,
+# so the rows for every other database come from the file as it stands: a subset
+# run *merges* into the table rather than replacing it with its own rows.
+previous_rows, previous_notes, previous_tail = {}, {}, []
+if out.exists():
+    in_table = False
+    for line in out.read_text().splitlines():
+        if line.startswith("| Database"):
+            in_table = True
+        elif line.startswith("| ") and in_table and not line.startswith("|---"):
+            previous_rows[line[2:].split(" ", 1)[0]] = line
+        elif line.startswith("* **"):
+            previous_notes.setdefault(line[4:].split("**", 1)[0], []).append(line)
+        elif in_table and line.strip() and line.strip() != "Failures:" and not line.startswith("|"):
+            # Prose written by hand under the table (run caveats): keep it.
+            previous_tail.append(line)
+for name in list(previous_rows):
+    if name in results:
+        del previous_rows[name]
+        previous_notes.pop(name, None)
 lines = [
     "<!-- SPDX-License-Identifier: Apache-2.0 -->",
     "# Per-database benchmarks",
@@ -395,7 +415,13 @@ for name, r in results.items():
     for k in ("ingest", "ingest_array", "ingest_pyodbc", "fetch", "fetch_pyodbc"):
         if isinstance(r.get(k), dict) and "error" in r[k]:
             notes.append("* **%s** %s: %s" % (name, k, r[k]["error"]))
+# Rows the cache does not cover, in the order the file had them.
+lines += list(previous_rows.values())
+for kept in previous_notes.values():
+    notes += kept
 if notes:
     lines += ["", "Failures:", ""] + notes
+if previous_tail:
+    lines += [""] + previous_tail
 out.write_text("\n".join(lines) + "\n")
 print("wrote", out)

@@ -73,7 +73,7 @@ ODBC_DRIVER = os.environ.get(
 PSQLODBC = os.environ.get("POSTGRES_ODBC_DRIVER", "PostgreSQL Unicode")
 SQLITEODBC = os.environ.get("SQLITE_ODBC_DRIVER", "SQLite3")
 
-DEFAULT_PG = os.environ.get("PG_URI", "postgresql://adbc:adbc@127.0.0.1:15482/adbc")
+DEFAULT_PG = os.environ.get("PG_URI", "postgresql://adbc:adbc@127.0.0.1:15432/adbc")
 
 # The PostgreSQL-wire servers this script can drive.  All three are read by psqlodbc on
 # the adbcbridge side and by adbc_driver_postgresql on the native side, so they are the

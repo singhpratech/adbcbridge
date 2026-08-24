@@ -147,11 +147,29 @@ static void OdbcExplainLoadFailure(struct InternalAdbcStringBuilder* sb, const c
   }
   const char* err = dlerror();
   if (!err) err = "(no reason given)";
+  // macOS's dyld lists every path it tried -- the file itself, then a
+  // /System/Volumes/Preboot/Cryptexes mirror, then the file again -- each with
+  // its own reason, and the list can outrun the 1 KiB the error message holds.
+  // The first entry is the file the caller named and carries the reason that
+  // matters ("incompatible architecture", "slice is not valid mach-o file"), so
+  // keep that entry and drop the rest of the list.
+  char* trimmed = NULL;
+  const char* tail = strstr(err, "), '");
+  if (tail) {
+    size_t keep = (size_t)(tail - err) + 1;  // through the closing parenthesis
+    trimmed = malloc(keep + 1);
+    if (trimmed) {
+      memcpy(trimmed, err, keep);
+      trimmed[keep] = '\0';
+      err = trimmed;
+    }
+  }
   InternalAdbcStringBuilderAppend(
       sb,
       "\n  [adbcbridge] the file is there and readable -- the driver manager says \"file not "
       "found\" for any load failure.  dlopen(): %s",
       err);
+  free(trimmed);
   if (strstr(err, "static TLS")) {
     InternalAdbcStringBuilderAppend(
         sb,

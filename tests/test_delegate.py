@@ -27,6 +27,7 @@ driver package) are missing.
 import os
 import pathlib
 import shutil
+import sys
 import statistics
 import tempfile
 import time
@@ -40,8 +41,10 @@ except ImportError:  # running as a plain script
     pytest = None
 
 HERE = pathlib.Path(__file__).resolve().parent
+# The shared-library suffix the build produced on this platform.
+SO = {"darwin": ".dylib", "win32": ".dll"}.get(sys.platform, ".so")
 DRIVER = os.environ.get(
-    "ADBC_ODBC_DRIVER", str(HERE.parent / "build" / "libadbc_driver_odbc.so")
+    "ADBC_ODBC_DRIVER", str(HERE.parent / "build" / ("libadbc_driver_odbc" + SO))
 )
 PG_URI = os.environ.get("PG_URI", "postgresql://adbc:adbc@127.0.0.1:15432/adbc")
 ROWS = int(os.environ.get("DELEGATE_ROWS", "1000000"))
@@ -80,7 +83,7 @@ def delegated_to(conn):
 
 FAKE_NATIVE = os.environ.get(
     "ADBC_FAKE_NATIVE_DRIVER",
-    str(HERE.parent / "build" / "libadbc_fake_native_driver.so"),
+    str(HERE.parent / "build" / ("libadbc_fake_native_driver" + SO)),
 )
 
 
@@ -92,7 +95,7 @@ def fake_native(family):
     """
     if not os.path.exists(FAKE_NATIVE):
         skip(f"{FAKE_NATIVE} is not built (cmake --build build)")
-    path = os.path.join(tempfile.mkdtemp(), f"libadbc_driver_fake_{family}.so")
+    path = os.path.join(tempfile.mkdtemp(), f"libadbc_driver_fake_{family}{SO}")
     shutil.copy(FAKE_NATIVE, path)
     return path
 

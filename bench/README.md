@@ -10,7 +10,7 @@ says nothing about Windows.
 |---|---|---|
 | Linux (Ubuntu 24.04, unixODBC 2.3.12) | [`BENCHMARKS.md`](BENCHMARKS.md) — PostgreSQL vs native, the write path, partitioned reads; [`MATRIX_BENCHMARKS.md`](MATRIX_BENCHMARKS.md) — 46 databases; [`LANGUAGE_BENCHMARKS.md`](LANGUAGE_BENCHMARKS.md) — five languages × 46; [`RUST_BENCHMARKS.md`](RUST_BENCHMARKS.md) | **measured** |
 | Windows (x64, the OS's own driver manager) | [`BENCHMARKS-windows.md`](BENCHMARKS-windows.md) | **builds in CI; not yet run by a person** |
-| macOS (Apple Silicon, unixODBC from Homebrew) | [`BENCHMARKS-macos.md`](BENCHMARKS-macos.md) | **builds in CI; not yet run by a person** |
+| macOS (Apple M4 Max, arm64, unixODBC 2.3.12) | [`BENCHMARKS-macos.md`](BENCHMARKS-macos.md) — SQLite, PostgreSQL 15, SQL Server 2022 | **measured, one machine** (PostgreSQL vs native there: 0.60x fetch, 0.50x ingest -- indicative, not the reference) |
 
 The two unmeasured files carry the exact commands to produce their tables, so
 that the first run on each OS is a matter of pasting output. A file that says
