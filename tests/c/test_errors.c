@@ -88,7 +88,7 @@ static void TestOverlongMessage(void) {
   // wrote are reported: never the untruncated length it claimed.
   g_fake_refetch_fails = true;
   g_fake_calls = 0;
-  error = (struct AdbcError)ADBC_ERROR_INIT;
+  error = ADBC_ERROR_INIT;
   status = OdbcSetError(SQL_HANDLE_STMT, (SQLHANDLE)&error, "SQLExecDirect", &error);
   CHECK_I64(status, ADBC_STATUS_INVALID_ARGUMENT);
   CHECK_TRUE(g_fake_calls >= 2);
@@ -127,7 +127,7 @@ static void TestSqlStateMapping(void) {
 
   g_fake_sqlstate = "42S02";
   g_fake_message = "no such table: nope";
-  error = (struct AdbcError)ADBC_ERROR_INIT;
+  error = ADBC_ERROR_INIT;
   CHECK_I64(OdbcSetError(SQL_HANDLE_STMT, (SQLHANDLE)&error, "SQLExecDirect", &error),
             ADBC_STATUS_NOT_FOUND);
   if (error.release) error.release(&error);

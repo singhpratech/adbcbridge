@@ -114,7 +114,18 @@ create-twice → ProgrammingError, GetObjects (catalogs/tables/columns/PK+FK con
   `install.sh` needs `cmake` on PATH and, on a non-Homebrew unixODBC, `CMAKE_PREFIX_PATH` in the
   environment — it has no flag for that.
 
-### Bonus: other Python tests
+#### Loop closed at `77e8fd8` (same machine, rebuilt clean, 0 warnings)
+
+* `tests/test_plug_and_play.py` → `PLUG AND PLAY OK`, both flows, negative control and idempotence
+  included; nothing left behind in the real `~/.local/lib` or `~/Library/Application Support`.
+* `python -m pytest tests/test_delegate.py -q` (SQLite + a fresh PG 15 cluster + psqlodbc) →
+  **27 passed, 3 skipped** (was 8 / 22); the skips are `adbc_driver_sqlite` not installed ×2 and
+  no `MARIADB_ODBC_DRIVER`.
+* x86_64-only dylib through `dlopen()` → the explanation is now 818 bytes and ends exactly after the
+  first reason (`... (have 'x86_64', need 'arm64e' or 'arm64e.v1' or 'arm64' or 'arm64')). SQLSTATE: 01000`);
+  no Cryptexes tail, no truncation.
+
+## Bonus: other Python tests
 
 | test | result |
 |---|---|

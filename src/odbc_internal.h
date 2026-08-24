@@ -21,6 +21,15 @@
 #include <stdint.h>
 #include <string.h>
 
+// The Windows SDK's sqltypes.h is written against windows.h (SQLLEN is INT64,
+// SQLHWND is HWND) and does not include it itself; unixODBC and iODBC are
+// self-contained, which is why only the Windows build ever noticed.
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 

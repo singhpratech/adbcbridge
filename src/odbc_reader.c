@@ -28,6 +28,21 @@
 #define ADBC_ODBC_HAVE_PREFETCH 1
 #endif
 
+#if defined(_WIN32)
+// strndup is POSIX and absent from the MSVC CRT.  Without a declaration the call
+// would still compile under C's implicit-int rule and truncate the pointer, so
+// give Windows a real one.
+static char* strndup(const char* s, size_t n) {
+  size_t len = 0;
+  while (len < n && s[len]) len++;
+  char* out = malloc(len + 1);
+  if (!out) return NULL;
+  memcpy(out, s, len);
+  out[len] = '\0';
+  return out;
+}
+#endif
+
 #include "odbc_internal.h"
 
 // ---------------------------------------------------------------------------

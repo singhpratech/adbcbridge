@@ -1836,6 +1836,11 @@ static AdbcStatusCode OdbcStatementSetOption(struct AdbcStatement* statement, co
       return ADBC_STATUS_INVALID_ARGUMENT;
     }
     stmt->ingest_connections = (int64_t)v;
+#if defined(_WIN32)
+    // The worker pool is compiled out on Windows (odbc_bind.c); the option is accepted
+    // so callers need no platform branch, and GetOption reports the 1 it really gets.
+    stmt->ingest_connections = 1;
+#endif
     return ADBC_STATUS_OK;
   } else if (strcmp(key, ADBC_ODBC_OPTION_ARRAY_BINDING) == 0) {
     if (strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) {  // "true"

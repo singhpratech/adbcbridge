@@ -2071,7 +2071,7 @@ AdbcStatusCode OdbcDelegateTryInit(struct AdbcDatabase* database,
       // libpq URI the credentials belong in it; for a file-backed database they
       // mean nothing at all, and quietly dropping them is not an option.
       if (ne.release) ne.release(&ne);
-      ne = (struct AdbcError)ADBC_ERROR_INIT;
+      ne = ADBC_ERROR_INIT;
       if (target_info.family == FAMILY_POSTGRESQL) {
         struct KeyValueList creds = {0};
         if (target->username) KvAdd(&creds, "user", target->username);

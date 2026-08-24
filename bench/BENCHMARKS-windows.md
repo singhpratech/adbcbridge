@@ -1,9 +1,21 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks — Windows
 
-**Status: the driver builds on `windows-latest` in CI (`.github/workflows/ci.yml`);
-nothing in this file has been measured yet.** The tables below are empty on purpose.
-Fill them from a real machine and replace this paragraph with the host description.
+**Status: not yet measured — and, until 2026-08-24, not even built.** The `windows-latest`
+CI job had failed on every run since it was added; the first person to build on Windows
+found four MSVC-only defects (the Windows SDK's `sqltypes.h` needs `windows.h` first;
+`strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT` that only GCC and
+Clang tolerate; and `odbc_bind.c` using pthreads without the `_WIN32` guard the other
+files carry). All four are fixed on main. Two things the Windows build does *not* have,
+which every number in this file must be read against: the prefetch pipeline
+(`ADBC_ODBC_HAVE_PREFETCH`, compiled out on `_WIN32`) and the parallel-ingest worker pool
+(`adbc.odbc.ingest_connections` is clamped to 1). So `native_threshold.py` on Windows
+measures a materially different code path from the Linux rows, and a partitioned read on
+a 4-core laptop is not a comparison at all. A Win32 port of both (SRWLOCK +
+CONDITION_VARIABLE + `_beginthreadex`) is the first Windows roadmap item.
+
+The tables below are empty on purpose. Fill them from a real machine and replace this
+paragraph with the host description.
 
 ## Host
 

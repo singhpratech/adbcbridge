@@ -17,7 +17,9 @@
 // Parameter binding (Arrow -> SQLBindParameter) and bulk ingest.
 
 #include <errno.h>
+#if !defined(_WIN32)
 #include <pthread.h>
+#endif
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
@@ -3214,6 +3216,12 @@ static AdbcStatusCode ExecSimple(struct OdbcConnection* conn, const char* sql, b
 // already reached the end of the queue has already committed, and those rows stay.  The
 // caller gets an error and a table holding an unspecified subset of the stream.
 
+// The parallel machinery is pthreads and is compiled out on Windows -- the same
+// choice ADBC_ODBC_HAVE_PREFETCH makes in odbc_reader.c -- so a Windows build ingests
+// on one connection (adbc.odbc.ingest_connections is clamped to 1 there).  A Win32
+// port of the queue and worker pool (SRWLOCK, CONDITION_VARIABLE, _beginthreadex)
+// is the roadmap item that lifts both limits at once.
+#if !defined(_WIN32)
 // A batch handed out in pieces: the slices share the original array's buffers, and the
 // last slice released frees the original.
 struct BatchOwner {
@@ -3724,6 +3732,7 @@ static AdbcStatusCode IngestParallel(struct OdbcStatement* stmt, int64_t nconn,
   if (rows_affected) *rows_affected = total;
   return ADBC_STATUS_OK;
 }
+#endif  // !_WIN32
 
 AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_affected,
                                    struct AdbcError* error) {
@@ -3865,10 +3874,16 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
   // actually visible to another connection.  Inside the caller's own transaction it is
   // not -- the CREATE TABLE is uncommitted -- so fall back to the one-connection path,
   // which is correct, atomic, and merely slower.
+#if defined(_WIN32)
+  const bool fan_out = false;  // no worker pool on Windows; see above
+  AdbcStatusCode ingest_status = OdbcStatementExecuteBound(stmt, NULL, rows_affected, error);
+  (void)fan_out;
+#else
   const bool fan_out = stmt->ingest_connections > 1 && conn->autocommit && conn->db;
   AdbcStatusCode ingest_status =
       fan_out ? IngestParallel(stmt, stmt->ingest_connections, rows_affected, error)
               : OdbcStatementExecuteBound(stmt, NULL, rows_affected, error);
+#endif
   // The multi-row rewrite is scoped to this one ingest: a later ExecuteQuery on the same
   // statement must never see it.
   free(stmt->ingest_into);
