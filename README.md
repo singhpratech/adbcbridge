@@ -590,6 +590,25 @@ unavailable on Windows for the same reason: it picks the ODBC driver to fall
 back to by enumerating `odbcinst.ini`, which is not implemented there either, so
 a native URI on the ODBC path is refused with an explanation instead.
 
+## Language packages
+
+One driver library, five packages that find and load it. All five are built and tested
+in this repository; none is on a public registry yet (the release workflow produces
+them, publication is a maintainer step).
+
+| Language | Package | What it gives you | Where |
+|---|---|---|---|
+| Python | `adbcbridge` wheel, `py3-none-<platform>` with the library bundled | `adbcbridge.connect(uri=...)` → `adbc_driver_manager.dbapi` connection; `adbcbridge` CLI | [`python/`](python/README.md) |
+| Rust | `adbcbridge` crate; the default `bundled` feature compiles the driver from the sources carried in the crate | `adbcbridge::load()?` → `ManagedDriver` | [`rust/`](rust/README.md) |
+| C# | `AdbcBridge` NuGet (netstandard2.0, net8.0) with `runtimes/<rid>/native/` assets | `Driver.Load()`, `Driver.Connect(connectionString)` | [`csharp/`](csharp/README.md) |
+| Java | `org.adbcbridge:adbcbridge` over `adbc-driver-jni`, natives inside the jar | `AdbcBridge.driver(allocator)`, `AdbcBridge.open(...)` | [`java/`](java/README.md) |
+| Go | `github.com/singhpratech/adbcbridge/go` over `drivermgr` (cgo) | `adbcbridge.NewDriver(alloc)`, `adbcbridge.Open(...)` | [`go/`](go/README.md) |
+
+Each package resolves the library the same way: an explicit `ADBCBRIDGE_LIBRARY` /
+`ADBC_ODBC_DRIVER`, a copy shipped inside the package, the ADBC driver manifest named
+`odbc`, the usual install directories, then a `build/` tree next to a checkout — and each
+raises an error that lists every place it looked.
+
 ## Python package
 
 `python/` holds a thin pip-installable wrapper, `adbcbridge`, that locates the
@@ -651,6 +670,8 @@ python -m build --wheel python     # picks up ./build/libadbc_driver_odbc.so
 Details and the package-only README: [`python/README.md`](python/README.md).
 
 ## Use from Rust
+
+The `rust/` crate (`adbcbridge`) builds the driver from source and loads it for you: `adbcbridge::load()?` replaces the `load_dynamic_from_filename` call below; see [`rust/README.md`](rust/README.md).
 
 ```toml
 # Cargo.toml

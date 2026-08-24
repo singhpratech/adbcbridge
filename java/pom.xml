@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright 2026 the adbcbridge authors
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+
+  SPDX-License-Identifier: Apache-2.0
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>org.adbcbridge</groupId>
+  <artifactId>adbcbridge</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <name>adbcbridge</name>
+  <description>
+    Arrow ADBC over any ODBC driver: locates libadbc_driver_odbc and wires it into
+    the ADBC driver manager (adbc-driver-jni) so Java code gets Arrow batches from
+    every database with an ODBC driver.
+  </description>
+  <url>https://github.com/singhpratech/adbcbridge</url>
+  <inceptionYear>2026</inceptionYear>
+
+  <licenses>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>adbcbridge</id>
+      <name>The adbcbridge authors</name>
+      <url>https://github.com/singhpratech/adbcbridge</url>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/singhpratech/adbcbridge.git</connection>
+    <developerConnection>scm:git:https://github.com/singhpratech/adbcbridge.git</developerConnection>
+    <url>https://github.com/singhpratech/adbcbridge</url>
+    <tag>HEAD</tag>
+  </scm>
+
+  <issueManagement>
+    <system>GitHub</system>
+    <url>https://github.com/singhpratech/adbcbridge/issues</url>
+  </issueManagement>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    <!-- adbc-driver-jni 0.24.0 and Arrow 19 are built for Java 11; so is this library. -->
+    <maven.compiler.release>11</maven.compiler.release>
+    <!-- adbc-driver-jni bundles the native ADBC driver manager for linux/macos/windows. -->
+    <adbc.version>0.24.0</adbc.version>
+    <!-- Must match the Arrow version ADBC ${adbc.version} was built against. -->
+    <arrow.version>19.0.0</arrow.version>
+    <junit.version>5.11.4</junit.version>
+    <!--
+      Directory of native drivers to bundle, laid out as <os>-<arch>/libadbc_driver_odbc.*
+      (linux-x86_64, linux-aarch64, macos-aarch64, windows-x86_64). Override with
+      -Dadbcbridge.natives=<dir>. When the directory does not exist the jar is pure Java and
+      AdbcBridge.driverPath() finds the driver on the machine instead.
+    -->
+    <adbcbridge.natives>${project.basedir}/natives</adbcbridge.natives>
+    <!-- The flag Arrow's off-heap allocator needs on JDK 17+; surefire passes it to the tests. -->
+    <arrow.add-opens>--add-opens=java.base/java.nio=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true</arrow.add-opens>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.arrow.adbc</groupId>
+      <artifactId>adbc-core</artifactId>
+      <version>${adbc.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.arrow.adbc</groupId>
+      <artifactId>adbc-driver-jni</artifactId>
+      <version>${adbc.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.arrow</groupId>
+      <artifactId>arrow-memory-core</artifactId>
+      <version>${arrow.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.arrow</groupId>
+      <artifactId>arrow-vector</artifactId>
+      <version>${arrow.version}</version>
+    </dependency>
+    <!--
+      RootAllocator needs an allocation backend at run time. Netty is the usual one; exclude it
+      and add arrow-memory-unsafe instead if you prefer that.
+    -->
+    <dependency>
+      <groupId>org.apache.arrow</groupId>
+      <artifactId>arrow-memory-netty</artifactId>
+      <version>${arrow.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- Native drivers, if a directory of them was given; see adbcbridge.natives above. -->
+      <resource>
+        <directory>${adbcbridge.natives}</directory>
+        <targetPath>org/adbcbridge/native</targetPath>
+        <filtering>false</filtering>
+        <includes>
+          <include>*/libadbc_driver_odbc.so</include>
+          <include>*/libadbc_driver_odbc.dylib</include>
+          <include>*/adbc_driver_odbc.dll</include>
+          <include>*/libadbc_driver_odbc.dll</include>
+        </includes>
+      </resource>
+      <!-- The repository's LICENSE and NOTICE ride along in META-INF when building from a checkout. -->
+      <resource>
+        <directory>${project.basedir}/..</directory>
+        <targetPath>META-INF</targetPath>
+        <includes>
+          <include>LICENSE</include>
+          <include>NOTICE</include>
+        </includes>
+      </resource>
+    </resources>
+
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <compilerArgs>
+            <arg>-Xlint:all</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-resources-plugin</artifactId>
+        <version>3.3.1</version>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.1</version>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <Automatic-Module-Name>org.adbcbridge</Automatic-Module-Name>
+              <Implementation-Title>${project.name}</Implementation-Title>
+              <Implementation-Version>${project.version}</Implementation-Version>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <argLine>${arrow.add-opens}</argLine>
+          <trimStackTrace>false</trimStackTrace>
+        </configuration>
+      </plugin>
+
+      <!-- Sources and javadoc jars: Maven Central requires both. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-source-plugin</artifactId>
+        <version>3.3.1</version>
+        <configuration>
+          <!-- Bundled native drivers belong in the main jar only. -->
+          <excludeResources>true</excludeResources>
+        </configuration>
+        <executions>
+          <execution>
+            <id>attach-sources</id>
+            <goals>
+              <goal>jar-no-fork</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>3.11.2</version>
+        <configuration>
+          <doclint>all,-missing</doclint>
+          <quiet>true</quiet>
+          <!-- No cross-links to remote API docs: the build must not need the network. -->
+          <detectJavaApiLink>false</detectJavaApiLink>
+        </configuration>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <!--
+      Signing and publishing to Maven Central. Inert unless activated with -Prelease, and even
+      then only useful with a GPG key on the machine and a <server id="central"> with a
+      Central Portal token in settings.xml:
+
+        mvn -Prelease deploy
+
+      Set gpg.keyname / gpg.passphrase on the command line or in settings.xml as usual.
+    -->
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.7</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+                <configuration>
+                  <gpgArguments>
+                    <arg>--pinentry-mode</arg>
+                    <arg>loopback</arg>
+                  </gpgArguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.7.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>false</autoPublish>
+              <waitUntil>validated</waitUntil>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>

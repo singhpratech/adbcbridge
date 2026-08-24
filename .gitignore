@@ -10,9 +10,12 @@ dist/
 private/
 *.egg-info/
 tests/java/target/
+java/target/
+java/natives/
 bench/.matrix_bench.json
 build-*/
 bench/rust/target/
+rust/target/
 bench/java/target/
 bench/csharp/bin/
 bench/csharp/obj/
@@ -20,3 +23,5 @@ bench/go/bench_go
 go/internal/native/*/*.so
 go/internal/native/*/*.dylib
 go/internal/native/*/*.dll
+csharp/**/bin/
+csharp/**/obj/

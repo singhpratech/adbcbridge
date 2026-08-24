@@ -184,9 +184,87 @@ jobs:
           path: sdist/*.tar.gz
           retention-days: 7
 
+  crate:
+    name: Rust crate (cargo package)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y unixodbc-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify the bundled sources are in sync, then package
+        working-directory: rust
+        run: |
+          cargo test --release
+          cargo package --allow-dirty
+          ls -l target/package/*.crate
+      - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
+        with:
+          name: crate
+          path: rust/target/package/*.crate
+          retention-days: 7
+
+  nuget:
+    name: NuGet package with native assets
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: artifacts
+          merge-multiple: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Pack
+        run: |
+          ls -R artifacts | head -20
+          dotnet pack csharp/AdbcBridge -c Release -p:NativeRoot=$PWD/artifacts -o nupkg
+          unzip -l nupkg/*.nupkg | grep runtimes/
+      - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
+        with:
+          name: nuget
+          path: nupkg/*.nupkg
+          retention-days: 7
+
+  maven:
+    name: Maven jar with natives
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: artifacts
+          merge-multiple: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Lay out natives as <os>-<arch> and package
+        run: |
+          mkdir -p natives
+          [ -d artifacts/linux-x64 ]   && cp -r artifacts/linux-x64   natives/linux-x86_64
+          [ -d artifacts/linux-arm64 ] && cp -r artifacts/linux-arm64 natives/linux-aarch64
+          [ -d artifacts/osx-arm64 ]   && cp -r artifacts/osx-arm64   natives/macos-aarch64
+          [ -d artifacts/win-x64 ]     && cp -r artifacts/win-x64     natives/windows-x86_64
+          mvn -q -B -f java/pom.xml package -DskipTests -Dadbcbridge.natives=$PWD/natives
+          unzip -l java/target/adbcbridge-*[0-9].jar | grep native/
+      - uses: actions/upload-artifact@v4
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
+        with:
+          name: maven
+          path: java/target/adbcbridge-*.jar
+          retention-days: 7
+
   release:
     name: GitHub Release
-    needs: [linux, macos, windows, sdist]
+    needs: [linux, macos, windows, sdist, crate, nuget, maven]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -199,6 +277,7 @@ jobs:
         run: |
           mkdir -p assets
           cp artifacts/wheel-*/*.whl artifacts/sdist/*.tar.gz assets/
+          cp artifacts/crate/*.crate artifacts/nuget/*.nupkg artifacts/maven/*.jar assets/
           for d in artifacts/native-*/*/; do
             rid=$(basename "$d"); (cd "$d" && tar czf "$OLDPWD/assets/adbcbridge-${GITHUB_REF_NAME}-$rid.tar.gz" .)
           done
