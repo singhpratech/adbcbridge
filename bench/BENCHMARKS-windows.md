@@ -41,7 +41,7 @@ compat mysql     PASS  (MySQL (via ODBC) 8.4.9)
 ## The Windows column, in two phases
 
 **Phase 1 — native installs, five pass:** SQLite, DuckDB, SQL Server 2025, PostgreSQL 16,
-MySQL 8.4. Blocked there: MariaDB (its Connector/ODBC MSI is a browser-only download),
+MySQL 8.4. Blocked there: MariaDB (its Connector/ODBC MSI is a browser-only download — retired in phase 2: MySQL's connector drives MariaDB 12.3 with `NO_SSPS=1`),
 Firebird (its security database needs an administrator to bootstrap), Access (32-bit ACE
 drivers only, recorded above).
 
@@ -68,6 +68,35 @@ Single samples, no prefetch, no fan-out. The five-language rows are in
 [`LANGUAGE_BENCHMARKS-windows.md`](LANGUAGE_BENCHMARKS-windows.md); Rust's odbc-api
 ingest is where the multi-row batching shows most on this tier — 7.4× on CockroachDB,
 19.7× on TimescaleDB, 141.6× on CrateDB (57 rows/s row by row) — with fetch within 10%.
+
+### Tier 3, batch 2 — main @ ffecd7a (ctest 7/7, zero warnings)
+
+| entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
+|---|---|---:|---:|---:|---:|
+| questdb | PASS (`PostgreSQL (via ODBC) 11.3.0`), psqlodbc 18, 344 MB | 87,206 | 97,229 | 31,219 (28,482) | 1,455 |
+| tidb | PASS (`MySQL (via ODBC) 8.0.11-TiDB-v7.5.1`), Connector/ODBC 8.4.0 + `NO_SSPS=1` | 328,749 | 207,015 | 35,704 (32,783) | 750 |
+| mariadb | PASS (`MySQL (via ODBC) 12.3.3-MariaDB`), native MariaDB 12.3.3 service through MySQL Connector/ODBC 8.4.0 + `NO_SSPS=1` | 410,497 | 199,643 | 56,855 (60,345) | 5,152 |
+| dolt | PASS (`MySQL (via ODBC) 8.0.33`), Connector/ODBC 8.4.0 + `NO_SSPS=1` | 351,950 | 205,135 | 28,722 (33,281) | 538 |
+
+**Finding — MySQL Connector/ODBC 8.4.0 on Windows needs `NO_SSPS=1` against every
+non-MySQL server.** Without it TiDB and MariaDB fail identically at the first bound
+parameter, `[HY000] (2031) No data supplied for parameters in prepared statement`, in
+pyodbc as well — the driver/server pair, not the bridge. Against MySQL 8.4 itself and
+Percona the default works. Linux runs Connector/ODBC 9.4, which needs no such setting for
+these servers, and 9.x is not published for Windows (every 9.x URL 404s), so on Windows
+the MySQL-wire entries other than MySQL and Percona carry `NO_SSPS=1` in their connection
+string. The same finding retires the MariaDB blocker: MariaDB's own connector was never
+needed. The `dolt` entry's hard-coded `PLUGIN_DIR={drvdir}/plugin` expanded to `/plugin`
+on Windows, where the driver is a registered name rather than a path; the entry now uses
+the conditional `{plugin_dir}` like the others, and the packaged MSI's compiled-in plugin
+directory is correct as it is.
+
+QuestDB's `ADBC_BENCH_AUTOCOMMIT=1` rule holds on Windows exactly as on Linux and macOS
+(0 rows in all four languages without it). Some native-client rows were stopped rather
+than left to run: `odbc-api` (Rust) and `System.Data.Odbc` (C#) ingest row by row at tens
+of rows/s on CrateDB and Dolt, so 10,000 rows exceeds a 10-minute window (C# on CrateDB
+was still going after 30); the language file marks them `stopped`. Java on Dolt hung on
+the ADBC-only path for over 10 minutes and was killed — recorded as `hung`, unexplained.
 
 **A Windows-only environment fact, found by CrateDB:** Windows has no system time-zone
 database, so pyarrow's timestamp-with-timezone conversion raises `ArrowInvalid: The

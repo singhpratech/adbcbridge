@@ -305,7 +305,7 @@ DBS = {
         # Dolt only implements mysql_native_password, whose client-side plugin Connector/ODBC
         # 9.x no longer links in; it ships as a separate .so next to the driver library, and
         # PLUGIN_DIR is how libmysqlclient is pointed at it.
-        conn="Driver={drv};Server=127.0.0.1;Port=13310;Database=adbc;User=root;PLUGIN_DIR={drvdir}/plugin;",
+        conn="Driver={drv};Server=127.0.0.1;Port=13310;Database=adbc;User=root;{plugin_dir}",
         ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
     "databend": dict(
@@ -1545,15 +1545,6 @@ def conn_uri(name, cfg, drv=None):
     keeps those plugins next to the driver, so point PLUGIN_DIR there when that directory
     exists; a packaged install has no such directory and keeps its own -- correct --
     compiled-in default.
-    `{drv}` expands to the driver library and `{drvdir}` to the directory holding it,
-    for the rare connection option that must point at a file shipped beside the driver.
-    `{plugin}` and `{plugin_dir}` (two spellings of the same thing) expand to a
-    `PLUGIN_DIR=` setting for the drivers that need one: MySQL Connector/ODBC loads
-    client-side authentication plugins from the directory it was *built* with
-    cannot load them, and a server still using mysql_native_password (TiDB, Dolt,
-    Databend, MatrixOne) refuses the connection. The tarball keeps those plugins next to
-    the driver, so point PLUGIN_DIR there when that directory exists; a packaged install
-    has no such directory and keeps its own -- correct -- compiled-in default.
     """
     if drv is None:
         drv = os.environ[cfg["env"]]

@@ -3,7 +3,7 @@
 
 The workload of [`LANGUAGE_BENCHMARKS.md`](LANGUAGE_BENCHMARKS.md) run on **Windows 11
 Pro 24H2, Intel Core i7-8550U (4 cores / 8 threads), 7.7 GB RAM, x64**, the OS's own driver
-manager (odbc32.dll), adbcbridge at `a019213` (tier 3 at `b5d2791`), x64 Release — a build with **no prefetch
+manager (odbc32.dll), adbcbridge at `a019213` (tier 3 at `b5d2791` and `ffecd7a`), x64 Release — a build with **no prefetch
 pipeline and no ingest fan-out** (both compiled out on `_WIN32`). Same harnesses, same
 columns: ADBC ingest and fetch (rows/s) through `libadbc_driver_odbc.dll`, then that
 language's own ODBC client (Java's is JDBC — sqlite-jdbc — not ODBC). ROWS=10000,
@@ -58,10 +58,30 @@ progress; this file grows as servers come up. Python's ingest is `matrix_bench.p
 | python | cratedb | 5,633 | 104,449 | 108 | 94,266 |
 | rust | cratedb | 8,105 | 193,169 | 57 | 216,539 |
 | go | cratedb | 9,862 | 59,028 | skipped | skipped |
-| java | cratedb | — | — | — | — |
-| csharp | cratedb | — | — | — | — |
+| java | cratedb | 4,635 | 130,133 | no driver | no driver |
+| csharp | cratedb | stopped | stopped | stopped | stopped |
+| python | questdb | 28,482 | 87,206 | 1,455 | 97,229 |
+| rust | questdb | 30,973 | 210,475 | — | 200,852 |
+| go | questdb | 40,043 | 223,036 | skipped | skipped |
+| java | questdb | 23,096 | 167,649 | no driver | no driver |
+| csharp | questdb | 32,658 | 206,389 | — | 143,983 |
+| python | tidb | 32,783 | 328,749 | 750 | 207,015 |
+| rust | tidb | 31,824 | 285,981 | 811 | 400,567 |
+| go | tidb | 24,113 | 419,858 | skipped | skipped |
+| java | tidb | 18,197 | 389,099 | no driver | no driver |
+| csharp | tidb | 28,022 | 364,744 | 804 | 282,147 |
+| python | mariadb | 60,345 | 410,497 | 5,152 | 199,643 |
+| rust | mariadb | 50,310 | 387,832 | 4,063 | 346,889 |
+| go | mariadb | 49,873 | 322,501 | skipped | skipped |
+| java | mariadb | 32,291 | 172,918 | no driver | no driver |
+| csharp | mariadb | 44,275 | 332,106 | 1,977 | 259,194 |
+| python | dolt | 33,281 | 351,950 | 538 | 205,135 |
+| rust | dolt | stopped | stopped | stopped | stopped |
+| go | dolt | 29,653 | 389,574 | skipped | skipped |
+| java | dolt | hung | hung | no driver | no driver |
+| csharp | dolt | stopped | stopped | stopped | stopped |
 
-The first five databases: 24 of 25 cells; tier 3 (Docker Desktop on WSL2, one container at a time at 1 GB) follows below them — CrateDB's C# and Java rows are still running (its row-at-a-time native ingest is ~60 rows/s, so each exceeds a 10-minute window). Rust's arrow-odbc fetch on tier 3: cockroachdb 198,095, timescaledb 229,103, citus 291,885, cratedb 210,859. The sqlite rows were re-taken with the rest of the grid, so they differ from
+The first five databases: 24 of 25 cells; tier 3 (Docker Desktop on WSL2, one container at a time at 1 GB) follows below them — Rust's arrow-odbc fetch on tier 3: cockroachdb 198,095, timescaledb 229,103, citus 291,885, cratedb 210,859, questdb 211,570, tidb 342,479, mariadb 299,628. `stopped` marks a harness whose *native* row-at-a-time ingest ran at tens of rows/s on CrateDB and Dolt and was stopped after 10 minutes (C# on CrateDB after 30) — the harness prints its row only at the end, so the ADBC numbers for that run are lost with it; `hung` is Java on Dolt, whose ADBC-only run produced nothing in 10 minutes and was killed, unexplained. The sqlite rows were re-taken with the rest of the grid, so they differ from
 the first-day numbers in `BENCHMARKS-windows.md` by the run-to-run variance recorded there.
 Rust's arrow-odbc fetch, not in the table: sqlite 396,258, mssql 896,103, postgres 411,178,
 mysql 489,701. Three words stand for three different kinds of empty native cell — `skipped`
