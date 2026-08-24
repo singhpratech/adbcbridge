@@ -296,4 +296,11 @@ up, to be restored). Load 5–7 throughout.
 
 Driver fix: `no_param_arrays` keyed on MariaDB Connector/ODBC ≥ 3.2 (the Linux matrix runs
 3.1.15, where arrays are both correct and the faster path); both entries to be re-run.
+| mysql (re-run at 187dfac) | PASS (`MySQL (via ODBC) 08.04.000011`) — python fetch 48,715/s (pyodbc 45,680), ingest 119,319 (array 130,556; pyodbc 4,626) |
+| mariadb (re-run at 187dfac) | PASS (`MariaDB (via ODBC) 11.08.000008`) — python fetch 46,926/s (pyodbc 42,450), ingest 157,034 (array 142,486; pyodbc 4,219). The ~47k fetch on both MySQL-wire servers against ~800k on the PostgreSQL-wire ones is libmaodbc 3.2.9's read path, not the bridge — pyodbc gets the same |
+| timescaledb | PASS (`PostgreSQL (via ODBC) 16.15.0`) |
+| questdb | PASS (`PostgreSQL (via ODBC) 11.3.0`) |
+| cloudberry | PASS (`PostgreSQL (via ODBC) 14.4.0`), amd64 emulated |
+| cratedb | FAIL at 187dfac: `AssertionError: decimal128(28, 3)` — psqlodbc 18 describes a NUMERIC whose precision and scale CrateDB does not report as `decimal128(28, 3)`, where psqlodbc 16 on Linux says `decimal128(28, 6)`; the entry now accepts both, re-run pending |
+| opengauss | server not runnable here: `enmotech/opengauss` arm64's MOT engine panics at start inside the Docker Desktop VM — `Libnuma library not installed or not configured`, `Invalid NUMA configuration numa_node_of_cpu(0) => -1`, `Failed to allocate highest thread identifier on node 0` → `PANIC: Failed to Initialize core services`; tried `--cap-add=SYS_NICE --shm-size=1g` and `--cpuset-cpus=0-7` |
 

@@ -74,6 +74,16 @@ batch.
 | go | informix | 92,141 | 633,453 | — | — |
 | java | informix | 91,478 | 583,216 | — | — |
 | csharp | informix | 90,616 | 597,779 | — | — |
+| python | mysql | 119,319 | 48,715 | 4,626 | 45,680 |
+| rust | mysql | 112,442 | 47,886 | 149,945 | 47,471 |
+| go | mysql | 100,440 | 47,300 | — | — |
+| java | mysql | 121,184 | 47,061 | — | — |
+| csharp | mysql | 107,917 | 47,347 | — | — |
+| python | mariadb | 157,034 | 46,926 | 4,219 | 42,450 |
+| rust | mariadb | 197,986 | 43,609 | — | 44,397 |
+| go | mariadb | 203,689 | 43,716 | — | — |
+| java | mariadb | 184,510 | 43,897 | — | — |
+| csharp | mariadb | 194,324 | 44,396 | — | — |
 | python | tdengine | — | 552,492 | — | — |
 | rust | tdengine | — | 507,308 | — | — |
 
@@ -84,6 +94,7 @@ batch.
 | **duckdb** (rust) | *Binding.* `bench_rs` aborts with `fatal runtime error: Rust cannot catch foreign exceptions` — DuckDB's ODBC driver throws a C++ exception across the ODBC boundary on the plain path; Go's native binding takes a SIGBUS on the same driver; Python, Java and C# are fine. Go is `-no-native`. |
 | **monetdb** (go) | All four need `ADBC_BENCH_AUTOCOMMIT=1` (with autocommit off the `CREATE TABLE` failed in every language — MonetDB's `SQLEndTran` is a no-op, as on Linux); Java and C# re-taken that way. Go: `bench_go` hung for five minutes and was killed, then failed outright on the retry — no number. |
 | **db2** (go fetch) | Re-taking; batch 2. |
+| **mysql**, **mariadb** | Pass after the maodbc ≥ 3.2 quirk (`187dfac`): the connector's parameter-array path misreported MySQL's row count and segfaulted on a NULL DATE against MariaDB. Fetch is ~47k rows/s on both against ~800k on the PostgreSQL-wire servers — the Homebrew libmaodbc 3.2.9 read path, not the bridge: pyodbc reads the same tables at 42–46k. Ingest 100k–204k rows/s across the five languages. |
 | **cockroachdb**, **yugabyte**, **citus** | Tier 3, psqlodbc 18 built from source; CockroachDB and YugabyteDB arm64 native, Citus amd64 emulated. All five languages agree within a few percent on fetch (0.70M–1.04M rows/s); Go is `-no-native`. |
 | **clickhouse** | 300 rows ingested, 2,000 fetched, as on Linux (one HTTP request per row). |
 | **oracle** | `NLS_LANG=.AL32UTF8` has to be in the environment before `libsqora` loads; the compat harness's in-process setting is too late on macOS. |

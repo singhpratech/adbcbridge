@@ -888,7 +888,10 @@ DBS = {
         # millisecond-precision; and CrateDB does not report the precision/scale of a
         # NUMERIC column over the wire, so psqlodbc falls back to its own default (28, 6)
         # instead of the declared (10, 3).
-        binary_text="\\x0102", decimal_type="decimal128(28, 6)", ts_us=(123000,)),
+        binary_text="\\x0102", # CrateDB does not report a NUMERIC's precision or scale: psqlodbc 16 (Linux)
+        # describes the column as decimal128(28, 6), psqlodbc 18 (macOS) as
+        # decimal128(28, 3) -- the declared scale.  Both are the driver's fallback.
+        decimal_type=("decimal128(28, 6)", "decimal128(28, 3)"), ts_us=(123000,)),
     "questdb": dict(
         # QuestDB is a time-series database that speaks the PostgreSQL wire protocol, so
         # the psqlodbc build used for the `postgres` entry drives it -- but only the wire
@@ -1648,8 +1651,13 @@ def run(name, cfg):
         n = r1["n"]
         fields = {f.name.lower(): str(f.type) for f in t.schema}
         # decimal_type: drivers that report a precision other than the declared one
-        assert fields["n"] in ("decimal128(10, 3)", "string",
-                               cfg.get("decimal_type", "decimal128(10, 3)")), fields["n"]
+        # decimal_type: the Arrow type(s) a driver that reports a precision other than
+        # the declared one produces; a tuple where the answer depends on the driver's
+        # own version (CrateDB reports neither precision nor scale, and psqlodbc 16 and
+        # 18 fall back differently).
+        dt = cfg.get("decimal_type", "decimal128(10, 3)")
+        allowed = ("decimal128(10, 3)", "string") + (tuple(dt) if isinstance(dt, tuple) else (dt,))
+        assert fields["n"] in allowed, fields["n"]
         assert n in (decimal.Decimal("12.345"), "12.345"), n
         assert fields["bo"] == cfg.get("bool_type", "bool"), fields["bo"]
         assert r1["bo"] in (True, 1), r1["bo"]

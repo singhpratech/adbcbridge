@@ -164,13 +164,13 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | sqlite | PASS | PASS (SQLite 3.51.0) | PASS (SQLite 3.43.2) |
 | duckdb | PASS | PASS (DuckDB ODBC 1.5.5.0, universal binary) | PASS (duckdb_odbc 1.5.5.0) |
 | postgres | PASS | PASS (PostgreSQL 15.15) | PASS (PostgreSQL 16.15, psqlodbc 18.00.0002, native install) |
-| mariadb | PASS | FAIL at 24dab36, driver bug: SIGSEGV in `libmariadb.3.dylib store_param` on a NULL DATE in a parameter array (Connector/ODBC 3.2.9 / Connector/C 3.4.9; arrays off → passes). Fix: `no_param_arrays` keyed on maodbc ≥ 3.2 — re-run pending | pending |
+| mariadb | PASS | PASS (MariaDB 11.8 arm64, Connector/ODBC 3.2.9) — after the maodbc ≥ 3.2 quirk (`187dfac`): at 24dab36 Connector/C 3.4.9 segfaulted on a NULL DATE in a parameter array | pending |
 | columnstore | PASS | pending | pending |
 | oracle | PASS | PASS (Oracle 23.26.0200, Instant Client 23.3 arm64) — `NLS_LANG=.AL32UTF8` must be exported before the process starts | pending |
 | clickhouse | PASS | PASS (ClickHouse 26.7.5.10, clickhouse-odbc 1.5.5 macOS zip, arm64) | pending |
 | mssql | PASS | PASS (SQL Server 2022) | PASS (SQL Server 2025 RTM 17.0.1000.7, msodbcsql 18) |
 | azuresqledge | PASS | PASS (SQL Server 15.00.2000, arm64 image, msodbcsql 18.6.2.1 arm64) | pending |
-| mysql | PASS | FAIL at 24dab36, driver row-count quirk: MariaDB Connector/ODBC 3.2.9 reports `rows_affected` 2 for a 4-row parameter array against MySQL 8.4 (all 4 rows land; with arrays off it reports 4). Fix: `no_param_arrays` keyed on maodbc ≥ 3.2 — re-run pending | pending |
+| mysql | PASS | PASS (MySQL 8.4.11 arm64, MariaDB Connector/ODBC 3.2.9) — after the maodbc ≥ 3.2 quirk (`187dfac`): at 24dab36 the connector's array path misreported the row count | pending |
 | tidb | PASS | pending | pending |
 | dolt | PASS | pending | pending |
 | databend | PASS | pending | pending |
@@ -187,13 +187,13 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | vertica | PASS | driver unavailable: vertica.com's macOS download is vsql only, no ODBC | pending |
 | cockroachdb | PASS | PASS (CockroachDB, PostgreSQL wire 18.0.0, arm64) | pending |
 | yugabyte | PASS | PASS (YugabyteDB, PostgreSQL wire 15.12, arm64) | pending |
-| timescaledb | PASS | pending | pending |
+| timescaledb | PASS | PASS (TimescaleDB, PostgreSQL wire 16.15) | pending |
 | citus | PASS | PASS (Citus, PostgreSQL wire 18.4; amd64 emulated) | pending |
-| cloudberry | PASS | pending | pending |
+| cloudberry | PASS | PASS (Apache Cloudberry, PostgreSQL wire 14.4; amd64 emulated) | pending |
 | materialize | PASS | pending | pending |
-| opengauss | PASS | pending | pending |
-| cratedb | PASS | pending | pending |
-| questdb | PASS | pending | pending |
+| opengauss | PASS | server not runnable here: enmotech/opengauss arm64's MOT engine panics at start in the Docker Desktop VM (libnuma / `numa_node_of_cpu(0) => -1` / thread identifiers exhausted → `Failed to Initialize core services`), with `--cap-add=SYS_NICE --shm-size=1g` and with `--cpuset-cpus=0-7` | pending |
+| cratedb | PASS | FAIL at 187dfac: `AssertionError: decimal128(28, 3)` — psqlodbc 18 describes a NUMERIC whose precision and scale CrateDB does not report as decimal128(28, 3), where psqlodbc 16 on Linux says decimal128(28, 6); the entry now accepts both — re-run pending | pending |
+| questdb | PASS | PASS (QuestDB, PostgreSQL wire 11.3) | pending |
 | risingwave | PASS | pending | pending |
 | spanner | PASS | pending | pending |
 | firebird | PASS | driver unavailable: firebird-odbc-driver v3-0-1 ships Linux and Windows assets only | pending |
