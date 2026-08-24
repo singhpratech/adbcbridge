@@ -559,13 +559,16 @@ struct ArrayParam {
   // and ArrayParamFill resolves each index before staging the value.
   bool dictionary;
   struct ArrowSchemaView dict_sv;
+  // Encode non-BMP characters as surrogate pairs in four-byte units (see
+  // OdbcReaderOptions::wide_utf16_pairs); irrelevant with a two-byte SQLWCHAR.
+  bool utf16_pairs;
 };
 
 // Longest value in a variable-length column, measured in the unit it will be
 // bound in -- bytes for binary and for narrow strings, UTF-16 units for wide
 // ones -- or -1 if it exceeds the staging cap.
 static int64_t ArrayParamVarLenMax(const struct ArrowArrayView* av, bool binary, bool wide,
-                                   int64_t nrows) {
+                                   bool utf16_pairs, int64_t nrows) {
   int64_t max = 0;
   for (int64_t i = 0; i < nrows; i++) {
     if (ArrowArrayViewIsNull(av, i)) continue;
@@ -575,7 +578,7 @@ static int64_t ArrayParamVarLenMax(const struct ArrowArrayView* av, bool binary,
     } else {
       struct ArrowStringView v = ArrowArrayViewGetStringUnsafe(av, i);
       if (v.size_bytes > ARRAY_BIND_MAX_VARLEN) return -1;
-      len = wide ? Utf16Units(v.data, v.size_bytes, opts->wide_utf16_pairs) : v.size_bytes;
+      len = wide ? Utf16Units(v.data, v.size_bytes, utf16_pairs) : v.size_bytes;
     }
     if (len > max) {
       max = len;
@@ -773,7 +776,8 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
         return;
       }
       const bool wide = !binary && !opts->wchar_as_utf8;
-      int64_t max = ArrayParamVarLenMax(av, binary, wide, nrows);
+      p->utf16_pairs = opts->wide_utf16_pairs;
+      int64_t max = ArrayParamVarLenMax(av, binary, wide, opts->wide_utf16_pairs, nrows);
       if (max < 0) {  // too wide to stage: this batch goes row-at-a-time
         *supported = false;
         return;
@@ -957,7 +961,7 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
       case NANOARROW_TYPE_STRING_VIEW: {
         struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(values, row);
         if (p->c_type == SQL_C_WCHAR) {
-          int64_t units = OdbcUtf8ToUtf16Into((SQLWCHAR*)slot, s.data, s.size_bytes, opts->wide_utf16_pairs);
+          int64_t units = OdbcUtf8ToUtf16Into((SQLWCHAR*)slot, s.data, s.size_bytes, p->utf16_pairs);
           if (ind) {
             OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)(units * (int64_t)sizeof(SQLWCHAR)), q);
           }

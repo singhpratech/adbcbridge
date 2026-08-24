@@ -22,7 +22,7 @@
 static void CheckUtf16Raw(const SQLWCHAR* w, size_t n, const char* expected);
 
 static void CheckUtf16(const uint16_t* units, size_t n, const char* expected) {
-  SQLWCHAR w[64];
+  SQLWCHAR w[64] = {0};
 
   CHECK_TRUE(n <= sizeof(w) / sizeof(w[0]));
   if (sizeof(SQLWCHAR) >= 4) {
