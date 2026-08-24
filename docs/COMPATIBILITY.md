@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
+| percona | PASS | PASS (Percona Server, MySQL wire 8.4.11) | pending || tidb | PASS | PASS (TiDB, MySQL wire 8.0.11) | pending |<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compatibility tracker
 
 adbcbridge speaks ODBC, so it can reach anything that has an ODBC driver — the ODBC
@@ -203,7 +203,7 @@ Details and the machine descriptions: `bench/BENCHMARKS-macos.md`, `bench/BENCHM
 | influxdb3 | PASS | FAIL: same driver, same abort (fixture loaded fine) | pending |
 | ignite | PASS | driver unavailable: platforms/cpp has only linux/ and win/ OS layers; the Darwin build stops at `sys/sysinfo.h` | pending |
 | opensearch | PASS | driver unavailable: the project's macOS pkg is x86_64-only (Intel Macs not targeted) | pending |
-| ydb | PASS | FAIL: psqlodbc 18.00.0002 sends `SHOW DateStyle;` at connect (connection.c:1109) and YDB's PostgreSQL layer answers `unrecognized configuration parameter "datestyle"` — a driver-version incompatibility; psqlodbc 16 (Linux) does not issue it | pending |
+| ydb | PASS | PASS with psqlodbc 16.00.0005 built from `REL-16_00_0005` (YDB, PostgreSQL wire 14.0.5); **FAIL with psqlodbc 18.00.0002**: psqlodbc 18.00.0002 sends `SHOW DateStyle;` at connect (connection.c:1109) and YDB's PostgreSQL layer answers `unrecognized configuration parameter "datestyle"` — a driver-version incompatibility; psqlodbc 16 (Linux) does not issue it | pending |
 | dremio | PASS | FAIL: same driver, same abort (first-user bootstrap fine) | pending |
 | tdengine | PASS | PASS (3.3.6.13, vendor arm64 client) | pending |
 | access | PASS | PASS (mdbtools 1.0.1 from source, one local patch: fakeglib `g_strsplit`) | pending |

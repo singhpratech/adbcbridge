@@ -309,7 +309,16 @@ Driver fix: `no_param_arrays` keyed on MariaDB Connector/ODBC ≥ 3.2 (the Linux
 | cloudberry | arm64 image, singlenode, `--shm-size=1g` — python fetch 1,029,974/s (pyodbc 578,469), ingest 12,327 (array 12,121; pyodbc 1,013) |
 | risingwave | PASS (`PostgreSQL (via ODBC) 13.1400.0`) — Docker Desktop refused the compose bind-mount of `tests/compat/risingwave.toml` from `~/Documents` for this account (`error while creating mount source path`), so the README's `docker run` with the toml under `/private/tmp` was used (the same will apply to `columnstore.cnf` and `mongodbbi.drdl`); python fetch 735,801/s (pyodbc 472,795), ingest 23,843 (array 16,329; pyodbc 1,051) |
 | materialize | PASS (`PostgreSQL (via ODBC) 9.5.0`) — python fetch 164,748/s (pyodbc 101,211), ingest 32,833 (array 27,349; pyodbc 2,423); languages with `ADBC_BENCH_AUTOCOMMIT=1` |
-| ydb | **FAIL** `[HY000] (110) Status: GENERIC_ERROR Issues: <main>:1:1: Error: unrecognized configuration parameter "datestyle"` at `SQLDriverConnect` — psqlodbc 18.00.0002's `CC_connect` sends `SHOW DateStyle;` (connection.c:1109) before anything else and YDB's PG layer rejects it; psqlodbc 16 (Linux) does not issue it. User/GRANT setup as in the README; YDB answers `SELECT 1` through its CLI. A driver-version fact, amd64 emulated |
-| spanner | PASS (`PostgreSQL (via ODBC) 14.1.0`), emulator + PGAdapter, 300/2,000 rows — python fetch 81,367/s (pyodbc 112,280), ingest 6,115 (array 7,141; pyodbc 265); the four harness rows failed at `CREATE TABLE` because they ran with autocommit off (Spanner refuses DDL in a transaction; Linux used `ADBC_BENCH_AUTOCOMMIT=1`) — re-run pending |
-| arcadedb | PASS (`PostgreSQL (via ODBC) 12.0.0`), read-only fixture — python fetch 289,023/s; the four harnesses read 0 rows from `adbc_big`, under investigation |
+| ydb | **FAIL** `[HY000] (110) Status: GENERIC_ERROR Issues: <main>:1:1: Error: unrecognized configuration parameter "datestyle"` at `SQLDriverConnect` — psqlodbc 18.00.0002's `CC_connect` sends `SHOW DateStyle;` (connection.c:1109) before anything else and YDB's PG layer rejects it; psqlodbc 16 (Linux) does not issue it. User/GRANT setup as in the README; YDB answers `SELECT 1` through its CLI. A driver-version fact, amd64 emulated — **PASS on psqlodbc 16.00.0005** built from `REL-16_00_0005` for this entry (`PostgreSQL (via ODBC) 14.0.5`, `SQL_DRIVER_VER` confirmed via pyodbc); the 18.x fact stands |
+| spanner | PASS (`PostgreSQL (via ODBC) 14.1.0`), emulator + PGAdapter, 300/2,000 rows — python fetch 81,367/s (pyodbc 112,280), ingest 6,115 (array 7,141; pyodbc 265); the four harness rows first failed (DDL inside a transaction — autocommit off) and pass with `ADBC_BENCH_AUTOCOMMIT=1`: fetch 106,509–126,408/s, ingest 7,061–8,761/s, in `LANGUAGE_BENCHMARKS-macos.md` |
+| arcadedb | PASS (`PostgreSQL (via ODBC) 12.0.0`), read-only fixture — python fetch 289,023/s; the four harnesses first read 0 rows — `conn.py` was recreating `adbc_big` empty per connection (fixed `b883d62`) — and read 274,520–304,373/s with the setup unset |
 
+## Batch 3 (in progress): tier 4, the MySQL-wire servers (main @ f9c27dc)
+
+MariaDB Connector/ODBC 3.2.9 arm64 with the `≥ 3.2` quirk (`no_param_arrays`) in place.
+
+| entry | result |
+|---|---|
+| tidb | PASS (`MySQL (via ODBC) 08.00.000011`) |
+| percona | PASS (`MySQL (via ODBC) 08.04.000011`) |
+| dolt, databend, matrixone, greptimedb, columnstore, mongodbbi, doris, starrocks, oceanbase | running |
