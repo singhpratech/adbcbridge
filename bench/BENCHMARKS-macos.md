@@ -268,3 +268,32 @@ The five-language rows are in [`LANGUAGE_BENCHMARKS-macos.md`](LANGUAGE_BENCHMAR
 
 Findings from this batch, for the docs: (1) the MariaDB Connector/C bulk-path NULL-`DATE` crash; (2) Oracle's `NLS_LANG` must precede `libsqora` loading; (3) Arrow Flight SQL ODBC 0.9.7 and Virtuoso 7.2.17 abort the process on the first statement error under unixODBC 2.3.12 on macOS 26 — four entries fail for that one reason, and it is not the bridge (isql and raw ODBC die identically); (4) IBM's arm64 clidriver makes Db2 and Informix first-class on Apple Silicon; (5) DuckDB's driver lets a C++ exception escape into Rust and faults Go's binding; (6) Go on macOS needs `CGO_CFLAGS`/`CGO_LDFLAGS` for unixODBC (the module hard-codes `/usr/local/opt/unixodbc`).
 
+## Batch 2 (in progress): tier 3, and the two connector follow-ups
+
+Docker Desktop's VM was raised from 7.65 GiB to 16 GiB for the heavy images (settings backed
+up, to be restored). Load 5–7 throughout.
+
+| entry | result |
+|---|---|
+| cockroachdb | PASS (`PostgreSQL (via ODBC) 18.0.0`), arm64 — python fetch 799,169/s (pyodbc 497,329), ingest 75,825 (array 61,278; pyodbc 2,426) |
+| yugabyte | PASS (`PostgreSQL (via ODBC) 15.12.0`), arm64 — python fetch 858,915/s (pyodbc 496,826), ingest 36,527 (array 35,513; pyodbc 1,801) |
+| citus | PASS (`PostgreSQL (via ODBC) 18.4.0`), amd64 emulated — python fetch 1,008,472/s (pyodbc 575,339), ingest 193,490 (array 233,103; pyodbc 4,202) |
+| timescaledb | first run skipped by a variable-name slip (`TIMESCALE_ODBC_DRIVER`, not `TIMESCALEDB_`); re-running with cratedb, questdb, cloudberry, opengauss |
+
+**The two MariaDB Connector/ODBC failures from batch 1, resolved to driver quirks** (driver
+`libmaodbc.so`, `SQL_DRIVER_VER` 03.02.0009, Connector/C 3.4.9):
+
+* **mysql** is a row-count quirk, not data loss: the 4-row `adbc_ingest` reports
+  `rows_affected` 2 on create and on append, and `SELECT COUNT(*)` then says 8 — every row
+  landed. With `adbc.odbc.array_binding=false` the same ingest reports (4, 4). The connector
+  misreports the count only on the parameter-array path against MySQL.
+* **mariadb** is parameter arrays only: `executemany` of `INSERT INTO t (d DATE) VALUES (?)`
+  with rows `[(date,), (None,)]` segfaults in `libmariadb.3.dylib store_param+128` with arrays
+  on and passes with them off (both rows read back), for the single column and for the full
+  8-column compat row. `adbc_ingest` never crashed because its multi-row `INSERT … VALUES (…),(…)`
+  binds scalars and uses no array. Against MySQL 8.4 (no bulk protocol in the connector) the
+  same `executemany` does not crash.
+
+Driver fix: `no_param_arrays` keyed on MariaDB Connector/ODBC ≥ 3.2 (the Linux matrix runs
+3.1.15, where arrays are both correct and the faster path); both entries to be re-run.
+

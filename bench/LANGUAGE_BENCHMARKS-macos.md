@@ -46,6 +46,24 @@ batch.
 | csharp | oracle | 29,575 | 56,389 | — | — |
 | python | monetdb | 114,534 | 598,932 | 1,250 | 560,305 |
 | rust | monetdb | 125,550 | 601,336 | — | — |
+| python | cockroachdb | 75,825 | 799,169 | 2,426 | 497,329 |
+| rust | cockroachdb | 62,178 | 828,741 | 11,338 | 813,691 |
+| go | cockroachdb | 69,421 | 851,722 | — | — |
+| java | cockroachdb | 67,820 | 721,075 | — | — |
+| csharp | cockroachdb | 69,484 | 696,866 | — | — |
+| python | yugabyte | 36,527 | 858,915 | 1,801 | 496,826 |
+| rust | yugabyte | 42,390 | 842,771 | 4,554 | 925,154 |
+| go | yugabyte | 48,769 | 909,453 | — | — |
+| java | yugabyte | 41,579 | 841,728 | — | — |
+| csharp | yugabyte | 49,650 | 896,040 | — | — |
+| python | citus | 193,490 | 1,008,472 | 4,202 | 575,339 |
+| rust | citus | 433,566 | 994,454 | 60,568 | 994,956 |
+| go | citus | 434,011 | 1,017,249 | — | — |
+| java | citus | 476,946 | 951,262 | — | — |
+| csharp | citus | 530,884 | 1,036,637 | — | — |
+| go | monetdb | — | — | — | — |
+| java | monetdb | 118,473 | 573,845 | — | — |
+| csharp | monetdb | 119,689 | 556,486 | — | — |
 | python | db2 | 82,281 | 582,691 | 4,869 | 589,701 |
 | rust | db2 | 143,859 | 1,283,731 | 315,338 | 3,731,807 |
 | go | db2 | 195,931 | — | — | — |
@@ -64,8 +82,9 @@ batch.
 | entry | note |
 |---|---|
 | **duckdb** (rust) | *Binding.* `bench_rs` aborts with `fatal runtime error: Rust cannot catch foreign exceptions` — DuckDB's ODBC driver throws a C++ exception across the ODBC boundary on the plain path; Go's native binding takes a SIGBUS on the same driver; Python, Java and C# are fine. Go is `-no-native`. |
-| **monetdb** (go, java, csharp) | Re-taking with `ADBC_BENCH_AUTOCOMMIT=1`; with autocommit off the `CREATE TABLE` failed in all four languages (MonetDB's `SQLEndTran` is a no-op, as on Linux). Batch 2. |
+| **monetdb** (go) | All four need `ADBC_BENCH_AUTOCOMMIT=1` (with autocommit off the `CREATE TABLE` failed in every language — MonetDB's `SQLEndTran` is a no-op, as on Linux); Java and C# re-taken that way. Go: `bench_go` hung for five minutes and was killed, then failed outright on the retry — no number. |
 | **db2** (go fetch) | Re-taking; batch 2. |
+| **cockroachdb**, **yugabyte**, **citus** | Tier 3, psqlodbc 18 built from source; CockroachDB and YugabyteDB arm64 native, Citus amd64 emulated. All five languages agree within a few percent on fetch (0.70M–1.04M rows/s); Go is `-no-native`. |
 | **clickhouse** | 300 rows ingested, 2,000 fetched, as on Linux (one HTTP request per row). |
 | **oracle** | `NLS_LANG=.AL32UTF8` has to be in the environment before `libsqora` loads; the compat harness's in-process setting is too late on macOS. |
 | **mssql**, **postgres** | Python only so far; the four harnesses come with a later batch. |
