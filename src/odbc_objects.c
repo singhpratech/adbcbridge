@@ -207,7 +207,7 @@ static bool DescribeTableStmt(struct OdbcConnection* conn, const struct TableRow
       InternalAdbcStringBuilderAppend(&sb, "%s%s%s.", (char*)q, t->schema, (char*)q);
     }
     InternalAdbcStringBuilderAppend(&sb, "%s%s%s WHERE 1=0", (char*)q, t->table, (char*)q);
-    SQLRETURN ret = SQLExecDirect(hstmt, (SQLCHAR*)sb.buffer, SQL_NTS);
+    SQLRETURN ret = OdbcExecDirectUtf8(hstmt, sb.buffer);
     InternalAdbcStringBuilderReset(&sb);
     if (SQL_SUCCEEDED(ret)) return true;
     SQLFreeStmt(hstmt, SQL_CLOSE);
@@ -240,8 +240,8 @@ static AdbcStatusCode AppendColumnsViaDescribe(struct OdbcConnection* conn,
     SQLCHAR name[512] = {0};
     SQLSMALLINT name_len = 0, data_type = 0, decimal_digits = 0, nullable = SQL_NULLABLE_UNKNOWN;
     SQLULEN column_size = 0;
-    if (!SQL_SUCCEEDED(SQLDescribeCol(hstmt, (SQLUSMALLINT)i, name, sizeof(name), &name_len,
-                                      &data_type, &column_size, &decimal_digits, &nullable))) {
+    if (!SQL_SUCCEEDED(OdbcDescribeColUtf8(hstmt, (SQLUSMALLINT)i, (char*)name, sizeof(name), &name_len,
+                                           &data_type, &column_size, &decimal_digits, &nullable))) {
       continue;
     }
     if (column_name && !LikeMatch(column_name, (const char*)name)) continue;
@@ -256,8 +256,8 @@ static AdbcStatusCode AppendColumnsViaDescribe(struct OdbcConnection* conn,
     num[17] = i; has[17] = true;              // ORDINAL_POSITION
     SQLCHAR type_name[256] = {0};
     SQLSMALLINT type_name_len = 0;
-    if (!SQL_SUCCEEDED(SQLColAttribute(hstmt, (SQLUSMALLINT)i, SQL_DESC_TYPE_NAME, type_name,
-                                       sizeof(type_name), &type_name_len, NULL))) {
+    if (!SQL_SUCCEEDED(OdbcColAttributeStrUtf8(hstmt, (SQLUSMALLINT)i, SQL_DESC_TYPE_NAME, (char*)type_name,
+                                               sizeof(type_name), &type_name_len))) {
       type_name[0] = '\0';
     }
     const char* yes_no = nullable == SQL_NO_NULLS ? "NO" : nullable == SQL_NULLABLE ? "YES" : NULL;
@@ -283,9 +283,10 @@ static AdbcStatusCode AppendColumns(struct OdbcConnection* conn, struct ArrowArr
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
              "SQLAllocHandle", error);
-  SQLRETURN ret = SQLColumns(hstmt, Pat(t->catalog), PatLen(t->catalog), Pat(t->schema),
-                             PatLen(t->schema), Pat(t->table), SQL_NTS, Pat(column_name),
-                             PatLen(column_name));
+  SQLRETURN ret = OdbcColumnsUtf8(hstmt, (const char*)Pat(t->catalog), PatLen(t->catalog),
+                                  (const char*)Pat(t->schema), PatLen(t->schema),
+                                  (const char*)Pat(t->table), SQL_NTS, (const char*)Pat(column_name),
+                                  PatLen(column_name));
   if (!SQL_SUCCEEDED(ret)) {
     AdbcStatusCode s = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLColumns", error);
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
@@ -336,8 +337,9 @@ static AdbcStatusCode AppendConstraints(struct OdbcConnection* conn, struct Arro
              "SQLAllocHandle", error);
 
   // Primary key (one constraint, columns ordered by KEY_SEQ as returned).
-  SQLRETURN ret = SQLPrimaryKeys(hstmt, Pat(t->catalog), PatLen(t->catalog), Pat(t->schema),
-                                 PatLen(t->schema), Pat(t->table), SQL_NTS);
+  SQLRETURN ret = OdbcPrimaryKeysUtf8(hstmt, (const char*)Pat(t->catalog), PatLen(t->catalog),
+                                      (const char*)Pat(t->schema), PatLen(t->schema),
+                                      (const char*)Pat(t->table), SQL_NTS);
   if (SQL_SUCCEEDED(ret)) {
     int n = 0;
     char* pk_name = NULL;
@@ -363,8 +365,9 @@ static AdbcStatusCode AppendConstraints(struct OdbcConnection* conn, struct Arro
   SQLFreeStmt(hstmt, SQL_CLOSE);
 
   // Foreign keys: rows grouped by FK_NAME (col 12), ordered by KEY_SEQ.
-  ret = SQLForeignKeys(hstmt, NULL, 0, NULL, 0, NULL, 0, Pat(t->catalog), PatLen(t->catalog),
-                       Pat(t->schema), PatLen(t->schema), Pat(t->table), SQL_NTS);
+  ret = OdbcForeignKeysUtf8(hstmt, (const char*)Pat(t->catalog), PatLen(t->catalog),
+                            (const char*)Pat(t->schema), PatLen(t->schema),
+                            (const char*)Pat(t->table), SQL_NTS);
   if (SQL_SUCCEEDED(ret)) {
     char* cur_name = NULL;
     bool open = false;
@@ -467,7 +470,8 @@ static AdbcStatusCode FetchTables(struct OdbcConnection* conn, SQLCHAR* cat, SQL
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
              "SQLAllocHandle", error);
-  SQLRETURN ret = SQLTables(hstmt, cat, cat_len, sch, sch_len, tbl, tbl_len, type, type_len);
+  SQLRETURN ret = OdbcTablesUtf8(hstmt, (const char*)cat, cat_len, (const char*)sch, sch_len,
+                                 (const char*)tbl, tbl_len, (const char*)type, type_len);
   if (!SQL_SUCCEEDED(ret)) {
     AdbcStatusCode s = ADBC_STATUS_OK;
     if (!tolerate_failure) s = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLTables", error);

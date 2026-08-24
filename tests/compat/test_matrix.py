@@ -1647,6 +1647,20 @@ def run(name, cfg):
         else:
             cur.execute("SELECT s FROM %s WHERE i = 1" % t_name)
         assert cur.fetchone()[0].startswith("héllo")
+        # Non-ASCII text *in the statement itself*, not only in a parameter.  The two
+        # are different paths: a parameter goes out as SQL_C_WCHAR, statement text goes
+        # through SQLExecDirect, and on Windows the driver manager reads narrow statement
+        # text as the ANSI code page unless the W entry point is used -- so a literal
+        # "héllo" was stored as "hÃ©llo" and matched nothing, while every parameterised
+        # step still passed (the first Windows run found this).  Both spellings of the
+        # same predicate must find row 1.  literal_text=False for a server whose SQL has
+        # no LIKE, or that cannot hold the value at all.
+        if cfg.get("literal_text", True):
+            cur.execute("SELECT i FROM %s WHERE s LIKE 'héllo%%'" % t_name)
+            assert [r[0] for r in cur.fetchall()] == [1], "statement literal 'héllo' matched nothing"
+            if cfg.get("params", True):
+                cur.execute("SELECT i FROM %s WHERE s LIKE ?" % t_name, ("héllo%",))
+                assert [r[0] for r in cur.fetchall()] == [1], "parameter 'héllo' matched nothing"
         # bulk ingest + read back (read_only reads the fixture's big table instead)
         # ingest_create: the server refuses the table adbc_ingest would have to create --
         # Ignite has no table without a PRIMARY KEY, and the ingest payload has no column

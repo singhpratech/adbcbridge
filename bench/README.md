@@ -9,7 +9,7 @@ says nothing about Windows.
 | OS | File | State |
 |---|---|---|
 | Linux (Ubuntu 24.04, unixODBC 2.3.12) | [`BENCHMARKS.md`](BENCHMARKS.md) — PostgreSQL vs native, the write path, partitioned reads; [`MATRIX_BENCHMARKS.md`](MATRIX_BENCHMARKS.md) — 46 databases; [`LANGUAGE_BENCHMARKS.md`](LANGUAGE_BENCHMARKS.md) — five languages × 46; [`RUST_BENCHMARKS.md`](RUST_BENCHMARKS.md) | **measured** |
-| Windows (x64, the OS's own driver manager) | [`BENCHMARKS-windows.md`](BENCHMARKS-windows.md) | **not yet measured.** The Windows CI build was red on every run until 2026-08-24 (four MSVC-only defects, found by the first human build); the Windows build has neither the prefetch pipeline nor ingest fan-out, so its numbers will not be comparable with the Linux rows |
+| Windows 11 (x64, i7-8550U, 8 GB, the OS's own driver manager) | [`BENCHMARKS-windows.md`](BENCHMARKS-windows.md) — SQLite | **measured, one machine** (first build ever on 2026-08-24; a statement-text encoding bug found and fixed the same day; no prefetch and no ingest fan-out in the Windows build, so not comparable with Linux) |
 | macOS (Apple M4 Max, arm64, unixODBC 2.3.12) | [`BENCHMARKS-macos.md`](BENCHMARKS-macos.md) — SQLite, PostgreSQL 15, SQL Server 2022 | **measured, one machine** (PostgreSQL vs native there: 0.60x fetch, 0.50x ingest -- indicative, not the reference) |
 
 The two unmeasured files carry the exact commands to produce their tables, so

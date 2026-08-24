@@ -211,8 +211,8 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
   bool first = true;
   bool says_already_exists = false;
   char* unloadable = NULL;  // path from "Can't open lib '<path>'", if any
-  while (SQL_SUCCEEDED(SQLGetDiagRec(handle_type, handle, rec, sqlstate, &native, msg,
-                                     sizeof(msg), &msg_len))) {
+  while (SQL_SUCCEEDED(OdbcGetDiagRecUtf8(handle_type, handle, rec, sqlstate, &native, (char*)msg,
+                                          sizeof(msg), &msg_len))) {
     // SQLGetDiagRec fills at most sizeof(msg)-1 bytes plus a NUL, but reports
     // the *untruncated* message length in msg_len.  Using that length against
     // `msg` reads past the end of the buffer, so a longer diagnostic (an MSSQL
@@ -224,9 +224,8 @@ AdbcStatusCode OdbcSetError(SQLSMALLINT handle_type, SQLHANDLE handle, const cha
       if (text_len > 32000) text_len = 32000;  // SQLSMALLINT buffer length
       heap = calloc(text_len + 1, 1);
       SQLSMALLINT full_len = 0;
-      if (heap && SQL_SUCCEEDED(SQLGetDiagRec(handle_type, handle, rec, sqlstate, &native,
-                                              (SQLCHAR*)heap, (SQLSMALLINT)(text_len + 1),
-                                              &full_len))) {
+      if (heap && SQL_SUCCEEDED(OdbcGetDiagRecUtf8(handle_type, handle, rec, sqlstate, &native, heap,
+                                                   (SQLSMALLINT)(text_len + 1), &full_len))) {
         text = heap;
         if (full_len > 0 && (size_t)full_len < text_len) text_len = (size_t)full_len;
       } else {
@@ -352,7 +351,7 @@ static bool TypeNameIsBool(SQLHSTMT hstmt, SQLUSMALLINT col) {
   SQLSMALLINT len = 0;
   // hstmt is NULL when classifying a *parameter*, which has no IRD row to query.
   if (!hstmt) return false;
-  if (!SQL_SUCCEEDED(SQLColAttribute(hstmt, col, SQL_DESC_TYPE_NAME, name, sizeof(name), &len, NULL))) {
+  if (!SQL_SUCCEEDED(OdbcColAttributeStrUtf8(hstmt, col, SQL_DESC_TYPE_NAME, (char*)name, sizeof(name), &len))) {
     return false;
   }
   for (SQLSMALLINT i = 0; i < len && i < (SQLSMALLINT)sizeof(name); i++) {
@@ -385,8 +384,8 @@ static bool IsTimestampWithTimezone(SQLHSTMT hstmt, SQLUSMALLINT col) {
   SQLCHAR name[128] = {0};
   SQLSMALLINT len = 0;
   if (!hstmt) return false;
-  if (!SQL_SUCCEEDED(SQLColAttribute(hstmt, col, SQL_DESC_TYPE_NAME, name, sizeof(name), &len,
-                                     NULL))) {
+  if (!SQL_SUCCEEDED(OdbcColAttributeStrUtf8(hstmt, col, SQL_DESC_TYPE_NAME, (char*)name, sizeof(name),
+                                             &len))) {
     return false;
   }
   name[sizeof(name) - 1] = '\0';
@@ -709,9 +708,9 @@ static AdbcStatusCode DescribeColumns(SQLHSTMT hstmt, const struct OdbcReaderOpt
     struct OdbcColumn* c = &cols[i];
     // c->column_size is a SQLULEN out-parameter: calloc has zeroed it, so a driver that
     // writes only its low four bytes still leaves a well-defined value behind.
-    SQLRETURN ret = SQLDescribeCol(hstmt, (SQLUSMALLINT)(i + 1), name, sizeof(name), &name_len,
-                                   &c->sql_type, &c->column_size, &c->decimal_digits,
-                                   &c->nullable);
+    SQLRETURN ret = OdbcDescribeColUtf8(hstmt, (SQLUSMALLINT)(i + 1), (char*)name, sizeof(name),
+                                        &name_len, &c->sql_type, &c->column_size,
+                                        &c->decimal_digits, &c->nullable);
     c->column_size = OdbcReadULen(&c->column_size, opts->sqllen_32bit);
     if (!SQL_SUCCEEDED(ret)) {
       AdbcStatusCode s = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLDescribeCol", error);

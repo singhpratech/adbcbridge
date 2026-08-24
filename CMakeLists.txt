@@ -72,6 +72,7 @@ add_library(adbc_driver_odbc SHARED
   src/odbc_partition.c
   src/odbc_objects.c
   src/odbc_bind.c
+  src/odbc_text.c
   src/utils.c
   vendor/nanoarrow/nanoarrow.c)
 
@@ -295,6 +296,7 @@ if(ADBC_ODBC_BUILD_TESTS)
     add_executable(${test_name}
       tests/c/${test_name}.c
       src/utils.c
+      src/odbc_text.c
       vendor/nanoarrow/nanoarrow.c)
     target_include_directories(${test_name} PRIVATE include vendor src tests/c)
     target_compile_definitions(${test_name} PRIVATE

@@ -349,7 +349,7 @@ static bool PostgresHeapBlocks(SQLHDBC hdbc, const char* table, size_t table_len
   SQLHSTMT hstmt = NULL;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
   bool ok = false;
-  if (SQL_SUCCEEDED(SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS))) {
+  if (SQL_SUCCEEDED(OdbcExecDirectUtf8(hstmt, sql))) {
     SQLRETURN ret = SQLFetch(hstmt);
     if (SQL_SUCCEEDED(ret)) {
       SQLBIGINT blocks = 0;
@@ -473,8 +473,8 @@ static bool PrimaryKeyLeadColumn(SQLHDBC hdbc, struct OdbcTableRef* ref, char* o
 
   SQLCHAR* cat = ref->catalog[0] ? (SQLCHAR*)ref->catalog : NULL;
   SQLCHAR* sch = ref->schema[0] ? (SQLCHAR*)ref->schema : NULL;
-  if (SQL_SUCCEEDED(SQLPrimaryKeys(hstmt, cat, cat ? SQL_NTS : 0, sch, sch ? SQL_NTS : 0,
-                                   (SQLCHAR*)ref->table, SQL_NTS))) {
+  if (SQL_SUCCEEDED(OdbcPrimaryKeysUtf8(hstmt, (const char*)cat, cat ? SQL_NTS : 0, (const char*)sch,
+                                        sch ? SQL_NTS : 0, ref->table, SQL_NTS))) {
     while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
       char rcat[ODBC_PARTITION_IDENT_MAX] = {0};
       char rsch[ODBC_PARTITION_IDENT_MAX] = {0};
@@ -539,8 +539,8 @@ static bool ColumnIsSplittableInteger(SQLHDBC hdbc, const struct OdbcTableRef* r
   SQLCHAR* sch = ref->schema[0] ? (SQLCHAR*)ref->schema : NULL;
   // ColumnName is a *pattern* argument in ODBC, so `_` in a column name would match
   // more than itself.  Ask for every column instead and match the name exactly.
-  if (SQL_SUCCEEDED(SQLColumns(hstmt, cat, cat ? SQL_NTS : 0, sch, sch ? SQL_NTS : 0,
-                               (SQLCHAR*)ref->table, SQL_NTS, NULL, 0))) {
+  if (SQL_SUCCEEDED(OdbcColumnsUtf8(hstmt, (const char*)cat, cat ? SQL_NTS : 0, (const char*)sch,
+                                    sch ? SQL_NTS : 0, ref->table, SQL_NTS, NULL, 0))) {
     while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
       char rcol[ODBC_PARTITION_IDENT_MAX] = {0};
       SQLSMALLINT type = 0, nullable = 0;
@@ -588,7 +588,7 @@ static bool ExpressionExtent(SQLHDBC hdbc, const char* table, size_t table_len, 
   SQLHSTMT hstmt = NULL;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
   bool ok = false;
-  if (SQL_SUCCEEDED(SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS))) {
+  if (SQL_SUCCEEDED(OdbcExecDirectUtf8(hstmt, sql))) {
     if (SQL_SUCCEEDED(SQLFetch(hstmt))) {
       SQLBIGINT lo = 0, hi = 0;
       SQLLEN ind_lo = 0, ind_hi = 0;
@@ -637,7 +637,7 @@ static bool PgIndexFacts(SQLHDBC hdbc, const char* table, size_t table_len, cons
   SQLHSTMT hstmt = NULL;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
   bool ok = false;
-  if (SQL_SUCCEEDED(SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS))) {
+  if (SQL_SUCCEEDED(OdbcExecDirectUtf8(hstmt, sql))) {
     if (SQL_SUCCEEDED(SQLFetch(hstmt))) {
       SQLINTEGER lead = 0, nhash = 0, ybhash = 0;
       SQLBIGINT rows = 0;
@@ -900,7 +900,7 @@ AdbcStatusCode OdbcStatementExecutePartitionsOdbc(struct OdbcStatement* stmt,
   // WHERE clause, so describing the original query answers for all of them.
   if (schema) {
     RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
-    ODBC_CHECK(SQLPrepare(stmt->ref->hstmt, (SQLCHAR*)stmt->query, SQL_NTS), SQL_HANDLE_STMT,
+    ODBC_CHECK(OdbcPrepareUtf8(stmt->ref->hstmt, stmt->query), SQL_HANDLE_STMT,
                stmt->ref->hstmt, "SQLPrepare", error);
     stmt->prepared = true;
     RAISE_ADBC(OdbcDescribeResultSchema(stmt->ref->hstmt, &stmt->reader_opts, schema, error));
@@ -1025,7 +1025,7 @@ AdbcStatusCode OdbcConnectionReadPartitionOdbc(struct OdbcConnection* conn,
     free(sql);
     return OdbcSetError(SQL_HANDLE_DBC, conn->hdbc, "SQLAllocHandle(SQL_HANDLE_STMT)", error);
   }
-  SQLRETURN ret = SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS);
+  SQLRETURN ret = OdbcExecDirectUtf8(hstmt, sql);
   free(sql);
   if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) {
     AdbcStatusCode status = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecDirect", error);

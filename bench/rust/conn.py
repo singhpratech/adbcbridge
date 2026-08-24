@@ -42,12 +42,24 @@ TABLE = os.environ.get("ADBC_BENCH_TABLE", "adbc_bench_rs") + os.environ.get("AD
 
 
 def setup_env(cfg):
-    setup = "\n".join(cfg.get("setup", []))
-    if len(setup) > 16384:
-        sys.stderr.write("conn.py: %s's setup is %d bytes (the fixture load); not exported -- run "
-                         "tests/compat/test_matrix.py first\n" % (cfg.get("env", "?"), len(setup)))
-        return ""
-    return setup
+    """The entry's per-connection statements, minus any that are really a fixture load.
+
+    A read-only entry's `setup` mixes the session statements every connection needs
+    (`USE adbc`, a `CREATE DATABASE IF NOT EXISTS`) with the INSERTs that build its
+    fixture -- ArcadeDB's and TDengine's run to hundreds of kilobytes, past what an
+    environment can carry.  Statements over 2 KB are the fixture; they are dropped, and
+    tests/compat/test_matrix.py is what loads them.
+    """
+    keep, dropped = [], 0
+    for stmt in cfg.get("setup", []):
+        if len(stmt) > 2048:
+            dropped += 1
+        else:
+            keep.append(stmt)
+    if dropped:
+        sys.stderr.write("conn.py: %d fixture-load statement(s) left out of %s's setup -- run "
+                         "tests/compat/test_matrix.py first\n" % (dropped, cfg.get("env", "?")))
+    return "\n".join(keep)
 
 
 def main(name):

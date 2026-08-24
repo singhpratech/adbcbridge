@@ -472,7 +472,7 @@ static void OdbcServerScalarString(SQLHDBC hdbc, const char* sql, char* out, siz
   out[0] = '\0';
   SQLHSTMT hstmt = NULL;
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return;
-  if (SQL_SUCCEEDED(SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
+  if (SQL_SUCCEEDED(OdbcExecDirectUtf8(hstmt, sql)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
     SQLLEN ind = 0;
     if (!SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_CHAR, out, (SQLLEN)out_size, &ind)) ||
         ind == SQL_NULL_DATA) {
@@ -500,7 +500,7 @@ static bool OdbcHasDiag(SQLHDBC hdbc) {
   // and truncation answers SQL_SUCCESS_WITH_INFO, which still counts as one.  Reading a
   // record does not clear the queue, so OdbcSetError still finds it afterwards.
   return SQL_SUCCEEDED(
-      SQLGetDiagRec(SQL_HANDLE_DBC, hdbc, 1, state, &native, msg, sizeof(msg), &len));
+      OdbcGetDiagRecUtf8(SQL_HANDLE_DBC, hdbc, 1, state, &native, (char*)msg, sizeof(msg), &len));
 }
 
 // Retry a connect that failed *silently* through the driver's wide entry point.
@@ -1473,7 +1473,7 @@ static AdbcStatusCode OdbcConnectionGetTableSchema(struct AdbcConnection* connec
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
              "SQLAllocHandle(SQL_HANDLE_STMT)", error);
-  SQLRETURN ret = SQLExecDirect(hstmt, (SQLCHAR*)sb.buffer, SQL_NTS);
+  SQLRETURN ret = OdbcExecDirectUtf8(hstmt, sb.buffer);
   InternalAdbcStringBuilderReset(&sb);
   AdbcStatusCode s;
   if (!SQL_SUCCEEDED(ret)) {
@@ -1979,7 +1979,7 @@ static AdbcStatusCode OdbcStatementDoPrepare(struct OdbcStatement* stmt,
                                              struct AdbcError* error) {
   if (stmt->prepared) return ADBC_STATUS_OK;
   RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
-  ODBC_CHECK(SQLPrepare(stmt->ref->hstmt, (SQLCHAR*)stmt->query, SQL_NTS), SQL_HANDLE_STMT,
+  ODBC_CHECK(OdbcPrepareUtf8(stmt->ref->hstmt, stmt->query), SQL_HANDLE_STMT,
              stmt->ref->hstmt, "SQLPrepare", error);
   stmt->prepared = true;
   return ADBC_STATUS_OK;
@@ -2042,7 +2042,7 @@ static AdbcStatusCode OdbcStatementExecuteQuery(struct AdbcStatement* statement,
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecute", error);
     }
   } else {
-    ret = SQLExecDirect(hstmt, (SQLCHAR*)stmt->query, SQL_NTS);
+    ret = OdbcExecDirectUtf8(hstmt, stmt->query);
     if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) {
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecDirect", error);
     }

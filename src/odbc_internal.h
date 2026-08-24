@@ -652,6 +652,33 @@ void OdbcQuoteChar(SQLHDBC hdbc, char* out);
 /// U+FFFD.  Used for the wide parameter path and for the wide connect retry.
 int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n);
 
+// Text-carrying ODBC calls in UTF-8 (src/odbc_text.c).  The narrow entry points on
+// unixODBC/iODBC, the W entry points with conversion on Windows, whose driver manager
+// would otherwise read narrow text as the ANSI code page.  A NULL name argument is
+// passed through as NULL; a length is SQL_NTS or a byte count.
+SQLRETURN OdbcExecDirectUtf8(SQLHSTMT hstmt, const char* sql);
+SQLRETURN OdbcPrepareUtf8(SQLHSTMT hstmt, const char* sql);
+SQLRETURN OdbcDescribeColUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* name, SQLSMALLINT name_cap,
+                              SQLSMALLINT* name_len, SQLSMALLINT* type, SQLULEN* size,
+                              SQLSMALLINT* digits, SQLSMALLINT* nullable);
+SQLRETURN OdbcColAttributeStrUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, SQLUSMALLINT field,
+                                  char* buf, SQLSMALLINT cap, SQLSMALLINT* len);
+SQLRETURN OdbcGetDiagRecUtf8(SQLSMALLINT handle_type, SQLHANDLE handle, SQLSMALLINT rec,
+                             SQLCHAR* state, SQLINTEGER* native, char* msg, SQLSMALLINT cap,
+                             SQLSMALLINT* len);
+SQLRETURN OdbcTablesUtf8(SQLHSTMT hstmt, const char* cat, SQLSMALLINT cat_len, const char* sch,
+                         SQLSMALLINT sch_len, const char* tbl, SQLSMALLINT tbl_len,
+                         const char* type, SQLSMALLINT type_len);
+SQLRETURN OdbcColumnsUtf8(SQLHSTMT hstmt, const char* cat, SQLSMALLINT cat_len, const char* sch,
+                          SQLSMALLINT sch_len, const char* tbl, SQLSMALLINT tbl_len,
+                          const char* col, SQLSMALLINT col_len);
+SQLRETURN OdbcPrimaryKeysUtf8(SQLHSTMT hstmt, const char* cat, SQLSMALLINT cat_len,
+                              const char* sch, SQLSMALLINT sch_len, const char* tbl,
+                              SQLSMALLINT tbl_len);
+SQLRETURN OdbcForeignKeysUtf8(SQLHSTMT hstmt, const char* fcat, SQLSMALLINT fcat_len,
+                              const char* fsch, SQLSMALLINT fsch_len, const char* ftbl,
+                              SQLSMALLINT ftbl_len);
+
 AdbcStatusCode OdbcStatementEnsureHandle(struct OdbcStatement* stmt, struct AdbcError* error);
 
 /// Execute stmt->query once per bound row (parameters from bind_stream).

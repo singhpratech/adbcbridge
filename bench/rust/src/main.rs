@@ -678,11 +678,18 @@ fn main() {
 
     let environment = Environment::new().unwrap_or_else(|e| die(&format!("ODBC environment: {e}")));
 
-    let vendor = attempt(|| {
-        let connection = odbc_connect(&environment, &uri, &[], true)?;
-        Ok(connection.database_management_system_name()?)
-    })
-    .unwrap_or_else(|_| args.db.clone());
+    // The vendor name is read through odbc-api; with ADBC_BENCH_NO_NATIVE set the plain
+    // ODBC path is not to be touched at all -- taos-odbc aborts the whole process on
+    // odbc-api's SQL_ATTR_ODBC_VERSION ("not implemented yet") -- so the name stands in.
+    let vendor = if env::var_os("ADBC_BENCH_NO_NATIVE").is_some() {
+        args.db.clone()
+    } else {
+        attempt(|| {
+            let connection = odbc_connect(&environment, &uri, &[], true)?;
+            Ok(connection.database_management_system_name()?)
+        })
+        .unwrap_or_else(|_| args.db.clone())
+    };
 
     // Ingest a single row and find out which spelling of the table and column
     // names reaches what that produced, so nothing downstream has to guess: the
