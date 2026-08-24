@@ -690,6 +690,16 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // and why the cast cannot lose anything.  Probed like every other form, and only
     // after the standard one has been refused.
     conn->reader_opts.multirow_union_from = "RDB$DATABASE";
+    // SQLGetTypeInfo(SQL_LONGVARCHAR) names BLOB SUB_TYPE TEXT, so that is what generated
+    // ingest DDL gave an Arrow string column -- and OdbcFb reads a BLOB one row at a time
+    // through SQLGetData.  100,000 rows of (INTEGER, DOUBLE PRECISION, <string>, DATE)
+    // ingested with autocommit on: the read came back at 8,256 rows/s with the BLOB
+    // column and 1,004,277 rows/s without it, and odbc-api read the same table at the
+    // same 7,500 rows/s, so it is the type, not this reader.  Firebird's own widest
+    // string type is VARCHAR(32765 bytes); spelled as 8,191 characters it is legal
+    // whatever the database's character set (UTF8 is four bytes a character), which the
+    // driver's reported maximum for SQL_VARCHAR would not be.  See ddl_string_type_name.
+    conn->reader_opts.ddl_string_type_name = "VARCHAR(8191)";
   }
   if (strstr((const char*)name, "ignite")) {
     // Apache Ignite's ODBC driver (SQL_DRIVER_NAME "Apache Ignite") has no wide SQL type
