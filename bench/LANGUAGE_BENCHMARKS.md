@@ -218,10 +218,10 @@ driver default, the same setting every other language here runs with — not its
 | java | oceanbase | 106,844 | 1,177,530 | — | — |
 | go | oceanbase | 76,641 | 1,336,221 | 9,694 | 320,819 |
 | python | mongodbbi | — | 144,477 | — | — |
-| rust | mongodbbi | — | — | — | — |
-| csharp | mongodbbi | — | — | — | — |
-| java | mongodbbi | — | — | — | — |
-| go | mongodbbi | — | — | — | — |
+| rust | mongodbbi | — | 164,089 | — | 169,543 |
+| csharp | mongodbbi | — | 141,424 | — | — |
+| java | mongodbbi | — | 148,167 | — | — |
+| go | mongodbbi | — | 164,004 | — | — |
 | python | monetdb | 130,315 | 1,325,973 | — | — |
 | rust | monetdb | 110,307 | 1,418,697 | — | — |
 | csharp | monetdb | 168,401 | 1,229,021 | 9,094 | 986,876 |
@@ -238,30 +238,30 @@ driver default, the same setting every other language here runs with — not its
 | java | cloudberry | 8,717 | 1,672,687 | — | — |
 | go | cloudberry | 9,037 | 1,831,128 | 667 | 368,333 |
 | python | cratedb | 40,251 | 682,843 | — | — |
-| rust | cratedb | — | — | — | — |
-| csharp | cratedb | — | — | — | — |
-| java | cratedb | — | — | — | — |
-| go | cratedb | — | — | — | — |
+| rust | cratedb | 12,915 | 764,288 | 741 | 1,019,171 |
+| csharp | cratedb | 14,663 | 791,619 | 135 | 660,045 |
+| java | cratedb | 14,999 | 751,566 | — | — |
+| go | cratedb | 12,865 | 844,199 | — | — |
 | python | spanner | 7,870 | 205,396 | — | — |
-| rust | spanner | — | — | — | — |
-| csharp | spanner | — | — | — | — |
-| java | spanner | — | — | — | — |
-| go | spanner | — | — | — | — |
+| rust | spanner | 8,091 | 283,050 | — | 272,802 |
+| csharp | spanner | 8,775 | — | — | — |
+| java | spanner | 9,120 | 250,018 | — | — |
+| go | spanner | 8,611 | 252,463 | — | — |
 | python | flightsql | — | 1,247,578 | — | — |
-| rust | flightsql | — | — | — | — |
-| csharp | flightsql | — | — | — | — |
-| java | flightsql | — | — | — | — |
-| go | flightsql | — | — | — | — |
+| rust | flightsql | — | 1,283,196 | — | 1,313,905 |
+| csharp | flightsql | — | 1,236,047 | — | — |
+| java | flightsql | — | 1,186,500 | — | — |
+| go | flightsql | — | 1,202,181 | — | — |
 | python | ignite | — | 934,431 | — | — |
 | rust | ignite | — | — | — | — |
 | csharp | ignite | — | — | — | — |
 | java | ignite | — | — | — | — |
 | go | ignite | — | — | — | — |
 | python | dremio | — | 1,230,968 | — | — |
-| rust | dremio | — | — | — | — |
-| csharp | dremio | — | — | — | — |
-| java | dremio | — | — | — | — |
-| go | dremio | — | — | — | — |
+| rust | dremio | — | 922,869 | — | 1,295,987 |
+| csharp | dremio | — | 1,166,339 | — | — |
+| java | dremio | — | 985,335 | — | — |
+| go | dremio | — | 928,137 | — | — |
 | python | mariadb | 250,781 | 2,708,566 | — | — |
 | rust | mariadb | 230,053 | 2,696,451 | 211,672 | 2,904,183 |
 | csharp | mariadb | 245,182 | 2,713,388 | 31,094 | 645,194 |
@@ -313,30 +313,30 @@ driver default, the same setting every other language here runs with — not its
 | java | opengauss | 208,017 | 1,321,406 | — | — |
 | go | opengauss | 181,602 | 1,548,459 | — | — |
 | python | risingwave | 49,953 | 989,430 | — | — |
-| rust | risingwave | — | — | — | — |
-| csharp | risingwave | — | — | — | — |
-| java | risingwave | — | — | — | — |
-| go | risingwave | — | — | — | — |
+| rust | risingwave | 24,021 | 1,060,921 | 1,198 | 1,074,690 |
+| csharp | risingwave | 27,557 | 1,017,418 | — | 674,502 |
+| java | risingwave | 21,784 | 945,434 | — | — |
+| go | risingwave | 27,017 | 900,750 | — | — |
 | python | virtuoso | 10,029 | 968,528 | — | — |
 | rust | virtuoso | 20,457 | 828,959 | — | — |
 | csharp | virtuoso | 23,527 | 419,156 | 12,788 | 424,783 |
 | java | virtuoso | 9,948 | 978,832 | — | — |
 | go | virtuoso | 17,678 | 847,872 | — | — |
 | python | influxdb3 | — | 1,263,303 | — | — |
-| rust | influxdb3 | — | — | — | — |
-| csharp | influxdb3 | — | — | — | — |
-| java | influxdb3 | — | — | — | — |
-| go | influxdb3 | — | — | — | — |
+| rust | influxdb3 | — | 1,273,136 | — | 1,277,855 |
+| csharp | influxdb3 | — | 1,262,921 | — | — |
+| java | influxdb3 | — | 1,172,879 | — | — |
+| go | influxdb3 | — | 1,279,289 | — | — |
 | python | ydb | 1,669 | 572,099 | — | — |
 | rust | ydb | 1,731 | 642,348 | — | — |
 | csharp | ydb | 1,704 | 546,263 | — | — |
 | java | ydb | 1,597 | 600,205 | — | — |
 | go | ydb | 1,742 | 649,146 | — | — |
 | python | access | — | 2,119,999 | — | — |
-| rust | access | — | — | — | — |
-| csharp | access | — | — | — | — |
-| java | access | — | — | — | — |
-| go | access | — | — | — | — |
+| rust | access | — | 3,297,308 | — | — |
+| csharp | access | — | 3,124,349 | — | — |
+| java | access | — | 803,137 | — | — |
+| go | access | — | 2,576,841 | — | — |
 
 The postgres rows were re-measured with the databases above them and
 **supersede** the ones recorded before the write-path rework — that run read
@@ -393,11 +393,11 @@ path; the ADBC columns are still the real measurement.
 | **opensearch** | *Driver.* The OpenSearch SQL ODBC driver is read-only and refuses `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT)` too, so the four autocommit-off benchmarks cannot connect. There is no `CREATE TABLE`/`INSERT` in the SQL plugin either, so no ingest exists to time. |
 | **arcadedb**, **tdengine** | *Benchmark harness, and the entry.* Both entries are `read_only` — ArcadeDB has no `CREATE TABLE` (its DDL is `CREATE DOCUMENT TYPE` plus one `CREATE PROPERTY` per column) and every TDengine table must start with a `TIMESTAMP` primary key, which no generated DDL emits — so there is no create-mode ingest for any language. On top of that `bench/rust/conn.py` exports the entry's `setup` through the environment, and for these two `setup` *is* the literal bulk load (100,000 rows / 20,000 rows), so the benchmark binaries cannot even be exec'd: `Argument list too long` (E2BIG). |
 | **duckdb** (fetch, and every native column) | *The entry, plus the driver's model.* The compat entry connects with `Database=:memory:`, so **every ODBC connection is its own empty DuckDB**. The ingest step creates its table, fills it and checks the count inside one connection, so its number is real; the fetch step opens a fresh connection, where that table has never existed. All five bindings report the read as `[ODBC] SQLExecDirect failed`, and the driver's own text under it is `[42000] ODBC_DuckDB->PrepareStmt / Catalog Error: Table with name adbc_bench_rs does not exist!`. The native columns are `—` for exactly the same reason and not because the comparison was skipped: `System.Data.Odbc`, `database/sql` and `odbc-api` each carry the same `[42000] ODBC_DuckDB->PrepareStmt` out of their `SQLPrepare`/`SQLExecDirect`. |
-| **cratedb** (rust, csharp, java, go) | *Server, meeting the generated DDL.* These four harnesses always build the batch with a `date32` column, and bulk-ingest DDL takes its type names from psqlodbc's `SQLGetTypeInfo` — PostgreSQL's. CrateDB has no DATE storage type, so `CREATE TABLE "adbc_bench_rs" ("id" int4, "val" float8, "txt" text, "dt" date)` is refused with ``[XX000] ERROR: Type `date` does not support storage``, and every step after it fails with the table missing. The python row exists because `matrix_bench.py` applies the compat entry's `ingest_types` remap (`date32 -> timestamp[us]`) before it builds the batch. |
-| **spanner** (rust, csharp, java, go) | *Server, meeting the generated DDL.* The same shape one column over: Spanner has no 32-bit integer type and psqlodbc names `int4` for one, so `CREATE TABLE "adbc_bench_rs" ("id" int4, "val" float8, "txt" text, "dt" date, "adbc_ingest_key" bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY)` fails with `[P0001] ERROR: Type <int4> is not supported; use bigint or int8 instead.` Only `matrix_bench.py` applies the entry's `ingest_types` (`int32 -> int64`), so only the python row has numbers. (The primary key in that DDL is the driver's own doing — Spanner requires one — and is not what fails.) |
+| **cratedb** (go native) | *Harness gap, closed; one binding crash left.* The four non-python harnesses used to send a `date32` column whose generated DDL named PostgreSQL's `date`, which CrateDB has no storage type for (`XX000 Type \`date\` does not support storage`). They now apply the compat entry's `ingest_types` (`date32=timestamp_us`) and issue its `REFRESH TABLE` before every row count, the way `matrix_bench.py` always did, and all four have numbers. The go row ran with `-no-native`: with the `database/sql` comparison on, `bench_go` dies with a SIGSEGV in cgo before printing anything (register dump on stderr, no Go stack). |
+| **spanner** (csharp fetch; all native ingest) | *Harness gap, closed; one server rule; one open cell.* The four harnesses used to send an `int32` column whose generated DDL named psqlodbc's `int4`, which Spanner has not (`P0001 Type <int4> is not supported; use bigint or int8 instead`); they now apply the entry's `ingest_types` (`int32=int64`). Spanner also refuses DDL inside a transaction (`25000 DDL statements are not allowed in mixed batches or transactions`), so like ydb the four ran with `ADBC_BENCH_AUTOCOMMIT=1`. Rust, Java and Go then agree at 8,091–9,120 rows/s ingest and 250k–283k fetch, next to python's 7,870 / 205,396; Rust's `odbc-api` ingest reads back 0 rows because its `ColumnarBulkInserter` writes inside a transaction the autocommit connection never commits (as on sqlite). Go's first run failed with `Already Exists` on `CREATE TABLE` — the emulator had not finished the preceding `DROP TABLE` — and was clean on the retry that is recorded. **C#'s fetch is the open cell**: the first run reported an error the log truncated, the second did not finish inside the 600 s cap; not yet isolated. |
 | **ignite** | *Server.* Every Ignite table must have a primary key and a create-mode ingest generates none, so `CREATE TABLE adbc_bench_go (id INTEGER, val DOUBLE, txt VARCHAR, dt DATE)` is refused with `[42000] No PRIMARY KEY defined for CREATE TABLE.` — which is what the compat entry records as `ingest_create=False`. There is no ingest to time in any language, and with no table to read the four harnesses have no fetch either; the python fetch is the entry's pre-loaded `adbc_big`. |
-| **mongodbbi** | *Server, surfaced by the ODBC driver.* mongosqld has no transactions, so MySQL Connector/ODBC refuses `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT, OFF)` with `[HYC00] (4000) [MySQL][ODBC 9.4(w) Driver]Transactions are not enabled.` and the connection never opens — every step of the four autocommit-off benchmarks fails at connect, exactly as on greptimedb. The entry is `read_only` besides: mongosqld is a query engine with no DDL and no DML, so there is no ingest to time from any language. |
-| **flightsql**, **dremio** | *Driver.* Both are driven by the Arrow Flight SQL ODBC driver, which answers `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT)` with `[HYC00] (100) [Apache Arrow][Flight SQL] (100) Optional feature not implemented.`, so the four autocommit-off benchmarks cannot open a connection at all. Both entries are `read_only` for a second reason from the same driver — it has no `SQLBindParameter` — so no ingest could reach either server anyway. The python fetch is the entry's pre-loaded `adbc_big`. |
+| **mongodbbi** (all four native columns) | *Server, read-only.* mongosqld is a query engine with no `CREATE TABLE`/`INSERT`, so the entry is `read_only`: the four harnesses now take the fixture's 100,000-document `adbc_big` as the fetch table and skip the ingest steps, which is what python always did. Their *native* fetch is empty because each comparison reads the four-column bench shape (`id, val, txt, dt`) and `adbc_big` has other columns: Go `sql: expected 6 destination arguments in Scan, not 4`, C# `Unable to cast object of type 'System.String' to type 'System.Int32'`, Rust's `odbc-api` and `arrow-odbc` do read it (169,543 and 153,254 rows/s against ADBC's 164,089). |
+| **flightsql**, **dremio** (native columns) | *Driver, read-only.* The Arrow Flight SQL ODBC driver has no `SQLBindParameter` and answers `SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT)` with `[HYC00] (100) [Apache Arrow][Flight SQL] (100) Optional feature not implemented.`, so both are `read_only` entries: the harnesses fetch the pre-loaded 100,000-row `adbc_big` on an autocommit connection and skip ingest. All five languages now have a fetch number for both (1.19M–1.28M rows/s on sqlflite, 0.92M–1.17M on Dremio). Go's and C#'s native comparisons read the wrong column shape (`expected 5 destination arguments`, `Unable to cast System.Int64 to System.Int32`); Rust's `odbc-api` reads it, 1,313,905 and 1,295,987 rows/s. |
 | **monetdb** (all four, without `ADBC_BENCH_AUTOCOMMIT=1`) | *Driver.* MonetDBODBClib's `SQLEndTran` is a no-op. With autocommit off the ingest returns a rate (rust measured 189,937 rows/s) and its row-count check passes on the connection that wrote the rows, but the next connection finds nothing: `ERROR [42S02] [MonetDB][ODBC Driver 11.55.7]INSERT INTO: no such table 'adbc_bench_cs'`, `... SELECT: no such table 'adbc_bench_cs'`. The four monetdb rows above were therefore taken with `ADBC_BENCH_AUTOCOMMIT=1`, which is the autocommit-on setting `matrix_bench.py` — and so the python row — uses everywhere. |
 | **monetdb** (rust native) | *Client.* `odbc-api` cannot open this DSN at all: `ODBC emitted an error calling 'SQLDriverConnect': State: IM005, Native error: 0, Message: [unixODBC][Driver Manager]Driver's SQLAllocHandle on SQL_HANDLE_DBC failed`. The bridge, pyodbc, `System.Data.Odbc` and `database/sql` all reach the same MonetDBODBClib through the same unixODBC. |
 | **mssql**, **percona**, **columnstore**, **yugabyte**, **monetdb** (go native) | *Binding.* `bench_go` dies before it prints anything, so each of these was re-run with `-no-native`, which keeps both ADBC columns and leaves the `database/sql` ones empty. Two shapes, neither in the driver's path. On mssql, percona and monetdb it is arrow-go's own finalizer: `SIGSEGV … signal arrived during cgo execution` on the finalizer goroutine, in `cdata.initReader.func2 -> _Cfunc_ArrowArrayStreamRelease`, while the main goroutine sits in the `database/sql` step (`odbcFetch` for the first two, the closing cleanup connect for monetdb) — an `ArrowArrayStream` from an earlier ADBC read being finalised long after the step that produced it. On yugabyte it is psqlodbc: SIGSEGV under `alexbrainman/odbc`'s `(*Stmt).Close -> (*ODBCStmt).releaseHandle` while closing the prepared `INSERT`, the same crash the questdb row above records. On columnstore it is maodbc: `double free or corruption (!prev)`, SIGABRT, in `rows.Close` at the end of the `database/sql` read. |
@@ -416,10 +416,10 @@ path; the ADBC columns are still the real measurement.
 | **informix** (csharp native fetch, rust arrow-odbc) | *Driver.* Informix is reached through the same Db2 `clidriver` `libdb2.so`, built with a 32-bit `SQLLEN`: `System.Data.Odbc` raises `Arithmetic operation resulted in an overflow.` and `arrow-odbc` panics with `Failed to retrieve data type from ODBC driver. The SQLLEN could not be converted to a 16 Bit integer`. The bridge detects that layout itself (`adbc.odbc.sqllen_32bit`) and reads the same result set fine, which is why only the comparison columns are empty. |
 | **citus**, **opengauss**, **virtuoso** (go native) | *Driver/client.* `alexbrainman/odbc` takes the process down from the plain-ODBC path in all three: citus prints `malloc_consolidate(): invalid chunk size` and then `SIGSEGV … signal arrived during cgo execution` inside `SQLFreeHandle` ← `ODBCStmt.closeByRows` ← `Rows.Close`, which is the same signature as the questdb row above; opengauss segfaults in cgo during the `database/sql` read at `main.go:345`. All three were re-run with `-no-native`, which keeps the ADBC columns. |
 | **virtuoso** (rust native) | *Driver.* `odbc-api`'s array-bound insert gets a bare `ODBC emitted an error calling 'SQLExecute':` from `virtodbc.so`, and both of its reads return `read 0 rows, expected 100000` from a `SELECT` the ADBC path drains in full. |
-| **risingwave** (rust, csharp, java, go) | *Server semantics, and the harness has no hook for them.* RisingWave makes committed rows visible to a scan only after a `FLUSH`; the compat entry carries `refresh="FLUSH"` and `matrix_bench.py` issues it after every ingest, which is why the python row is the only one here. The four language harnesses have no refresh step, so each fails its row-count check straight after `COMMIT` — `wrong row count 0 != 10000` on the ingest and `wrong row count 62500 != 100000` on the fetch table, the count climbing between runs as the stream catches up. `ADBC_BENCH_AUTOCOMMIT=1` does not help; it is not a transaction problem. |
-| **influxdb3** | *Server.* A `read_only` entry: InfluxDB 3's SQL has no DDL. With autocommit off the connection is refused outright (`NotImplemented: [ODBC] SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT) failed`, the Arrow Flight SQL ODBC driver again); with `ADBC_BENCH_AUTOCOMMIT=1` it connects and the ingest's DDL is refused instead — `CREATE TABLE "adbc_bench_rs_b2" ("id" INTEGER, "val" FLOAT, "txt" VARCHAR, "dt" TIMESTAMP) failed`. The four harnesses read back the table they ingest, so with no ingest there is no fetch either, and only the python cell — `matrix_bench.py`'s `read_only` path over the pre-loaded `adbc_big`, 100,000 rows — is measurable. |
+| **risingwave** (go native, csharp native ingest) | *Harness gap, closed.* RisingWave makes committed rows visible to a scan only after `FLUSH`; the compat entry carries `refresh="FLUSH"`, and the four harnesses now run it before every row count as `matrix_bench.py` does, so all four have numbers (21,784–27,557 rows/s ingest, 0.90M–1.06M fetch, all within noise of python's 49,953 / 989,430 given the 4.9–5.7 load they ran at). The go row is `-no-native` — the same cgo SIGSEGV as on cratedb — and C#'s native ingest fails with `ERROR [XX000] ERROR: Failed to prepare the statement` from `System.Data.Odbc`'s prepared `INSERT`. |
+| **influxdb3** (native columns) | *Server, read-only.* InfluxDB 3's SQL has no DDL, so the entry is `read_only` and the harnesses read the pre-loaded 100,000-point `adbc_big` instead of ingesting; all five languages land within 1.17M–1.28M rows/s. The four native fetch comparisons read the wrong column shape (Go `expected 3 destination arguments in Scan, not 4`, C# `Unable to cast System.Int64 to System.Int32`); Rust's `odbc-api` reads it at 1,277,855 rows/s, `arrow-odbc` at 1,142,367. |
 | **ydb** (ran with `ADBC_BENCH_AUTOCOMMIT=1` and `-no-native`) | *Server.* YDB requires a primary key, so the bridge's create-mode DDL appends one; its PostgreSQL layer will not run that inside an open transaction and answers `[ODBC] CREATE TABLE "adbc_bench_rs_b2" ("id" INTEGER, "val" DOUBLE, "txt" TEXT, "dt" DATE, adbc_pk SERIAL PRIMARY KEY) failed`. With autocommit on it takes it, and all five languages land within 1,597–1,742 rows/s of each other. `-no-native` as well because the row-at-a-time comparison alone overran the 600 s cap in rust, go and C#; that is why the native columns are empty. |
-| **access** | *Driver, and the benchmark harness.* The `mdbtools` ODBC driver is read-only, so there is no create-mode ingest — but the four language harnesses do not even connect: `[ODBC] SQLDriverConnect failed`. `tests/compat/test_matrix.py` makes a fresh `mkdtemp()` per process and the entry's `DBQ=` names `access.mdb` inside it, and only `matrix_bench.py` and the compat runner copy `tests/compat/fixtures/access.mdb` there — `bench/rust/conn.py` exports the connection string without copying the fixture, so the file the four harnesses point at does not exist. The python cell is the `read_only` path again, and its 100,000 is really the fixture's **3,000**-row `adbc_big`; it is comparable with itself across runs, not with the other rows. |
+| **access** (native columns) | *Driver, read-only; and a number that is not a throughput.* The `mdbtools` driver is read-only, so the fetch reads the fixture's `adbc_big` — which holds **3,000** rows. The four harnesses used to fail to connect because `bench/rust/conn.py` named a fixture it never copied; it copies it now. The fetch figures (0.8M–3.3M rows/s) are 3,000 rows in about a millisecond, timer resolution rather than a rate; read them as "works", not as a speed. Native fetch: mdbtools has no `SQLPrepare` (`IM001 Driver does not support this function` for Go) and Rust's `odbc-api` trips on `SQLSetStmtAttr` (`HY092 Invalid attribute/option identifier`). |
 
 **Oracle's fetch column used to be empty, and what filling it costs.** It was
 `—` in all five languages because the read *crashed the process*: any row-array
@@ -497,3 +497,13 @@ read 1.83M, 1.69M, 1.83M, 1.86M and 1.81M — and the cross-language agreement i
 steadier still: on ydb all five languages land within 1,597–1,742 rows/s of
 ingest and 546k–649k of fetch, and on starrocks within 4,764–4,828 rows/s of
 ingest. That agreement, not any single number, is what this table is for.
+
+A fourth pass the same afternoon (build `ad44c27`, load average 3.3–5.7 with eight
+servers up) filled the cells the harnesses themselves had been leaving empty:
+**cratedb**, **risingwave**, **access**, **influxdb3**, **flightsql**, **dremio** and
+**mongodbbi** in rust, csharp, java and go, after the harnesses learned the compat
+entry's `ingest_types`, its `refresh` statement and its read-only fixture table. Its
+sqlite control read 445,935 / 609,114 / 564,968 / 568,728 rows/s of ADBC ingest for
+rust / go / java / csharp — 40–55% under the quiet-host rows above, which is the
+load, and one more reason to read this table for cross-language agreement rather
+than absolute rate.

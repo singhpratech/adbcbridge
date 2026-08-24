@@ -125,12 +125,17 @@ lang_record() {
         FNR == NR {
             if (index($0, key) == 1) { have = 1 }
             else if ($0 ~ /^\| [a-z]+ \| [a-z0-9]+ \|/ && !seen_heading) { last = FNR }
+            # A file with no rows yet: the results table header separator is
+            # the line to insert after.
+            if (!last && sep && $0 ~ /^\|---/) { last = FNR; sep = 0 }
+            if ($0 ~ /^\| Language \| Database \|/) { sep = 1 }
             if (last && $0 ~ /^## /) { seen_heading = 1 }
             next
         }
         index($0, key) == 1 { print row; next }
         { print }
-        !have && FNR == last { print row }
+        !have && FNR == last { print row; have = 1 }
+        END { if (!have) print row }
     ' "$LANG_OUT" "$LANG_OUT" > "$tmp"
     mv "$tmp" "$LANG_OUT"
 }
