@@ -56,8 +56,12 @@ case "$(uname -s)" in
 esac
 
 # Arrow's off-heap allocator needs this on JDK 17+, as tests/java documents.
+# On Windows the JVM's default encoding is the ANSI code page (Cp1252), and the
+# em dash the bench prints for a missing JDBC column reached the file as one byte
+# (0xE3) -- the row was no longer UTF-8. Both properties pin it everywhere.
 run() {
-    "$JAVA" --add-opens=java.base/java.nio=ALL-UNNAMED -cp "$CLASSPATH" \
+    "$JAVA" --add-opens=java.base/java.nio=ALL-UNNAMED \
+        -Dstdout.encoding=UTF-8 -Dfile.encoding=UTF-8 -cp "$CLASSPATH" \
         org.adbcbridge.bench.Bench "$@"
 }
 
