@@ -56,24 +56,27 @@ SQLRETURN SQL_API SQLGetDiagRec(SQLSMALLINT handle_type, SQLHANDLE handle, SQLSM
 SQLRETURN SQL_API SQLGetDiagRecW(SQLSMALLINT handle_type, SQLHANDLE handle, SQLSMALLINT rec,
                                  SQLWCHAR* sqlstate, SQLINTEGER* native, SQLWCHAR* msg,
                                  SQLSMALLINT buflen, SQLSMALLINT* msg_len) {
-  static char narrow[SQL_MAX_MESSAGE_LENGTH * 4];
+  // The same buffer length the caller gave, so the narrow fake's rules -- truncation,
+  // the reported untruncated length, the "second, bigger fetch fails" switch -- apply
+  // to the W path exactly as they do to the narrow one.  The messages are ASCII, so a
+  // byte is a unit.
+  size_t cap = buflen > 0 ? (size_t)buflen : 1;
+  char* narrow = malloc(cap);
   SQLCHAR state[6] = {0};
   SQLSMALLINT full = 0;
-  // The narrow fake with a buffer wide enough for the whole message: `full` is then
-  // the untruncated length, exactly as a real driver reports it.
   SQLRETURN r = SQLGetDiagRec(handle_type, handle, rec, state, native, (SQLCHAR*)narrow,
-                              (SQLSMALLINT)sizeof(narrow), &full);
-  if (!SQL_SUCCEEDED(r)) return r;
-  if (sqlstate) {
-    for (int i = 0; i < 6; i++) sqlstate[i] = (SQLWCHAR)state[i];
+                              (SQLSMALLINT)cap, &full);
+  if (SQL_SUCCEEDED(r)) {
+    if (sqlstate) {
+      for (int i = 0; i < 6; i++) sqlstate[i] = (SQLWCHAR)state[i];
+    }
+    size_t have = strlen(narrow);
+    for (size_t i = 0; i < have; i++) msg[i] = (SQLWCHAR)(unsigned char)narrow[i];
+    if (buflen > 0) msg[have] = 0;
+    if (msg_len) *msg_len = full;
   }
-  size_t have = strlen(narrow);
-  size_t room = buflen > 0 ? (size_t)buflen - 1 : 0;
-  size_t written = have < room ? have : room;
-  for (size_t i = 0; i < written; i++) msg[i] = (SQLWCHAR)(unsigned char)narrow[i];
-  if (buflen > 0) msg[written] = 0;
-  if (msg_len) *msg_len = full;
-  return written < have ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+  free(narrow);
+  return r;
 }
 #endif
 

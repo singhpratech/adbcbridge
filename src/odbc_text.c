@@ -237,21 +237,33 @@ SQLRETURN OdbcColAttributeStrUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, SQLUSMALLINT
 SQLRETURN OdbcGetDiagRecUtf8(SQLSMALLINT handle_type, SQLHANDLE handle, SQLSMALLINT rec,
                              SQLCHAR* state, SQLINTEGER* native, char* msg, SQLSMALLINT cap,
                              SQLSMALLINT* len) {
+  // The wide buffer is as long as the caller's: OdbcSetError re-fetches a truncated
+  // record into a buffer sized from the reported length, and that second call must
+  // be able to bring the whole message back.
   SQLWCHAR wstate[6] = {0};
-  SQLWCHAR wmsg[SQL_MAX_MESSAGE_LENGTH];
+  SQLWCHAR local[SQL_MAX_MESSAGE_LENGTH];
+  size_t wcap = cap > 0 ? (size_t)cap : 1;
+  SQLWCHAR* wmsg = local;
+  if (wcap > sizeof(local) / sizeof(local[0])) {
+    wmsg = malloc(wcap * sizeof(SQLWCHAR));
+    if (!wmsg) return SQL_ERROR;
+  }
   SQLSMALLINT wlen = 0;
-  SQLRETURN r = SQLGetDiagRecW(handle_type, handle, rec, wstate, native, wmsg,
-                               (SQLSMALLINT)(sizeof(wmsg) / sizeof(wmsg[0])), &wlen);
+  SQLRETURN r = SQLGetDiagRecW(handle_type, handle, rec, wstate, native, wmsg, (SQLSMALLINT)wcap,
+                               &wlen);
   if (SQL_SUCCEEDED(r)) {
     if (state) {
       for (int i = 0; i < 5; i++) state[i] = (SQLCHAR)wstate[i];
       state[5] = 0;
     }
     size_t units = wlen < 0 ? 0 : (size_t)wlen;
-    if (units >= sizeof(wmsg) / sizeof(wmsg[0])) units = sizeof(wmsg) / sizeof(wmsg[0]) - 1;
+    if (units >= wcap) units = wcap - 1;
     SQLSMALLINT full = FromW(wmsg, units, msg, (size_t)cap);
-    if (len) *len = full;
+    // The length the driver reported is the untruncated one; keep it that way so the
+    // caller knows to re-fetch, exactly as with the narrow call.
+    if (len) *len = (SQLSMALLINT)(wlen > full ? wlen : full);
   }
+  if (wmsg != local) free(wmsg);
   return r;
 }
 
