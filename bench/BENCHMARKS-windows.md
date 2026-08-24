@@ -153,6 +153,22 @@ Three harness defects the first Windows run found, all fixed on main:
 3. Every runner defaulted to `python3`, which Windows does not install; they fall back to
    `python` now.
 
+### Microsoft Access, Excel and Text drivers: 32-bit Office, 64-bit process
+
+The ACE drivers on this machine (Access, Excel, Text) are 32-bit — they arrive with a
+32-bit Office install — and a 64-bit process cannot load them. Microsoft's 64-bit Access
+Database Engine redistributable refuses to install alongside 32-bit Office, so the only
+route to those three from x64 adbcbridge is to replace Office, and the alternative — a
+32-bit adbcbridge build with a 32-bit Python — is out of scope: the project targets 64-bit
+systems. Recorded as *driver unavailable on x64* for `access`, and the two Windows-only
+entries that were on the list (the Excel driver, the Text driver for CSV) are unreachable
+for the same reason. Anyone with 32-bit Office and a 64-bit client hits exactly this, which
+is a common configuration; it is a platform constraint, not a coverage gap.
+
+The Win32 *build* is still verified: `ctest` 7/7 in Debug, 6/7 in Release (the `/Ob2`
+inlining case recorded above), so the x86 evidence is about the code, with no database row
+behind it.
+
 ### Getting servers and drivers onto Windows
 
 Not "run the installer": what actually worked on this box, 2026-08-24.
