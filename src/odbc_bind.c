@@ -1967,7 +1967,7 @@ static bool ArrayIngestServerOk(struct OdbcConnection* conn) {
   if (SQL_SUCCEEDED(OdbcExecDirectUtf8(hstmt, kProbe)) &&
       SQL_SUCCEEDED(SQLFetch(hstmt))) {
     SQLLEN ind = 0;
-    if (SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_CHAR, answer, (SQLLEN)sizeof(answer), &ind)) &&
+    if (SQL_SUCCEEDED(OdbcGetDataStrUtf8(hstmt, 1, answer, sizeof(answer), &ind, false)) &&
         ind != SQL_NULL_DATA) {
       ok = strcmp(answer, kExpected) == 0;
     }
@@ -2884,8 +2884,8 @@ static bool TypeNameOne(SQLHDBC hdbc, const struct OdbcReaderOptions* opts, SQLS
   if (SQL_SUCCEEDED(SQLGetTypeInfo(hstmt, sql_type)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
     char name[256] = {0}, params[256] = {0};
     SQLLEN ind1 = 0, ind2 = 0;
-    OdbcGetData(hstmt, 1, SQL_C_CHAR, name, sizeof(name), &ind1, q);
-    OdbcGetData(hstmt, 6, SQL_C_CHAR, params, sizeof(params), &ind2, q);  // CREATE_PARAMS
+    OdbcGetDataStrUtf8(hstmt, 1, name, sizeof(name), &ind1, q);
+    OdbcGetDataStrUtf8(hstmt, 6, params, sizeof(params), &ind2, q);  // CREATE_PARAMS
     if (ind1 > 0) {
       // Some drivers return names with embedded parameters, e.g. "NUMBER(19,0)" or
       // "decimal(p,s)"; strip anything from '(' so we can apply our own parameters.
@@ -3118,7 +3118,7 @@ static void IngestTableExists(struct OdbcConnection* conn, const char* catalog, 
     char buf[512];
     SQLLEN ind = 0;
     while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-      if (SQL_SUCCEEDED(SQLGetData(hstmt, 3, SQL_C_CHAR, buf, sizeof(buf), &ind)) &&
+      if (SQL_SUCCEEDED(OdbcGetDataStrUtf8(hstmt, 3, buf, sizeof(buf), &ind, false)) &&
           ind != SQL_NULL_DATA && EqualsIgnoreCase(buf, table)) {
         *exists = true;
         break;
@@ -3148,7 +3148,7 @@ static AdbcStatusCode IngestCheckAppendable(struct OdbcConnection* conn, const c
     char buf[512];
     SQLLEN ind = 0;
     while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-      if (!SQL_SUCCEEDED(SQLGetData(hstmt, 4, SQL_C_CHAR, buf, sizeof(buf), &ind)) ||
+      if (!SQL_SUCCEEDED(OdbcGetDataStrUtf8(hstmt, 4, buf, sizeof(buf), &ind, false)) ||
           ind == SQL_NULL_DATA)
         continue;
       if (n == cap) {

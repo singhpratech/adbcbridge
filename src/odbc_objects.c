@@ -29,8 +29,7 @@ static char* GetStrCol(const struct OdbcConnection* conn, SQLHSTMT hstmt, SQLUSM
   // without writing so much as the terminator.
   char buf[2048] = {0};
   SQLLEN ind = 0;
-  SQLRETURN ret = OdbcGetData(hstmt, col, SQL_C_CHAR, buf, sizeof(buf), &ind,
-                              conn->reader_opts.sqllen_32bit);
+  SQLRETURN ret = OdbcGetDataStrUtf8(hstmt, col, buf, sizeof(buf), &ind, conn->reader_opts.sqllen_32bit);
   if (!SQL_SUCCEEDED(ret) || ind == SQL_NULL_DATA) return NULL;
   return strdup(buf);
 }

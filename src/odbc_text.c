@@ -93,6 +93,11 @@ SQLRETURN OdbcForeignKeysUtf8(SQLHSTMT hstmt, const char* fcat, SQLSMALLINT fcat
                         (SQLCHAR*)fsch, fsch_len, (SQLCHAR*)ftbl, ftbl_len);
 }
 
+SQLRETURN OdbcGetDataStrUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* buf, size_t cap,
+                             SQLLEN* ind, bool sqllen_32bit) {
+  return OdbcGetData(hstmt, col, SQL_C_CHAR, buf, (SQLLEN)cap, ind, sqllen_32bit);
+}
+
 #else  // _WIN32
 
 // UTF-8 -> UTF-16 units.  Self-contained rather than OdbcUtf8ToUtf16Into (odbc_bind.c),
@@ -305,6 +310,38 @@ SQLRETURN OdbcForeignKeysUtf8(SQLHSTMT hstmt, const char* fcat, SQLSMALLINT fcat
   SQLRETURN r = SQLForeignKeysW(hstmt, NULL, 0, NULL, 0, NULL, 0, fcat_w, fcat_wlen, fsch_w,
                                 fsch_wlen, ftbl_w, ftbl_wlen);
   free(fcat_w); free(fsch_w); free(ftbl_w);
+  return r;
+}
+
+SQLRETURN OdbcGetDataStrUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* buf, size_t cap,
+                             SQLLEN* ind, bool sqllen_32bit) {
+  // SQL_C_WCHAR, then UTF-8: a narrow SQLGetData would come back in the ANSI code page.
+  SQLWCHAR local[1024];
+  SQLWCHAR* w = local;
+  size_t wcap = cap ? cap : 1;
+  if (wcap > sizeof(local) / sizeof(local[0])) {
+    w = malloc(wcap * sizeof(SQLWCHAR));
+    if (!w) return SQL_ERROR;
+  }
+  SQLLEN wind = 0;
+  SQLRETURN r = OdbcGetData(hstmt, col, SQL_C_WCHAR, w, (SQLLEN)(wcap * sizeof(SQLWCHAR)), &wind,
+                            sqllen_32bit);
+  if (SQL_SUCCEEDED(r)) {
+    if (wind == SQL_NULL_DATA) {
+      if (cap) buf[0] = '\0';
+      if (ind) *ind = SQL_NULL_DATA;
+    } else {
+      // wind is the byte length the driver reports (possibly untruncated); what was
+      // written is at most wcap-1 units.
+      size_t units = 0;
+      while (units < wcap - 1 && w[units]) units++;
+      FromW(w, units, buf, cap);
+      if (ind) *ind = (SQLLEN)strlen(buf);
+    }
+  } else if (cap) {
+    buf[0] = '\0';
+  }
+  if (w != local) free(w);
   return r;
 }
 

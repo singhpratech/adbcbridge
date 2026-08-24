@@ -675,6 +675,10 @@ SQLRETURN OdbcColumnsUtf8(SQLHSTMT hstmt, const char* cat, SQLSMALLINT cat_len, 
 SQLRETURN OdbcPrimaryKeysUtf8(SQLHSTMT hstmt, const char* cat, SQLSMALLINT cat_len,
                               const char* sch, SQLSMALLINT sch_len, const char* tbl,
                               SQLSMALLINT tbl_len);
+// A character column read with SQLGetData, as UTF-8: SQL_C_CHAR on unixODBC/iODBC,
+// SQL_C_WCHAR converted on Windows.  `ind` gets SQL_NULL_DATA or the UTF-8 byte length.
+SQLRETURN OdbcGetDataStrUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* buf, size_t cap,
+                             SQLLEN* ind, bool sqllen_32bit);
 SQLRETURN OdbcForeignKeysUtf8(SQLHSTMT hstmt, const char* fcat, SQLSMALLINT fcat_len,
                               const char* fsch, SQLSMALLINT fsch_len, const char* ftbl,
                               SQLSMALLINT ftbl_len);

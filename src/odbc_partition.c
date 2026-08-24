@@ -439,7 +439,7 @@ static bool SplitTableRef(const char* ref, size_t len, struct OdbcTableRef* out)
 static bool GetDataString(SQLHSTMT hstmt, SQLUSMALLINT col, char* buf, size_t cap) {
   SQLLEN ind = 0;
   buf[0] = '\0';
-  SQLRETURN ret = SQLGetData(hstmt, col, SQL_C_CHAR, buf, (SQLLEN)cap, &ind);
+  SQLRETURN ret = OdbcGetDataStrUtf8(hstmt, col, buf, cap, &ind, false);
   if (!SQL_SUCCEEDED(ret) || ind == SQL_NULL_DATA) return false;
   // SQL_SUCCESS_WITH_INFO here means truncation, which for an identifier means the
   // driver's name is longer than we are willing to carry.

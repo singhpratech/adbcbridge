@@ -474,7 +474,7 @@ static void OdbcServerScalarString(SQLHDBC hdbc, const char* sql, char* out, siz
   if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return;
   if (SQL_SUCCEEDED(OdbcExecDirectUtf8(hstmt, sql)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
     SQLLEN ind = 0;
-    if (!SQL_SUCCEEDED(SQLGetData(hstmt, 1, SQL_C_CHAR, out, (SQLLEN)out_size, &ind)) ||
+    if (!SQL_SUCCEEDED(OdbcGetDataStrUtf8(hstmt, 1, out, out_size, &ind, false)) ||
         ind == SQL_NULL_DATA) {
       out[0] = '\0';
     }
@@ -1075,6 +1075,13 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
                                       strstr(n, "db2o.") == NULL) ||
                                      strstr(n, "mdbtools") != NULL;
   }
+#if defined(_WIN32)
+  // wchar_as_utf8 steers a driver whose SQLWCHAR is not UTF-16 onto the narrow path,
+  // "which is UTF-8".  On Windows the narrow path is the ANSI code page, never UTF-8,
+  // and SQLWCHAR is two bytes by definition, so the quirk's premise does not hold:
+  // it stays off here whatever the driver.
+  conn->reader_opts.wchar_as_utf8 = false;
+#endif
 }
 
 // --- Connection-keyword auto-tuning (ADBC_ODBC_OPTION_TUNE) -----------------
@@ -1419,8 +1426,7 @@ static AdbcStatusCode OdbcConnectionGetTableTypes(struct AdbcConnection* connect
   char seen[16][sizeof(buf)];
   int seen_count = 0;
   while (SQL_SUCCEEDED(SQLFetch(hstmt))) {
-    if (SQL_SUCCEEDED(OdbcGetData(hstmt, 4, SQL_C_CHAR, buf, sizeof(buf), &ind,
-                                  conn->reader_opts.sqllen_32bit)) &&
+    if (SQL_SUCCEEDED(OdbcGetDataStrUtf8(hstmt, 4, (char*)buf, sizeof(buf), &ind, conn->reader_opts.sqllen_32bit)) &&
         ind != SQL_NULL_DATA) {
       if (from_listing) {
         bool dup = false;

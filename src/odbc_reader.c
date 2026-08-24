@@ -664,10 +664,22 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       c->elem_size = (SQLLEN)c->column_size;
       ApplyBindWidth(c, opts);
       break;
+#if defined(_WIN32)
+    // The Windows driver manager transcodes SQL_C_CHAR data to the process's ANSI code
+    // page -- "héllo" becomes bytes that are not UTF-8, anything outside the code page
+    // becomes '?' -- so on Windows every character column is read as SQL_C_WCHAR and
+    // converted here, whatever the driver calls it.  unixODBC and iODBC pass narrow
+    // bytes through untouched, which is what the SQL_C_CHAR path below relies on.
+    // (First seen on psqlodbc against a UTF8 database on Windows 11.)
+    case SQL_CHAR:
+    case SQL_VARCHAR:
+    case SQL_LONGVARCHAR:
+    default:
+#endif
     case SQL_WCHAR:
     case SQL_WVARCHAR:
     case SQL_WLONGVARCHAR:
-      if (opts->wchar_as_utf8) {  // see OdbcReaderOptions::wchar_as_utf8
+      if (opts->wchar_as_utf8) {  // see OdbcReaderOptions::wchar_as_utf8 (never on Windows)
         c->kind = FETCH_CHAR; c->c_type = SQL_C_CHAR;
         c->elem_size = (SQLLEN)c->column_size * 4 + 1;
         ApplyBindWidth(c, opts);
@@ -679,6 +691,7 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       // A capped SQL_C_WCHAR buffer still has to be a whole number of UTF-16 code units.
       c->elem_size -= c->elem_size % (SQLLEN)sizeof(SQLWCHAR);
       break;
+#if !defined(_WIN32)
     case SQL_CHAR:
     case SQL_VARCHAR:
     case SQL_LONGVARCHAR:
@@ -689,6 +702,7 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       c->elem_size = (SQLLEN)c->column_size * 4 + 1;
       ApplyBindWidth(c, opts);
       break;
+#endif
   }
 }
 
