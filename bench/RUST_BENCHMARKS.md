@@ -47,8 +47,6 @@ throughput to compare against the ADBC column.
 | postgres (PostgreSQL) | 482,822 | 77,045 | 6.3× | 2,078,465 | 2,091,423 | 1,951,012 | 1.0× |
 | mariadb (MariaDB) | 44,424 | 61,489 | 0.7× | 1,347,187 | 1,985,269 | 1,812,120 | 0.7× |
 | mysql (MySQL) | 5,076 | 5,734 | 0.9× | 867,101 | 1,242,873 | 1,108,492 | 0.7× |
-| mssql (Microsoft SQL Server) | 79,568 | 82,982 | 1.0× | 585,635 | 576,563 | 587,186 | 1.0× |
-| oracle (Oracle) | 24,730 | 456 | 54.2× | — | — | — | — |
 | db2 (DB2/LINUXX8664) | 35,952 | 209,563 | 0.2× | 1,610,567 | 6,527,260 | 4,602,507 | 0.2× |
 | cockroachdb (PostgreSQL) | 854 | 852 | 1.0× | 171,333 | 183,735 | 157,175 | 0.9× |
 | timescaledb (PostgreSQL) | 362,032 | 26,462 | 13.7× | 1,913,228 | 1,966,551 | 1,752,925 | 1.0× |
@@ -61,3 +59,19 @@ throughput to compare against the ADBC column.
 | firebird (Firebird) | — | — | — | — | — | — | — |
 | vertica (Vertica Database) | 117,441 | 264,453 | 0.4× | 657,974 | 955,205 | 832,010 | 0.7× |
 | opensearch (opensearch) | — | — | — | — | — | — | — |
+| mssql (Microsoft SQL Server) | 165,692 | 143,400 | 1.2× | 2,400,560 | 2,986,862 | 2,875,788 | 0.8× |
+| percona (MySQL) | 114,478 | 8,953 | 12.8× | 1,497,547 | 1,743,255 | 1,629,625 | 0.9× |
+| tidb (MySQL) | 69,693 | 4,549 | 15.3× | 1,418,597 | 1,570,622 | 1,661,157 | 0.9× |
+| oceanbase (MySQL) | 96,455 | 8,837 | 10.9× | 1,332,754 | 1,501,355 | 1,494,517 | 0.9× |
+| yugabyte (PostgreSQL) | 28,419 | 5,730 | 5.0× | 1,583,608 | 1,553,695 | 1,489,918 | 1.0× |
+| cloudberry (PostgreSQL) | 8,828 | 977 | 9.0× | 1,957,488 | 1,935,721 | 1,855,777 | 1.0× |
+| cratedb (PostgreSQL) | — | — | — | — | — | — | — |
+| spanner (PostgreSQL) | — | — | — | — | — | — | — |
+| monetdb (monetdb) | 110,307 | — | — | 1,418,697 | — | — | — |
+| duckdb (DuckDB) | 307,568 | — | — | — | — | — | — |
+| ignite (Apache Ignite) | — | — | — | — | — | — | — |
+| oracle (Oracle) | 30,547 | 1,853 | 16.5× | 103,686 | 136,334 | 145,299 | 0.8× |
+| mongodbbi (MySQL) | — | — | — | — | — | — | — |
+| flightsql (sqlflite) | — | — | — | — | — | — | — |
+| dremio (Dremio Server) | — | — | — | — | — | — | — |
+| columnstore (MariaDB) | 54,005 | 471,175 | 0.1× | 1,098,912 | 1,412,067 | 1,126,513 | 0.8× |
