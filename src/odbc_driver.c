@@ -645,6 +645,27 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // multi-row form, so keep arrays ahead of it (the multi-row form is still what runs
     // when the caller turns array binding off).
     conn->reader_opts.prefer_param_arrays = true;
+    // ... but not in Connector/ODBC 3.2 with Connector/C 3.4 underneath (first met on
+    // macOS: libmaodbc 03.02.0009 over Connector/C 3.4.9).  There a parameter array with
+    // a NULL DATE in any row after the first segfaults inside libmariadb's store_param
+    // against a MariaDB server (100% reproducible; arrays off, the same rows insert and
+    // read back), and against a MySQL 8 server -- no bulk protocol -- the array path
+    // reports the last parameter set's row count instead of the array's (2 for 4 rows,
+    // all 4 landed).  Both vanish with arrays off, so from 3.2 on this driver takes the
+    // multi-row INSERT path, which binds scalars.  3.1.15, the Linux matrix's build, is
+    // correct on arrays and faster with them, so it keeps them.
+    {
+      SQLCHAR ver[64] = {0};
+      SQLSMALLINT vlen = 0;
+      if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DRIVER_VER, ver, sizeof(ver), &vlen))) {
+        int major = 0, minor = 0;
+        if (sscanf((const char*)ver, "%d.%d", &major, &minor) == 2 &&
+            (major > 3 || (major == 3 && minor >= 2))) {
+          conn->reader_opts.prefer_param_arrays = false;
+          conn->reader_opts.no_param_arrays = true;
+        }
+      }
+    }
     // MariaDB Connector/ODBC reports SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER but
     // ignores SQLSetPos(SQL_POSITION): SQLGetData answers for the first row of the rowset
     // and returns SQL_NO_DATA for every other row, so re-reading a clipped value where it
