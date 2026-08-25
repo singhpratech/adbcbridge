@@ -140,6 +140,9 @@ prune -af` between entries.
 
 | mongodbbi | **FAIL** at the astral check only — fourth member of the class; mongosqld v2.14.22 over mongo:7, read-only, 125 MB | 97,643 | — | — | — |
 
+| clickhouse | PASS (`ClickHouse (via ODBC) 26.7.5.10`), clickhouse-odbc 1.5.5 from the GitHub MSI, server at 1 GB (97 MB used); pyodbc ingest at one HTTP request per row was at 3,501 rows after 15 min and was capped (`--pyodbc-timeout 120`) | 159,763 | 107,933 | 282 (516) | — |
+| doris | **server not runnable here**: 7 GB image against 5–10 GB free host disk, ~2.5 GB resident under a 6 GB cap, 2.4 GB VM — not attempted, since the pull would have filled the disk under Docker | | | | |
+
 **A class, not four incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone, mongodbbi. Everything else in
 their workloads passes, and their read rates are among the best on this machine.
 
