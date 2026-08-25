@@ -36,7 +36,7 @@ func main() {
 	// manager would take it: "Driver=...;Database=...;" or "DSN=...;".
 	db, err := adbcbridge.Open(ctx, memory.DefaultAllocator,
 		"Driver=SQLite3;Database=my.db;",
-		map[string]string{"adbc.odbc.prefetch": "on"}) // extra driver options, optional
+		map[string]string{"adbc.odbc.prefetch": "1"}) // extra driver options, optional
 	if err != nil {
 		panic(err)
 	}

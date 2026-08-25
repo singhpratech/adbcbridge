@@ -59,6 +59,18 @@ straight to `adbc_database_init("odbc", uri = ...)`; in Go the default load
 flags already enable the manifest search; in Rust and C# the load flags /
 `AdbcLoadFlags.Default` argument controls which directories are searched.
 
+## Documentation
+
+The full documentation lives under [`docs/`](docs/index.md) and is also rendered as a
+site with sidebar navigation (`mkdocs.yml` builds it from the same files):
+
+| | |
+|---|---|
+| Getting started | [Overview](docs/index.md) · [Linux](docs/getting-started/install-linux.md) · [macOS](docs/getting-started/install-macos.md) · [Windows](docs/getting-started/install-windows.md) · [First query](docs/getting-started/first-query.md) |
+| Languages | [Python](docs/languages/python.md) · [Rust](docs/languages/rust.md) · [.NET (C#)](docs/languages/csharp.md) · [Java](docs/languages/java.md) · [Go](docs/languages/go.md) · [C and C++](docs/languages/c.md) |
+| Reference | [Options](docs/reference/options.md) · [Connection strings](docs/reference/connection-strings.md) · [Type mapping](docs/reference/types.md) · [Driver quirks](docs/reference/quirks.md) · [Building](docs/reference/building.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) |
+| Project | [Compatibility](docs/COMPATIBILITY.md) · [Benchmarks](bench/README.md) · [Upstream](docs/UPSTREAM.md) · [Roadmap](docs/ROADMAP.md) · [FAQ](docs/community/faq.md) · [Contributing](docs/community/contributing.md) |
+
 ## Status
 
 Early (0.1.0). Working today:
@@ -109,7 +121,7 @@ exact host state of its runs (`bench/BENCHMARKS.md`, `bench/BENCHMARKS-macos.md`
 
 | Path | Time | Relative |
 |---|---:|---:|
-| **adbcbridge `fetch_arrow_table()`** | **0.48 s** | 1.0× |
+| **adbcBridge `fetch_arrow_table()`** | **0.48 s** | 1.0× |
 | pyodbc `fetchall()` → `pyarrow.Table` | 1.16 s | 2.4× slower |
 | pyodbc `fetchall()` → `pandas.DataFrame` | 1.32 s | 2.8× slower |
 | raw `SQLBindCol`+`SQLFetch`, no Arrow (floor) | 0.44 s | 0.93× |
@@ -118,9 +130,9 @@ The bridge runs within 7% of the raw ODBC floor; the remaining cost is the ODBC 
 
 That floor is also the ceiling for a single connection, so beating a native ADBC driver
 means doing work it does not: splitting one query across several connections. Against
-the native `adbc_driver_postgresql`, adbcbridge on one connection is 0.30–0.36× on 10 M
-rows; at eight partitions it reads 1 M rows **1.2–1.5× faster on a quiet host** and
-10 M rows 1.55× faster — mean of three, a fresh process per run, sides interleaved,
+the native `adbc_driver_postgresql`, adbcBridge on one connection is 0.36× on 10 M
+rows; at eight partitions it reads 1 M rows **1.2–1.5× faster on a quiet host**, and at
+twelve partitions 10 M rows 1.55× faster — mean of three, a fresh process per run, sides interleaved,
 every read checksum-compared against a reference. The same 1 M read on a host with
 46 idle containers came in at 0.97×, so the number to plan around is the low end, and
 bulk *ingest* does not clear parity at all (0.73–1.02×: an `INSERT` writes twice the
@@ -134,8 +146,8 @@ statement per row, inside a single transaction. K is probed against the driver �
 999-variable limit, ClickHouse preparing 500 row-groups and then refusing to execute them,
 and Oracle rejecting the multi-row form outright (it falls back to `INSERT ALL … SELECT 1
 FROM dual`) are all discovered at run time and remembered on the connection. It works on
-every driver that can bind a parameter, including the six that mishandle ODBC parameter
-arrays, and `adbc.odbc.rows_per_insert` overrides the choice. 10,000 rows, rows/s:
+every driver that can bind a parameter, including the five that mishandle ODBC parameter
+arrays (and MySQL Connector/ODBC, which accepts them and walks them row by row), and `adbc.odbc.rows_per_insert` overrides the choice. 10,000 rows, rows/s:
 
 | Database | one statement per row | multi-row |
 |---|---:|---:|
@@ -164,8 +176,8 @@ INSERT INTO t ("a", "b", "c", "d")
 
 That is one parameter per column however many rows the statement carries (10,000 by
 default), instead of one bound cell per value. On 1,000,000 four-column rows it takes the
-single-connection ingest from 2.75 s to 1.40 s and the sixteen-connection ingest from
-0.45 s to 0.34 s, with about a third less CPU on both sides. It is on by default and needs
+single-connection ingest from 2.33 s to 1.40 s and the sixteen-connection ingest from
+0.58 s to 0.34 s, with about a third less CPU on both sides. It is on by default and needs
 no option.
 
 It is deliberately narrow, because a wrongly quoted array literal is a data-corruption bug
@@ -258,7 +270,7 @@ much of the cost is the driver and how much is the language's driver manager.
 
 ## Compatibility matrix
 
-adbcbridge can reach anything with an ODBC driver — the ODBC ecosystem covers a few
+adbcBridge can reach anything with an ODBC driver — the ODBC ecosystem covers a few
 hundred data sources — but that is reachability, not verification. What has actually
 been verified is the table below: the same workload (types, NULLs, Unicode incl. emoji,
 parameters, bulk ingest, batched reads, GetObjects, error mapping) run through
@@ -280,7 +292,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | MySQL 8.4 | MySQL Connector/ODBC 9.4 (and MariaDB Connector/ODBC 3.1) | PASS |
 | Dolt 2.3.1 (MySQL 8.0.33 wire protocol) | MySQL Connector/ODBC 9.4 | PASS (no driver quirks; Dolt offers only `mysql_native_password`, which Connector/ODBC 9.x loads as a plugin — the entry points `PLUGIN_DIR` at the tarball's own `lib/plugin`) |
 | Percona Server 8.4 | MySQL Connector/ODBC 9.4 (MySQL wire protocol) | PASS (no quirks; a drop-in MySQL fork, so the `mysql` entry applies unchanged) |
-| CockroachDB 26.3 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; declare a PRIMARY KEY or the synthesised hidden `rowid` shows up in `GetObjects`) |
+| CockroachDB 26 | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; declare a PRIMARY KEY or the synthesised hidden `rowid` shows up in `GetObjects`) |
 | YugabyteDB 2026.1 (YSQL) | psqlodbc 16 (PostgreSQL wire protocol) | PASS (no quirks; YSQL is PostgreSQL 15, and its internal row id is a system column so `GetObjects` is unaffected) |
 | TiDB 7.5 | MySQL Connector/ODBC 9.4 (MySQL wire protocol) | PASS (no quirks; run from the tarball it needs `PLUGIN_DIR=` for the `mysql_native_password` client plugin TiDB's root account uses) |
 | MonetDB 11.55 (Dec2025-SP3) | MonetDBODBClib 11.55 | PASS (driver quirk handled: no usable parameter arrays — executes only the first set) |
@@ -310,7 +322,7 @@ is verified, what is queued, and what only exists as a hosted service.
 | Microsoft Access `.mdb`/`.accdb` | MDB Tools 1.0 (`odbc-mdbtools`) | PASS, read side only — the driver executes no DDL/DML and has no `SQLBindParameter` (32-bit `SQLLEN`, as Db2) |
 | ArcadeDB 26.9 (PostgreSQL wire protocol) | psqlodbc 16 (PostgreSQL wire protocol) | PASS, read side only — ArcadeDB has no `CREATE TABLE` at all (a table is a document type plus one `CREATE PROPERTY` per column), so `adbc_ingest`'s generated DDL has nowhere to go; queries, parameters and the catalog all work (driver quirks handled: psqlodbc's `SQLColumns` query is one ArcadeDB's parser rejects, and it answers success with an empty result, so `GetObjects` describes a zero-row SELECT instead; `SQLTables(SQL_ALL_TABLE_TYPES)` is likewise rejected, so `GetTableTypes` falls back to the types the server's own tables have. Server side: `BoolsAsChar=0`, timestamp literals only in ISO-8601 `T` form, and `@rid`/`@type`/`@cat` in every `SELECT *`) |
 | Apache Ignite 2.17 | Ignite ODBC (built from the C++ sources the image ships) | PASS (driver quirks handled: `SQLBindParameter` refuses `SQL_WVARCHAR` outright and the driver's `SQL_C_WCHAR` buffers are `wchar_t`-sized, so strings take the UTF-8 narrow path as for Firebird; its column-wise parameter arrays test the NULL indicator of row 0 for every row, so a NULL below the first row is sent as garbage and the node dies with an `OutOfMemoryError` — parameter arrays are off here. Apache publishes no prebuilt Linux driver: `platforms/cpp` is built root-free with `-DWITH_ODBC=ON -DWITH_CORE=OFF`, which needs no JVM. Server side: every table is a cache, so it must declare a `PRIMARY KEY` — the generated ingest DDL cannot, so `adbc_ingest(mode="create")` is impossible and the entry appends into a keyed table instead; identifiers fold to upper case and the driver reports no identifier quote character) |
-| OpenSearch 3.8 (SQL plugin, `/_plugins/_sql`) | OpenSearch SQL ODBC 1.6 (built from source — the project ships Windows and macOS binaries only) | PASS, read side only — the SQL plugin is a query interface (no `CREATE TABLE`, no `INSERT`: documents are written over the REST `_bulk` API) *and* the driver answers `SQLBindParameter` with "OpenSearch does not support parameters", so either reason alone makes the entry read-only (driver quirk handled: its **ANSI `SQLDriverConnect` cannot connect at all** — `CC_connect()` asks the server for the `SQL_ASCII` client encoding, which it does not support, unless `SQLDriverConnectW` set the unicode-driver flag first — and it fails with an empty diagnostic queue, so adbcbridge retries a connect that failed without saying why through `SQLDriverConnectW` — one that reported a real error, bad credentials say, is left alone. The Linux build itself needed three source fixes to a POSIX branch that had never been compiled, one of them a `sem_init()` given the semaphore's capacity as its initial count, which corrupts the result queue and segfaults on close. Server side: backtick identifiers, no `DECIMAL` and no binary type, and the driver's type table has no entry for the plugin's `timestamp`, so `ts` is described as a VARCHAR and read as text) |
+| OpenSearch 3.8 (SQL plugin, `/_plugins/_sql`) | OpenSearch SQL ODBC (built from source — the project ships Windows and macOS binaries only) | PASS, read side only — the SQL plugin is a query interface (no `CREATE TABLE`, no `INSERT`: documents are written over the REST `_bulk` API) *and* the driver answers `SQLBindParameter` with "OpenSearch does not support parameters", so either reason alone makes the entry read-only (driver quirk handled: its **ANSI `SQLDriverConnect` cannot connect at all** — `CC_connect()` asks the server for the `SQL_ASCII` client encoding, which it does not support, unless `SQLDriverConnectW` set the unicode-driver flag first — and it fails with an empty diagnostic queue, so adbcBridge retries a connect that failed without saying why through `SQLDriverConnectW` — one that reported a real error, bad credentials say, is left alone. The Linux build itself needed three source fixes to a POSIX branch that had never been compiled, one of them a `sem_init()` given the semaphore's capacity as its initial count, which corrupts the result queue and segfaults on close. Server side: backtick identifiers, no `DECIMAL` and no binary type, and the driver's type table has no entry for the plugin's `timestamp`, so `ts` is described as a VARCHAR and read as text) |
 | YDB 23.4 (PostgreSQL wire protocol) | psqlodbc 16 (PostgreSQL wire protocol) | PASS (driver quirks handled: every YDB table must declare a PRIMARY KEY, and no ingested column can be one -- a YDB key is implicitly NOT NULL -- so generated ingest DDL appends `adbc_pk SERIAL PRIMARY KEY`; `pg_catalog.pg_attribute` is empty, so psqlodbc's `SQLColumns` answers success with zero rows and `GetObjects` describes a zero-row SELECT instead. `version()` reports a plain PostgreSQL 16 banner, so both are keyed on the one thing that gives YDB away over ODBC: it answers `SHOW server_version` with that banner rather than a version number. Server side: its PG wire has no NULL bind parameter at all -- a `-1` parameter length is read as a zero-length value, silently storing `''` in a text column -- so the entry sets psqlodbc's `UseServerSidePrepare=0` and every NULL goes as a literal; the image ships no users and no environment variable for the PG feature flags, both of which the setup notes cover) |
 | Vertica 25.3 (OpenText Analytics Database) | Vertica ODBC 25.1 (`libverticaodbc.so`, native wire protocol) | PASS — the one entry that needed no tolerance flags at all: every workload type is a native Vertica type and round-trips exactly, emoji and microseconds included. Its own protocol on 5433 is not a PostgreSQL wire, despite the port and the shared ancestry. (Driver quirk handled: Vertica's parameter arrays are a single native bulk load and beat the default multi-row `INSERT` eightfold — 17.1k rows/s against 139k — so it opts into `prefer_param_arrays`, the flag MariaDB Connector/ODBC already uses. The driver also refuses to load without a `vertica.ini` of its own, whose `DriverManagerEncoding = UTF-16` is what matches unixODBC's 2-byte `SQLWCHAR`; its default is UTF-32. Server side: `vertica/vertica-ce` is gone from Docker Hub, so the matrix runs `opentext/vertica-k8s` and creates the database with `vcluster` itself, pinned to 25.x — Vertica 26.1 dropped Community Edition and refuses the licence its own image ships) |
 | TDengine 3.3.6 | taos-odbc (TDengine's own connector, built from source) | PASS, read side only — a TDengine table must start with a TIMESTAMP primary key that is non-NULL, distinct and inside the retention window, which neither the workload's positional `INSERT` nor `adbc_ingest`'s generated DDL can produce, so the entry reads tables its `setup` builds and bulk-ingests through `extra` into a timestamp-first table (driver quirks handled: no `SQL_C_TYPE_TIMESTAMP` conversion in either direction, so timestamp columns are read as text and timestamp parameters sent as text; a boolean parameter is taken only as `SQL_TINYINT`; the driver implements no `DECIMAL`, so that column is exact text) |
@@ -363,7 +375,7 @@ manifest points at its own copy of the library.
 ## Use by name (driver manifest)
 
 With the manifest installed somewhere the ADBC driver manager searches, every
-binding can load adbcbridge as simply `odbc`:
+binding can load adbcBridge as simply `odbc`:
 
 ```python
 import adbc_driver_manager.dbapi as dbapi
@@ -443,7 +455,7 @@ Options (set on the database):
 
 Some ODBC drivers have connection keywords whose good value depends on how the
 application reads a result set — something the driver cannot know and you should
-not have to. Where adbcbridge recognises the target driver it fills those in
+not have to. Where adbcBridge recognises the target driver it fills those in
 while it assembles the connection string, under three rules: a keyword **you**
 set (in the connection string or in the DSN) is never overridden, nothing that
 changes what a query returns is ever set, and `adbc.odbc.tune=false` turns the
@@ -453,7 +465,7 @@ The complete list today is one keyword:
 
 | driver | condition | what is added | why |
 |---|---|---|---|
-| psqlodbc (PostgreSQL and the ten other PostgreSQL-wire servers it drives) | you set `UseDeclareFetch=1` and no `Fetch` | `Fetch=8192` (`8 × adbc.odbc.batch_size`, clamped to 8192…65536) | `UseDeclareFetch=1` asks psqlodbc to stream the result set through a server-side cursor instead of buffering all of it client-side. Each `FETCH` then brings back `max(Fetch, rowset)` rows, so psqlodbc's default `Fetch=100` is inert — our rowset always wins it — and the cursor round-trips once per rowset. 1M rows of `(int4, float8, varchar(20), date)` at `batch_size` 1024: **0.70 s** at the default `Fetch` against **0.57 s** with this, which is exactly what the same read costs *not* streaming. Peak process RSS for that read is 158 MB streaming against 422 MB buffered |
+| psqlodbc (PostgreSQL and the ten other PostgreSQL-wire servers it drives) | you set `UseDeclareFetch=1` and no `Fetch` | `Fetch=8192` (`8 × adbc.odbc.batch_size`, clamped to 8192…65536) | `UseDeclareFetch=1` asks psqlodbc to stream the result set through a server-side cursor instead of buffering all of it client-side. Each `FETCH` then brings back `max(Fetch, rowset)` rows, so psqlodbc's default `Fetch=100` is inert — our rowset always wins it — and the cursor round-trips once per rowset. 1M rows of `(int4, float8, varchar(20), date)` at `batch_size` 1024: **0.72 s** at the default `Fetch` against **0.57 s** with this, which is exactly what the same read costs *not* streaming. Peak process RSS for that read is 158 MB streaming against 422 MB buffered |
 
 psqlodbc's other keywords were swept and are deliberately **not** set:
 `ByteaAsLongVarBinary`, `TextAsLongVarchar`, `MaxVarcharSize` and `UnknownSizes`
@@ -478,17 +490,17 @@ install.
 Some databases already have a first-class ADBC driver: PostgreSQL, SQLite,
 DuckDB, Snowflake, BigQuery, Flight SQL. Those drivers talk the wire protocol
 and build Arrow directly, so they are faster than anything that has to go
-through ODBC's row-oriented API — 1,000,000 PostgreSQL rows take 0.42 s through
-`adbc_driver_postgresql` and 1.00 s through adbcbridge over psqlodbc.
+through ODBC's row-oriented API — 1,000,000 PostgreSQL rows take 0.43 s through
+`adbc_driver_postgresql` and 0.7–1.0 s through adbcBridge over psqlodbc.
 
-So adbcbridge gets out of the way. When `AdbcDatabaseInit` recognizes a target
+So adbcBridge gets out of the way. When `AdbcDatabaseInit` recognizes a target
 that a native driver handles, it loads that driver, initializes it with the
 translated options, and from then on forwards every database, connection and
 statement call straight to it. Result sets are the native driver's own
 `ArrowArrayStream`, handed to the caller untouched: delegation costs one
 function-pointer hop per ADBC call and nothing at all per row, and delegated
 fetches measure the same as calling the native driver directly (0.43 s for the
-million rows above, against 0.43 s native and 0.7–0.9 s over psqlodbc).
+million rows above, against 0.43 s native and 0.7–1.0 s over psqlodbc).
 
 | target | delegated to |
 |---|---|
@@ -506,7 +518,7 @@ million rows above, against 0.43 s native and 0.7–0.9 s over psqlodbc).
 Rebuilding a native URI out of an ODBC connection string is only safe if every
 keyword is accounted for. Dropping `SSLmode=verify-full` would turn a verified
 TLS session into libpq's default (`sslmode=prefer`, no certificate check)
-without a word to anyone, so adbcbridge does not drop anything:
+without a word to anyone, so adbcBridge does not drop anything:
 
 * **Consumed**: `Driver`, `DSN`, `Server`/`Servername`/`Host`, `Port`,
   `Database`/`DB`/`Dbname`, `Uid`/`User`/`Username`, `Pwd`/`Password`.
@@ -564,7 +576,7 @@ run: setting them afterwards is `INVALID_STATE`, not a silent no-op.
 
 ### Finding the native driver
 
-adbcbridge never links against the ADBC driver manager (that would be a
+adbcBridge never links against the ADBC driver manager (that would be a
 circular dependency); it resolves `AdbcLoadDriver` from whichever manager is
 already in the process and looks in, in order: driver manifests
 (`<name>.toml`) under `ADBC_DRIVER_PATH`, `$XDG_CONFIG_HOME/adbc/drivers` (or
@@ -590,7 +602,7 @@ db_kwargs = {
 ```
 
 `ADBC_ODBC_DELEGATE_PATH` and `ADBC_DRIVER_PATH` are ignored for setuid/setcap
-processes, adbcbridge refuses to delegate to itself, and a bare
+processes, adbcBridge refuses to delegate to itself, and a bare
 `libadbc_driver_<name>.so` is never picked up from a directory that was merely
 derived from a loaded object's parent (only the exact wheel layout is).
 
@@ -623,7 +635,7 @@ in the stack — the first three are [lurcher/unixODBC#239](https://github.com/l
 (the driver manager aborts on the first SQL error from a 4-byte-`SQLWCHAR` driver; found on
 macOS, reproduced on Linux with a fake driver), [openlink/virtuoso-opensource#1469](https://github.com/openlink/virtuoso-opensource/issues/1469)
 and [dremio/warpdrive#16](https://github.com/dremio/warpdrive/issues/16) (undocumented driver
-widths). The full record, including a dozen findings documented but not yet filed, is
+widths). The full record, including seventeen findings documented but not yet filed, is
 [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 
 ## Language packages
@@ -664,7 +676,7 @@ with adbcbridge.connect(uri="Driver=SQLite3;Database=my.db;") as conn:
         table = cur.fetch_arrow_table()      # pyarrow.Table
 ```
 
-`connect(uri=None, dsn=None, username=None, password=None, driver_path=None, **options)`
+`connect(uri=None, dsn=None, username=None, password=None, driver_path=None, *, autocommit=False, conn_kwargs=None, **options)`
 returns a plain `adbc_driver_manager.dbapi.Connection` — nothing is wrapped or
 hidden. Extra keyword options become database options: a bare name is prefixed
 with `adbc.odbc.` (`batch_size=4096` → `adbc.odbc.batch_size`), a dotted name is
@@ -796,7 +808,7 @@ server with no multi-row `VALUES` at all is found the same way — by a two-row
 |---|---|
 | Oracle | `VALUES (…),(…)` is `ORA-00933`, so the probe re-asks with `INSERT ALL INTO t VALUES (…) INTO t VALUES (…) SELECT 1 FROM dual` and uses that |
 | SQLite | 2000 parameters is over the limit of a 999-variable build; K halves until it prepares |
-| ClickHouse | clickhouse-odbc prepares 500 row-groups and then refuses to execute them; K halves to 125 |
+| ClickHouse | clickhouse-odbc prepares the first multi-row form and then refuses to execute it; K halves until a form runs |
 | Firebird (OdbcFb) | no multi-row `VALUES` and no `INSERT ALL`; the probe re-asks a third time with `INSERT INTO t (cols) SELECT CAST(? AS <type>), … FROM RDB$DATABASE UNION ALL SELECT …` — a bare `?` in a select list has no type Firebird can infer, and the `CAST` names the type ingest would have *created* for that column, so it cannot narrow anything the plain form would not |
 | Cloud Spanner (PGAdapter) | 950 parameters per statement is a hard limit, and one that cannot be probed: a bigger statement prepares fine and drops the connection at execute, so it is declared and K is capped at 237 four-column rows |
 
@@ -808,7 +820,7 @@ transaction, so it commits completely or leaves nothing behind.
 One connection reading a large table is one CPU decoding it. ADBC's partition contract
 exists for exactly that: `AdbcStatementExecutePartitions` hands back N opaque
 descriptors, and `AdbcConnectionReadPartition` turns any one of them back into a stream
-— on any connection, in any order, in any process. adbcbridge implements both, so N
+— on any connection, in any order, in any process. adbcBridge implements both, so N
 connections can read one query in parallel and the pieces concatenate.
 
 ```python
@@ -1192,7 +1204,7 @@ symptom points somewhere other than their cause. Two worth knowing about here:
 **`Can't open lib '<path>' : file not found`, for a file that is there.**
 unixODBC loads driver libraries through libltdl, which reports every failure to
 load one as `file not found` — the `dlerror()` explaining why is thrown away
-before the driver manager sees it. adbcbridge opens the same path itself when a
+before the driver manager sees it. adbcBridge opens the same path itself when a
 connection fails that way and puts the real reason into the ADBC error, so the
 message says `Permission denied`, or a missing dependency, or the one below,
 instead of pointing at a file that is plainly present. A driver that genuinely
@@ -1204,7 +1216,7 @@ matrix — needs libstdc++'s thread-locals in static TLS, and importing pyarrow
 (directly, or through pandas or `adbc_driver_manager.dbapi`) permanently pins
 libstdc++ to dynamic TLS instead. The driver then cannot be loaded in that
 process at all; it reproduces with plain pyodbc, with no ADBC in sight. Loading
-the ODBC driver *before* that import settles it, which is what the adbcbridge
+the ODBC driver *before* that import settles it, which is what the adbcBridge
 Python package does: `import adbcbridge` does not import pyarrow, and
 `adbcbridge.connect()` opens the driver named in the connection string first.
 Where the import order is not yours to choose, `LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6`

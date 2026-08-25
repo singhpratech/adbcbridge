@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# Documentation site definition.  `pip install mkdocs mkdocs-material && mkdocs serve`
+# renders docs/ locally; `mkdocs gh-deploy` publishes it to GitHub Pages once the
+# repository is public.  The same tree is what the docs page on the landing site
+# is built from, so the two never disagree.
+site_name: adbcBridge
+site_description: One C library that turns any ODBC driver into an Apache Arrow ADBC driver.
+repo_url: https://github.com/singhpratech/adbcbridge
+edit_uri: blob/main/docs/
+docs_dir: docs
+exclude_docs: |
+  brand/
+
+theme:
+  name: material
+  features: [navigation.sections, navigation.top, content.code.copy, search.highlight, toc.follow]
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle: { icon: material/weather-night, name: Dark }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle: { icon: material/weather-sunny, name: Light }
+
+markdown_extensions:
+  - tables
+  - toc: { permalink: true }
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+nav:
+  - Getting started:
+      - Overview: index.md
+      - Install on Linux: getting-started/install-linux.md
+      - Install on macOS: getting-started/install-macos.md
+      - Install on Windows: getting-started/install-windows.md
+      - First query: getting-started/first-query.md
+  - Languages:
+      - Python: languages/python.md
+      - Rust: languages/rust.md
+      - .NET (C#): languages/csharp.md
+      - Java: languages/java.md
+      - Go: languages/go.md
+      - C and C++: languages/c.md
+  - Reference:
+      - Options: reference/options.md
+      - Connection strings: reference/connection-strings.md
+      - Type mapping: reference/types.md
+      - Driver quirks: reference/quirks.md
+      - Building from source: reference/building.md
+      - Troubleshooting: TROUBLESHOOTING.md
+  - Project:
+      - Compatibility: COMPATIBILITY.md
+      - Roadmap: ROADMAP.md
+      - Upstream: UPSTREAM.md
+      - FAQ: community/faq.md
+      - Contributing: community/contributing.md
