@@ -346,13 +346,13 @@ if args._child:
     sys.exit(0)
 
 cache = HERE / ".matrix_bench.json"
-results = json.loads(cache.read_text()) if cache.exists() else {}
+results = json.loads(cache.read_text(encoding="utf-8")) if cache.exists() else {}
 for name in ([] if args.render else (args.dbs or list(m.DBS))):
     r = attempt(bench, name, m.DBS[name])
     if r is None:
         continue
     results[name] = r
-    cache.write_text(json.dumps(results, indent=1))
+    cache.write_text(json.dumps(results, indent=1), encoding="utf-8")
     if "error" in r:
         print("%-11s ERROR %s" % (name, r["error"]))
         continue
@@ -373,7 +373,9 @@ out = HERE / "MATRIX_BENCHMARKS.md"
 previous_rows, previous_notes, previous_tail = {}, {}, []
 if out.exists():
     in_table = False
-    for line in out.read_text().splitlines():
+    # The table holds "×" and "—"; without an explicit encoding Windows reads and
+    # writes it in the ANSI code page and the next run dies decoding its own file.
+    for line in out.read_text(encoding="utf-8").splitlines():
         if line.startswith("| Database"):
             in_table = True
         elif line.startswith("| ") and in_table and not line.startswith("|---"):
@@ -431,5 +433,5 @@ if notes:
     lines += ["", "Failures:", ""] + notes
 if previous_tail:
     lines += [""] + previous_tail
-out.write_text("\n".join(lines) + "\n")
+out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 print("wrote", out)
