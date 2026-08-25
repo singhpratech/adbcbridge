@@ -225,7 +225,7 @@ DBS = {
             ('DROP TABLE IF EXISTS "adbc_long{sfx}"', None),
         ]),
     "mariadb": dict(
-        env="MARIADB_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=13306;Database=adbc;User=adbc;Password=adbc;",
+        env="MARIADB_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=13306;Database=adbc;User=adbc;Password=adbc;{no_ssps}",
         ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
     "columnstore": dict(
@@ -293,7 +293,7 @@ DBS = {
         # {plugin_dir}: TiDB creates root with mysql_native_password, whose *client-side*
         # plugin Connector/ODBC 9 loads at run time -- see conn_uri() below.
         env="TIDB_ODBC_DRIVER",
-        conn="Driver={drv};Server=127.0.0.1;Port=14000;Database=test;User=root;{plugin_dir}",
+        conn="Driver={drv};Server=127.0.0.1;Port=14000;Database=test;User=root;{plugin_dir}{no_ssps}",
         ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
     "dolt": dict(
@@ -305,7 +305,7 @@ DBS = {
         # Dolt only implements mysql_native_password, whose client-side plugin Connector/ODBC
         # 9.x no longer links in; it ships as a separate .so next to the driver library, and
         # PLUGIN_DIR is how libmysqlclient is pointed at it.
-        conn="Driver={drv};Server=127.0.0.1;Port=13310;Database=adbc;User=root;{plugin_dir}",
+        conn="Driver={drv};Server=127.0.0.1;Port=13310;Database=adbc;User=root;{plugin_dir}{no_ssps}",
         ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8", setup=["SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]),
     "databend": dict(
@@ -369,7 +369,7 @@ DBS = {
         # {plugin_dir}: MatrixOne authenticates with mysql_native_password, whose
         # *client-side* plugin Connector/ODBC 9 loads at run time -- see conn_uri().
         env="MATRIXONE_ODBC_DRIVER",
-        conn="Driver={drv};Server=127.0.0.1;Port=16001;User=dump;Password=111;{plugin_dir}",
+        conn="Driver={drv};Server=127.0.0.1;Port=16001;User=dump;Password=111;{plugin_dir}{no_ssps}",
         # The PRIMARY KEY is required, not decorative: MatrixOne gives a table declared
         # without one a hidden "__mo_fake_pk_col", which information_schema.columns --
         # and so SQLColumns/GetObjects -- reports as a 9th column even though SELECT *
@@ -1535,7 +1535,7 @@ def conn_uri(name, cfg, drv=None):
     """The entry's connection string, overridable with `<NAME>_CONN`.
 
     `{drv}` expands to the driver library (the entry's `env` variable when `drv` is not
-    given) and `{drvdir}` to the directory holding it, for the rare connection option
+    given), `{drvdir}` to the directory holding it, `{no_ssps}` to `NO_SSPS=1;` on Windows, for the rare connection option
     that must point at a file shipped beside the driver.  `{plugin}` and `{plugin_dir}`
     -- two spellings of the same thing -- expand to a `PLUGIN_DIR=` setting for the
     drivers that need one: MySQL Connector/ODBC loads client-side authentication plugins
@@ -1551,12 +1551,14 @@ def conn_uri(name, cfg, drv=None):
     drvdir = os.path.dirname(drv)
     pdir = os.path.join(drvdir, "plugin")
     plugin = "PLUGIN_DIR=%s;" % pdir if os.path.isdir(pdir) else ""
+    # `{no_ssps}`: MySQL Connector/ODBC 8.4.0 -- the only version published for Windows --
+    # fails at the first bound parameter against every non-MySQL server ("No data supplied
+    # for parameters in prepared statement", in pyodbc too) unless server-side prepared
+    # statements are off; 9.x on Linux needs nothing.  Measured on TiDB, MariaDB, Dolt and
+    # MatrixOne (bench/BENCHMARKS-windows.md), so those entries carry the placeholder.
+    no_ssps = "NO_SSPS=1;" if sys.platform == "win32" else ""
     return os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(
-        drv=drv, drvdir=drvdir, plugin=plugin, plugin_dir=plugin)
-    drvdir = os.path.dirname(drv)
-    pdir = os.path.join(drvdir, "plugin")
-    return os.environ.get(name.upper() + "_CONN", cfg["conn"]).format(
-        drv=drv, drvdir=drvdir, plugin=plugin_dir, plugin_dir=plugin_dir)
+        drv=drv, drvdir=drvdir, plugin=plugin, plugin_dir=plugin, no_ssps=no_ssps)
 
 
 def run(name, cfg):

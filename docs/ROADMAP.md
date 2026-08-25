@@ -14,7 +14,8 @@ ODBC is the first bridge; the name leaves room for the others.
 | Array-bound and multi-row bulk ingest, probed per driver, default on | done |
 | Plug-and-play install: `install.sh`, driver manifest, `driver="odbc"` by name (Linux, macOS) | done |
 | macOS verified on a real machine: SQLite, PostgreSQL 15, SQL Server 2022 (`bench/BENCHMARKS-macos.md`) | done |
-| Windows: first build 2026-08-24 (four MSVC defects, one text-encoding bug found and fixed); SQLite verified (`bench/BENCHMARKS-windows.md`) | done |
+| Windows: first build 2026-08-24 (ten defects across driver, tests and harnesses, three of them the ANSI code page in three disguises); compat campaign on an 8 GB laptop — native installs, then Docker Desktop on WSL2 — `bench/BENCHMARKS-windows.md` | done, tier 3 in progress |
+| macOS: 46 of 46 results (37 pass); a bridge built against iODBC is a supported configuration for vendor drivers that only ship iODBC builds (MySQL Connector/ODBC for macOS) — three width bugs found and fixed on the way (`docs/TROUBLESHOOTING.md`) | done |
 | Windows: prefetch pipeline and parallel ingest — both pthreads, compiled out on `_WIN32`; a Win32 shim (SRWLOCK, CONDITION_VARIABLE, `_beginthreadex`) restores them | next |
 | **Driver bootstrap**: `install.sh` / the Windows and macOS installers fetch the open-licence ODBC drivers a first run needs (sqliteodbc, psqlodbc, MariaDB Connector/ODBC, clickhouse-odbc) so SQLite/PostgreSQL/MySQL work with nothing else installed; vendor drivers (Oracle, Db2, SQL Server, Snowflake…) stay the user's download — their licences do not allow redistribution, and Windows already ships the SQL Server driver | next |
 | ADBC Driver Foundry validation suite: driver defects D1–D14 | in progress |
