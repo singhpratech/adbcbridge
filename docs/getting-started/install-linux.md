@@ -93,7 +93,7 @@ tar xzf adbcbridge-v0.1.0-linux-x64.tar.gz
 ```
 
 Point adbcBridge's clients at it with the `ADBC_ODBC_DRIVER` environment
-variable (see [environment variables](#environment-variables-the-library-honours)),
+variable (see [environment variables](#environment-variables-the-library-and-bindings-honour)),
 or copy it into `~/.local/lib` and write a manifest as the [source](#from-source-cmake)
 and [`install.sh`](#via-installsh) paths do.
 
@@ -105,7 +105,7 @@ you both the binding and the driver in one step:
 ```sh
 pip install adbcbridge          # once published to PyPI
 # or, from a downloaded release wheel:
-pip install adbcbridge-0.1.0-py3-none-manylinux_2_34_x86_64.whl
+pip install adbcbridge-0.1.0-py3-none-manylinux_2_28_x86_64.whl
 pip install adbc-driver-manager pyarrow
 ```
 
@@ -120,15 +120,20 @@ You need a C compiler, CMake 3.16+, and `unixodbc-dev`:
 
 ```sh
 git clone https://github.com/singhpratech/adbcbridge && cd adbcbridge
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DADBCBRIDGE_MANIFEST_DIR="$HOME/.config/adbc/drivers"
 cmake --build build -j
 cmake --install build --prefix "$HOME/.local"
 ```
 
-`cmake --install` writes two things under the prefix: the library into
-`lib/libadbc_driver_odbc.so`, and the driver manifest into
-`etc/adbc/drivers/odbc.toml`. See [The driver manifest](#the-adbc-driver-manifest)
-for how that manifest makes `driver="odbc"` resolve.
+`cmake --install` writes two things: the library into
+`lib/libadbc_driver_odbc.so` under the prefix, and the driver manifest into
+`~/.config/adbc/drivers/odbc.toml`. `ADBCBRIDGE_MANIFEST_DIR` is given as an
+absolute path because its default (`etc/adbc/drivers`, relative to the prefix)
+would put the manifest in `~/.local/etc/adbc/drivers`, a directory the ADBC
+driver manager does not search, so `driver="odbc"` would not resolve. See
+[The driver manifest](#the-adbc-driver-manifest) for how that manifest makes
+`driver="odbc"` resolve.
 
 ### Via install.sh
 
@@ -166,7 +171,8 @@ environment variable.
 
 ### Where it is installed
 
-- `cmake --install --prefix P` writes it to `P/etc/adbc/drivers/odbc.toml`.
+- `cmake --install --prefix P` writes it to `P/etc/adbc/drivers/odbc.toml`
+  unless `-DADBCBRIDGE_MANIFEST_DIR` points elsewhere, as the recipe above does.
 - `install.sh` writes it to `~/.config/adbc/drivers/odbc.toml` — the ADBC
   *user config directory*, which the driver manager searches automatically.
 
@@ -212,7 +218,7 @@ escape hatches:
 | `ADBC_DRIVER_PATH` | the ADBC driver manager, and adbcBridge's delegation search | Extra directory (or directories) to search for driver manifests. |
 | `ADBCBRIDGE_LIBRARY` | the Rust, C#, Java and Go finders | Same idea as `ADBC_ODBC_DRIVER`; where both are read, the order is documented on each language page. |
 | `ADBCBRIDGE_PRELOAD` | the Python package | `0` disables the automatic ODBC-driver preload that `adbcbridge.connect()` does before importing pyarrow. |
-| `ADBC_ODBC_DELEGATE` | the driver | `never` / `auto` / `always` for [native delegation](../reference/quirks.md). |
+| `ADBC_ODBC_DELEGATE` | the driver | `never` / `auto` / `always` for [native delegation](../how-it-works/delegation.md). |
 | `ADBC_ODBC_DELEGATE_PATH` | the driver | Extra directories to search for native ADBC drivers to delegate to (ignored for setuid/setcap processes). |
 
 ## Verifying the install
@@ -243,7 +249,7 @@ with dbapi.connect(driver="odbc",
 ```
 
 It prints `ADBC ODBC Driver` (or, if a native driver was installed and
-[delegation](../reference/quirks.md) took over, the native driver's name). If
+[delegation](../how-it-works/delegation.md) took over, the native driver's name). If
 you installed the Python wheel you can use its convenience wrapper instead —
 `import adbcbridge; adbcbridge.connect(uri="Driver=SQLite3;Database=/tmp/t.db;")`
 — which additionally finds the bundled library for you.
@@ -252,7 +258,7 @@ you installed the Python wheel you can use its convenience wrapper instead —
 > checks worth knowing: `adbcbridge drivers` lists the ODBC drivers the driver
 > manager can see, and `adbcbridge driver-path` prints which
 > `libadbc_driver_odbc.so` would be loaded. See
-> [CLI and environment](../reference/cli-and-env.md).
+> [CLI and environment](../reference/options.md).
 
 ## Known limitations
 

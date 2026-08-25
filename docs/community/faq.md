@@ -70,7 +70,7 @@ driver itself, not the bridge.
 
 For a single connection, no — a native driver talks the wire protocol and builds
 Arrow directly, which is the ceiling for one connection. 1,000,000 PostgreSQL
-rows take 0.42 s through the native `adbc_driver_postgresql` and 1.00 s through
+rows take 0.42 s through the native `adbc_driver_postgresql` and 0.67 s through
 adbcBridge over psqlodbc; on 10 M rows a single bridge connection is 0.30–0.36×
 native. The bridge beats the native driver only by doing work it does not:
 [splitting one query across several connections](#what-are-partitioned-reads).
@@ -98,18 +98,19 @@ When `AdbcDatabaseInit` recognises a target that a native ADBC driver handles
 native driver and forwards every call to it. The result set is the native
 driver's own Arrow stream, handed back untouched: delegation costs one
 function-pointer hop per ADBC call and nothing per row, and delegated fetches
-measure the same as calling the native driver directly (0.43 s for the million
-PostgreSQL rows, against 0.43 s native). It is controlled by
+measure the same as calling the native driver directly (0.20 s for the million
+PostgreSQL rows, against 0.21 s native). It is controlled by
 `adbc.odbc.delegate` (`auto` default / `never` / `always`) and is a best-effort
 optimisation: if no native driver is installed it falls back to ODBC and records
 why in `adbc.odbc.delegate.last_error`. Delegation is not implemented on Windows.
-See the [README's Native delegation section](../../README.md#native-delegation).
+See [Native delegation](../how-it-works/delegation.md).
 
 ### Which languages can use it?
 
 Python, R, Go, Rust, C++, C# and Java — anything that speaks the ADBC driver
-manager. There are convenience packages for five of them (`adbcbridge` on PyPI,
-crates.io, NuGet, Maven and a Go module); see
+manager. There are convenience packages for five of them — a Python wheel, a Rust
+crate, a NuGet package, a Maven jar and a Go module — attached to the GitHub
+Release; registry publication (PyPI first) is in progress. See
 [Which package do I install for my language?](#which-package-do-i-install-for-my-language)
 
 ---
@@ -158,7 +159,7 @@ computed at `cmake --install` time, so one build tree can be installed into many
 prefixes. On macOS the search directories are under
 `~/Library/Application Support/ADBC/Drivers`; on Windows the manager also reads
 `HKEY_CURRENT_USER\SOFTWARE\ADBC\Drivers`. See
-[Use by name](../../README.md#use-by-name-driver-manifest).
+[Use by name](../reference/install.md#use-by-name-driver-manifest).
 
 ### How do I install without root?
 
@@ -182,7 +183,8 @@ One driver library, five wrapper packages that locate and load it:
 All five are built, tested and attached to every
 [GitHub Release](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0);
 registry publication (PyPI first) is in progress. Each resolves the library the
-same way and raises an error listing every place it looked. See
+same way and raises an error when it cannot; Rust, C#, Java and Go list every
+place they looked. See
 [Language packages](../../README.md#language-packages).
 
 ---
@@ -202,7 +204,7 @@ conn = dbapi.connect(driver="odbc",
 
 Set database options alongside `uri`: `dsn` (a DSN name from `odbc.ini`, appended
 as `DSN=…`), and `username` / `password` (appended as `UID=` / `PWD=`). The full
-option table is in [Use (Python)](../../README.md#use-python).
+option table is in [Use (Python)](../languages/python.md).
 
 ### DSN or `Driver=` — which should I use?
 
@@ -237,7 +239,7 @@ Oracle 475 → 23,628, DuckDB 24,057 → 344,597. Two refinements:
   `N` transactions, so a failure can leave some batches committed.
 
 `adbc.odbc.rows_per_insert` overrides the group size (`1` turns the rewrite off).
-Full detail in [Bulk ingest](../../README.md#bulk-ingest).
+Full detail in [Bulk ingest](../how-it-works/performance.md#bulk-ingest).
 
 ### How are transactions handled?
 
@@ -254,7 +256,7 @@ left alone.
   the next rowset while the current one is converted. It is worth little in
   practice because most ODBC drivers have already buffered the whole result set
   client-side; only psqlodbc's cursor mode leaves a real socket wait, and even
-  there it buys 6–10%. See [Prefetch](../../README.md#prefetch).
+  there it buys 6–10%. See [Prefetch](../how-it-works/prefetch.md).
 - `adbc.odbc.rowset_bytes`, `adbc.odbc.max_bind_bytes`, `adbc.odbc.long_bind_bytes`
   — control how wide values are bound versus re-read with `SQLGetData`.
 
@@ -271,7 +273,7 @@ correct from the catalog (a PostgreSQL heap `ctid`, an integer primary-key range
 or YugabyteDB's tablet hash) and otherwise returns a single descriptor carrying
 the original query — never slower than not calling it. It never guesses a
 partition column. Set `adbc.odbc.partitions`. See
-[Partitioned reads](../../README.md#partitioned-reads-executepartitions).
+[Partitioned reads](../how-it-works/partitioned-reads.md).
 
 ---
 
@@ -280,8 +282,7 @@ partition column. Set `adbc.odbc.partitions`. See
 ### Which databases are known to work?
 
 46 databases are verified on Linux by one identical workload, and re-run on macOS
-and Windows; the full matrix with per-driver notes is in the
-[README](../../README.md#compatibility-matrix) and tracked in
+and Windows; the full matrix with per-driver notes is in
 [`docs/COMPATIBILITY.md`](../COMPATIBILITY.md). It spans SQLite, DuckDB,
 PostgreSQL and its wire-compatible forks (CockroachDB, YugabyteDB, TimescaleDB,
 Citus, CrateDB, QuestDB, RisingWave, Materialize, openGauss, Cloudberry, YDB,
@@ -294,7 +295,7 @@ Flight SQL servers (sqlflite, InfluxDB 3, Dremio).
 ### Does a database that is not on the list work?
 
 Probably, on the generic path — adbcBridge can reach anything with an ODBC driver.
-But every one of the 46 verified drivers needed at least one workaround, so expect
+But all but a few of the 46 verified drivers needed at least one workaround, so expect
 an unlisted driver to work *and* to have a quirk waiting. Reachability is not
 verification.
 
@@ -311,7 +312,7 @@ and **error mapping** (SQLSTATE plus native code). Some entries are marked
 
 ### Which drivers are known to need quirks, and why?
 
-All 46 needed at least one. A few representative ones: **IBM Db2** and **Informix**
+All but a few of the 46 needed at least one. A few representative ones: **IBM Db2** and **Informix**
 ship a 32-bit `SQLLEN` on 64-bit Linux (`adbc.odbc.sqllen_32bit`); **DuckDB**,
 **MonetDB**, **ClickHouse**, **Firebird** and others have parameter arrays that
 silently drop values, so those are turned off; **Oracle** lacks `SQL_C_SBIGINT`,
@@ -319,7 +320,7 @@ so 64-bit ints go as numeric text; **SQL Server** and **Db2** name a deprecated
 wide-text type in `SQLGetTypeInfo`, so ingest DDL spells `NVARCHAR(MAX)` /
 widest `VARCHAR` instead. Each quirk is keyed on the driver name or server
 identity and documented with its measured reason in
-[`docs/COMPATIBILITY.md`](../COMPATIBILITY.md) and the README matrix.
+[`docs/COMPATIBILITY.md`](../COMPATIBILITY.md).
 
 ### Do I need a licence for the vendor ODBC drivers?
 

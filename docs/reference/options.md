@@ -21,7 +21,14 @@ default is noted, an option is simply unset.
 
 An option set at a broader level is inherited by narrower ones opened afterward:
 `adbc.odbc.batch_size` set on the database is the starting value for every
-connection and statement, each of which may override it.
+connection and statement, each of which may override it. One caveat at the
+connection level: `AdbcConnectionInit` copies the database's
+`adbc.odbc.batch_size`, `adbc.odbc.prefetch` and `adbc.odbc.sqllen_32bit`
+values over the connection's, so a connection-level value for one of those set
+*before* `AdbcConnectionInit` (the order the driver manager's
+`connect(conn_kwargs=...)` uses) is discarded. Set them after init, or on the
+database or statement instead. Re-applying the pre-init values after the copy is
+a roadmap item; see [ROADMAP.md](../ROADMAP.md).
 
 ---
 
@@ -61,7 +68,8 @@ Setting any delegate option after `AdbcDatabaseInit` is an error.
 
 ## Connection options
 
-Set with `AdbcConnectionSetOption`.
+Set with `AdbcConnectionSetOption`. The three `adbc.odbc.*` rows take effect
+only when set after `AdbcConnectionInit` (see the inheritance note above).
 
 | Key | Type / values | Default | Effect |
 |---|---|---|---|
@@ -138,8 +146,9 @@ never opened.
 - `adbc.odbc.delegate.driver` names the native driver.
 - `adbc.odbc.delegate.search_path` adds directories to look in, but only when
   `adbc.odbc.delegate.allow_paths` is `true` — loading a driver from a
-  caller-named path is opt-in for safety, and is refused outright for
-  setuid/setgid processes.
+  caller-named path is opt-in for safety. In a setuid/setgid process the
+  `ADBC_ODBC_DELEGATE_ALLOW_PATHS` and `ADBC_ODBC_DELEGATE_PATH` environment
+  variables are ignored; the database option itself still applies.
 - `adbc.odbc.delegate.last_error` (read-only) explains why delegation did not
   happen; `adbc.odbc.delegated_to` (read-only) names the driver that served the
   connection, or `odbc`.
@@ -260,15 +269,15 @@ locations.
 
 | Variable | Bindings | Controls |
 |---|---|---|
-| `ADBCBRIDGE_LIBRARY` | Java, C#, and (build-time) Python, Rust | Explicit path to the driver library; checked first. |
-| `ADBC_ODBC_DRIVER` | Python, Java, C#, Go, and the test suites | Explicit path to the driver library. |
+| `ADBCBRIDGE_LIBRARY` | Java, C#, Go, Rust, and (build-time) Python | Explicit path to the driver library; checked first (after `ADBC_ODBC_DRIVER` in Go). |
+| `ADBC_ODBC_DRIVER` | Python, Java, C#, Go, Rust, and the test suites | Explicit path to the driver library. |
 | `ADBCBRIDGE_PRELOAD` | Python | Toggles the driver preload in `connect()`; `0`/`false`/`no`/`off` disables it. |
 | `ADBCBRIDGE_BUILD_DIR` | Python (build) | Build tree to find the freshly built library in. |
-| `ADBC_DRIVER_PATH` | Python, Java, C# | Extra manifest search directories. |
+| `ADBC_DRIVER_PATH` | Python, Java, C#, Go, Rust | Extra manifest search directories. |
 | `ODBCSYSINI`, `ODBCINI` | Python | Fallbacks for locating `odbcinst.ini`/`odbc.ini` when `odbcinst -j` yields nothing. |
-| `XDG_CONFIG_HOME` | Python, Java, C# | Overrides the `~/.config` manifest location. |
-| `LOCALAPPDATA`, `PROGRAMDATA`, `ProgramFiles`, `USERPROFILE` | Java, C# (Windows) | Windows manifest and install directories. |
-| `VIRTUAL_ENV`, `CONDA_PREFIX` | Java | Python-environment prefixes searched for a bundled driver. |
+| `XDG_CONFIG_HOME` | Python, Java, C#, Go, Rust | Overrides the `~/.config` manifest location. |
+| `LOCALAPPDATA`, `PROGRAMDATA`, `ProgramFiles`, `USERPROFILE` | Java, C# (Windows); Go reads `LOCALAPPDATA`, `ProgramFiles` and `ProgramW6432`, Rust `USERPROFILE` | Windows manifest and install directories. |
+| `VIRTUAL_ENV`, `CONDA_PREFIX` | Java, Go, Rust | Python-environment prefixes searched for a bundled driver. |
 
 ### Read by the tests and benchmarks
 

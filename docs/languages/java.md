@@ -28,6 +28,7 @@ This page assumes you are comfortable in Java but new to ODBC and ADBC.
 - [The `--add-opens` flag](#the---add-opens-flag)
 - [Install](#install)
 - [The three entry points](#the-three-entry-points)
+- [Without the wrapper: `adbc-driver-jni` directly](#without-the-wrapper-adbc-driver-jni-directly)
 - [How the library is located](#how-the-library-is-located)
 - [Connection strings](#connection-strings)
 - [Driver options](#driver-options)
@@ -217,11 +218,13 @@ natives/
   linux-x86_64/libadbc_driver_odbc.so
   linux-aarch64/libadbc_driver_odbc.so
   macos-aarch64/libadbc_driver_odbc.dylib
-  windows-x86_64/adbc_driver_odbc.dll
+  windows-x86_64/libadbc_driver_odbc.dll
 ```
 
 `java/natives/` is the default location and is gitignored. Without such a
 directory the jar is pure Java and finds the driver on the machine instead.
+[`java/README.md`](../../java/README.md) covers the wrapper's own build and
+the Maven Central publishing profile.
 
 ---
 
@@ -267,6 +270,79 @@ Public constants:
 `AdbcBridge.open` sets `AdbcDriver.PARAM_URI` (`uri`) to the connection string
 and passes every other entry of the options map to the driver as a database
 option. A `uri` entry in `options` is overridden by `connectionString`.
+
+---
+
+## Without the wrapper: `adbc-driver-jni` directly
+
+The wrapper is a convenience, not a requirement. `adbc-driver-jni` bundles the
+native ADBC driver manager, so Java loads `libadbc_driver_odbc.so` the same way
+every other binding does — with only the upstream artifacts on the classpath:
+
+```xml
+<!-- pom.xml -->
+<dependency>
+  <groupId>org.apache.arrow.adbc</groupId>
+  <artifactId>adbc-driver-jni</artifactId>   <!-- ADBC >= 0.21 -->
+  <version>0.24.0</version>
+</dependency>
+<dependency>
+  <groupId>org.apache.arrow</groupId>
+  <artifactId>arrow-memory-netty</artifactId> <!-- must match ADBC's Arrow -->
+  <version>19.0.0</version>
+  <scope>runtime</scope>
+</dependency>
+```
+
+Point `JniDriver.PARAM_DRIVER` (`jni.driver`) at the library and put the ODBC
+connection string in `AdbcDriver.PARAM_URI` (`uri`); from `open` onwards it is
+the same API as above:
+
+```java
+import java.util.HashMap;
+import java.util.Map;
+import org.apache.arrow.adbc.core.*;
+import org.apache.arrow.adbc.driver.jni.JniDriver;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.ipc.ArrowReader;
+
+Map<String, Object> parameters = new HashMap<>();
+JniDriver.PARAM_DRIVER.set(parameters, "/path/to/libadbc_driver_odbc.so");
+AdbcDriver.PARAM_URI.set(
+    parameters, "Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so;Database=my.db;");
+
+try (BufferAllocator allocator = new RootAllocator();
+    AdbcDatabase database = new JniDriver(allocator).open(parameters);
+    AdbcConnection connection = database.connect();
+    AdbcStatement statement = connection.createStatement()) {
+  statement.setSqlQuery("SELECT * FROM my_table");
+  try (AdbcStatement.QueryResult result = statement.executeQuery()) {
+    ArrowReader reader = result.getReader();
+    while (reader.loadNextBatch()) {
+      VectorSchemaRoot root = reader.getVectorSchemaRoot();
+      System.out.println(root.getRowCount() + " rows");
+    }
+  }
+}
+```
+
+- `PARAM_DRIVER` takes a path, a bare library name, or a driver-manifest name
+  (`"odbc"` — the `odbc.toml` manifest that `cmake --install` writes, step 5 of
+  [How the library is located](#how-the-library-is-located)); the native driver
+  manager resolves all three. `AdbcBridge.driver(allocator)` is exactly this
+  wiring with `driverPath()` as the path.
+- `PARAM_URI` is only interpreted by the driver manager when it looks like
+  `scheme://…` and no driver is set. An ODBC connection string is neither, so it
+  reaches adbcBridge untouched.
+- The JVM still needs [the `--add-opens` flag](#the---add-opens-flag) on JDK 17+.
+
+The snippet above is compiled — never run, its paths are placeholders — as
+`tests/java/src/test/java/org/adbcbridge/smoke/ReadmeSnippet.java`, so it
+cannot silently rot; `SmokeTest.java` beside it runs the same sequence against
+SQLite. [`tests/java/README.md`](../../tests/java/README.md) has the container
+command that runs those tests with no JDK, Maven or unixODBC on the host.
 
 ---
 
@@ -451,20 +527,23 @@ connection.commit();
 
 ## Parameters
 
-The driver supports parameter binding (`Bind` / `BindStream`). Bind a
-single-row (or multi-row) `VectorSchemaRoot` whose columns are the parameter
-values, then execute:
+The driver supports parameter binding (`Bind` / `BindStream`). Parameters are
+bound as a `VectorSchemaRoot`, one column per `?` and one row per execution:
+prepare, bind the root, then `executeQuery()` or `executeUpdate()`:
 
 ```java
 statement.setSqlQuery("SELECT * FROM customers WHERE id = ?");
-statement.bind(parameterRoot);        // one column per '?'
+statement.prepare();
+statement.bind(parameterRoot);        // one column per '?', one row per execution
 try (AdbcStatement.QueryResult result = statement.executeQuery()) {
     // ...
 }
 ```
 
-Binding a multi-row root applies the statement once per row (an ODBC parameter
-array), which is what bulk ingest builds on. The placeholder syntax (`?`, `$1`,
+Binding a multi-row root applies the statement once per row — as a column-wise ODBC
+parameter array where the driver handles them (`adbc.odbc.array_binding`, on by default),
+row by row otherwise. Bulk ingest takes its own route, a multi-row `INSERT` rewrite by
+default — see [bulk ingest](../how-it-works/performance.md#bulk-ingest). The placeholder syntax (`?`, `$1`,
 `:name`, …) is whatever the underlying ODBC driver and database accept.
 
 ---
@@ -574,7 +653,7 @@ JDBC to reach the database.
 A minimal program that finds the driver, connects to a temporary SQLite database
 through the SQLite ODBC driver, runs a query, and reads the Arrow result.
 
-### `pom.xml` (dependencies)
+### `pom.xml` (dependencies and the classpath file the run step reads)
 
 ```xml
 <dependencies>
@@ -598,6 +677,31 @@ through the SQLite ODBC driver, runs a query, and reads the Arrow result.
     <scope>runtime</scope>
   </dependency>
 </dependencies>
+
+<!-- Writes the runtime classpath to target/classpath.txt during `mvn package`,
+     which the run command below reads. -->
+<build>
+  <plugins>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-dependency-plugin</artifactId>
+      <version>3.6.1</version>
+      <executions>
+        <execution>
+          <id>build-classpath</id>
+          <phase>package</phase>
+          <goals>
+            <goal>build-classpath</goal>
+          </goals>
+          <configuration>
+            <outputFile>${project.build.directory}/classpath.txt</outputFile>
+            <includeScope>runtime</includeScope>
+          </configuration>
+        </execution>
+      </executions>
+    </plugin>
+  </plugins>
+</build>
 ```
 
 ### `Main.java`
@@ -663,6 +767,7 @@ public final class Main {
 ### Run it (JDK 17+)
 
 ```sh
+mvn package                                    # compiles and writes target/classpath.txt
 export SQLITE_ODBC_DRIVER=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
 java --add-opens=java.base/java.nio=ALL-UNNAMED \
      -Dio.netty.tryReflectionSetAccessible=true \

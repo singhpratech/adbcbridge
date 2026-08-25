@@ -44,7 +44,8 @@ and so on — then confirm it appears in the ODBC Data Source Administrator.
 > ("Data source name not found and no default driver specified"). The driver
 > must be registered (installed by its MSI) and named by its registered driver
 > name. This is a driver-manager difference, not an adbcBridge limitation; the
-> YDB entry in [COMPATIBILITY.md](../COMPATIBILITY.md) records a concrete case.
+> YDB row in [bench/BENCHMARKS-windows.md](../../bench/BENCHMARKS-windows.md)
+> records a concrete case.
 
 ## 3. adbcBridge
 
@@ -171,7 +172,7 @@ with dbapi.connect(driver="odbc",
 
 It prints `ADBC ODBC Driver`. (Native delegation is not implemented on Windows,
 so the bridge always takes the ODBC path here; see
-[reference/quirks.md](../reference/quirks.md).)
+[Native delegation](../how-it-works/delegation.md).)
 
 ## Known limitations
 

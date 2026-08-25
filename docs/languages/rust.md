@@ -37,7 +37,10 @@ own, only the ODBC connection string and a handful of `adbc.odbc.*` options.
 
 The crate re-exports `adbc_core`, `adbc_driver_manager` and
 `adbc_driver_manager::ManagedDriver`, so you can name those types without
-pinning their versions yourself.
+pinning their versions yourself. The crate's own README is
+[`rust/README.md`](../../rust/README.md); the crate is not required — see
+[Without the crate](#without-the-crate) for loading the driver through
+`adbc_driver_manager` alone.
 
 ### Feature flags
 
@@ -95,7 +98,7 @@ adbc_core = "0.24"
 
 ```toml
 [dependencies]
-adbcbridge = { git = "https://github.com/singhpratech/adbcbridge", subdir = "rust" }
+adbcbridge = { git = "https://github.com/singhpratech/adbcbridge", tag = "v0.1.0" }
 adbc_core = "0.24"
 ```
 
@@ -134,7 +137,8 @@ pub fn load_from(path: impl AsRef<std::path::Path>)
 ```
 
 `load` and `load_from` use the entry point `AdbcDriverInit` and request ADBC
-version 1.1.0. The result is an ordinary
+version 1.1.0 (`AdbcVersion::V110`; the driver implements both the 1.0.0 and
+the 1.1.0 ABI). The result is an ordinary
 `adbc_driver_manager::ManagedDriver`.
 
 ### Lookup order
@@ -164,6 +168,53 @@ With `--no-default-features` the crate skips step 2 (there is no compiled copy)
 and relies on steps 1, 3 and 4. Install the driver some other way — for example
 `cmake --install build` in a checkout of the driver, or unpacking a release
 tarball — or set `ADBC_ODBC_DRIVER` to its path.
+
+### Without the crate
+
+`adbcbridge` is a convenience. The driver is a plain C shared library, so the
+`adbc_driver_manager` crate can load it directly, with no dependency on
+`adbcbridge` at all:
+
+```toml
+# Cargo.toml
+[dependencies]
+adbc_core = "0.24"
+adbc_driver_manager = "0.24"
+arrow-array = "59"
+```
+
+```rust
+use adbc_core::options::{AdbcVersion, OptionDatabase};
+use adbc_core::{Connection, Database, Driver, Statement};
+use adbc_driver_manager::ManagedDriver;
+
+let mut driver = ManagedDriver::load_dynamic_from_filename(
+    "/path/to/libadbc_driver_odbc.so",
+    Some(b"AdbcDriverInit"),
+    AdbcVersion::V110,
+)?;
+
+let uri = "Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so;Database=my.db;";
+let database = driver.new_database_with_opts([(OptionDatabase::Uri, uri.into())])?;
+let mut connection = database.new_connection()?;
+
+let mut statement = connection.new_statement()?;
+statement.set_sql_query("SELECT * FROM my_table")?;
+for batch in statement.execute()? {
+    let batch = batch?;               // arrow_array::RecordBatch
+    println!("{} rows", batch.num_rows());
+}
+```
+
+`adbcbridge::load()?` replaces the `load_dynamic_from_filename` call — it is
+exactly what `load_from` does once `driver_path` has found the library. The
+entry point is passed explicitly; the library also exports
+`AdbcDriverOdbcInit`, the name the driver manager derives from the file name
+when no entry point is given, and either works. The
+[`tests/rust/`](../../tests/rust/) crate is a runnable example built this
+way: a standalone smoke test that depends only on published crates, plus
+`examples/readme_snippet.rs`, which holds the snippet above so `cargo test`
+fails if it ever stops compiling.
 
 ## Connection strings
 
@@ -212,9 +263,9 @@ driver-specific tuning goes under `adbc.odbc.*`.
 | `adbc.odbc.delegated_to` | read-only: the native driver serving this database/connection, or `odbc` |
 | `adbc.odbc.tune` | `true` (default) / `false` — may the driver add ODBC connection keywords of its own where it recognises the target driver? `false` sends your connection string through untouched |
 | `adbc.odbc.sqllen_32bit` | `true`/`false` to force the 32-bit-`SQLLEN` driver quirk (autodetected for IBM Db2; you normally never set it). Also settable on the connection and statement |
-| `adbc.odbc.rows_per_insert` | rows of parameters per `INSERT` for **bulk ingest** — `0` (default) picks automatically, `1` turns the rewrite off. On PostgreSQL, sets rows per array-parameter statement (default 10,000) |
-| `adbc.odbc.ingest_connections` | connections a **bulk ingest** may spread over — `1` (default) keeps it on one connection in a single transaction. `N > 1` **trades atomicity for speed** *(compiled out on Windows)* |
-| `adbc.odbc.array_binding` | `true` (default) binds each Arrow batch as a column-wise ODBC parameter array (one `SQLExecute` per batch); `false` forces row-at-a-time. Drivers that mishandle arrays fall back automatically |
+| `adbc.odbc.rows_per_insert` | rows of parameters per `INSERT` for **bulk ingest** — `0` (default) picks a group size automatically, `1` turns the rewrite off, any other value asks for that many. Instead of executing `INSERT INTO t VALUES (?,?)` once per row, ingest prepares `INSERT INTO t VALUES (?,?),(?,?),…` with K row-groups and binds K rows' worth of ordinary parameters per execute, which divides the round trips by K. Against PostgreSQL, where a batch instead goes as one array parameter per column, the same value sets the rows one such statement carries (default 10,000) and `1` turns that off too. See [Bulk ingest](#bulk-ingest). Set on the **statement** |
+| `adbc.odbc.ingest_connections` | connections a **bulk ingest** may spread itself over — `1` (default) keeps it on the caller's own connection in a single transaction. `N > 1` (up to `64`) opens `N` further connections, hands each a share of the bound stream's batches and lets each run the ordinary ingest path into the same table. **This trades atomicity for speed**: `N` connections are `N` transactions, so a failure can leave some batches committed. See [Parallel ingest](../how-it-works/performance.md#parallel-ingest-trading-atomicity-for-speed). Not in the Windows build (the fan-out is pthreads, compiled out on `_WIN32` — see the [roadmap](../ROADMAP.md) and [Known limitations](#known-limitations)); ingest stays on one connection there. Set on the **statement** |
+| `adbc.odbc.array_binding` | `true` (default) binds each Arrow batch as a column-wise ODBC parameter array, so a multi-row bind (and ingest on a driver where arrays are the faster of the two) issues one `SQLExecute` per batch instead of one per row; `false` forces row-at-a-time. Drivers that do not honour `SQL_ATTR_PARAMSET_SIZE`, or that cannot account for every parameter set they were handed, fall back automatically; drivers whose parameter arrays silently drop or misapply values (DuckDB, clickhouse-odbc, MonetDB, Firebird's OdbcFb, Virtuoso, Apache Ignite, QuestDB via psqlodbc — quirk `no_param_arrays`) default to `false` and can be forced back on with this option. Reported rows-affected is identical in both modes. Set on the **statement** |
 
 ### Native delegation
 
@@ -249,8 +300,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `Statement::execute` returns a `RecordBatchReader` — an iterator that yields
-`Result<RecordBatch>` (both from the [`arrow`](https://crates.io/crates/arrow)
-crates, re-exported through `adbc_core`). Iterate it to stream Arrow batches;
+`Result<RecordBatch>` (both from the [`arrow-array`](https://crates.io/crates/arrow-array)
+crate — add `arrow-array = "59"` to your dependencies, as the examples do;
+`adbc_core` does not re-export it). Iterate it to stream Arrow batches;
 collect it if you want the whole result at once.
 
 ## Reading into Arrow
@@ -277,17 +329,27 @@ The reader's `schema()` gives the Arrow schema before you pull any rows.
 ## Parameters
 
 Bind an Arrow `RecordBatch` of parameter values with `Statement::bind` (or a
-whole stream with `bind_stream`), then execute. Each row of the batch is one set
-of parameters:
+whole stream with `bind_stream`), then execute. The batch has one column per
+`?` and each row of the batch is one execution:
 
 ```rust
 statement.set_sql_query("INSERT INTO t (a, b) VALUES (?, ?)")?;
+statement.prepare()?;                 // optional; execute prepares if you do not
 statement.bind(params_batch)?;        // one RecordBatch, its rows = parameter sets
 statement.execute_update()?;          // returns rows affected
 ```
 
 `execute_update` runs a statement for its side effect and returns the affected
-row count; `execute` runs it for its result set.
+row count; `execute` runs it for its result set. A query you wrote is executed
+as written, whatever is bound to it — only the `INSERT` that bulk ingest
+generates is ever rewritten (see [Bulk ingest](#bulk-ingest)).
+
+A multi-row bind and bulk ingest also batch their commits: when the connection
+is in autocommit and more than one row is bound, adbcBridge turns autocommit
+off for the duration and commits once at the end (rolling back if the execute
+fails), instead of paying a commit per row. A transaction the caller opened
+themselves is left alone, and a driver that refuses to leave autocommit is
+simply left autocommitting — slower, but correct.
 
 ## Bulk ingest
 
@@ -306,11 +368,39 @@ statement.execute_update()?;
 connection.commit()?;                 // if autocommit is off
 ```
 
-Under the hood adbcBridge sends one `INSERT INTO t VALUES (…),(…),…` per group
-of rows rather than one statement per row, inside a single transaction, and
-probes the group size against the driver. On PostgreSQL it goes further and
-sends each column as a single array parameter. Tune with
-`adbc.odbc.rows_per_insert` and `adbc.odbc.array_binding`; see the options table.
+Under the hood adbcBridge builds the `INSERT` itself, so it can pack K rows
+into one statement — `INSERT INTO t ("a", "b") VALUES (?, ?), (?, ?), …` with K
+row-groups — rather than executing one statement per row. K rows' worth of
+scalar parameters go in per `SQLExecute`, over the same `SQLBindParameter` calls
+and the same per-driver parameter handling as one row at a time; no parameter
+arrays are involved, so it works on every driver that can bind ordinary
+parameters, including those whose parameter arrays are unusable (DuckDB,
+MonetDB, clickhouse-odbc, QuestDB via psqlodbc) and those where an array is no
+cheaper than a loop (MySQL Connector/ODBC). It is the default for ingest;
+parameter arrays are kept ahead of it only for MariaDB Connector/ODBC before
+3.2, whose arrays go out as a single `COM_STMT_BULK_EXECUTE` (3.2 and later is
+switched to the multi-row form, because its arrays segfault on a NULL date and
+misreport row counts against MySQL), and for Vertica's own driver, whose arrays
+become a native bulk load. On PostgreSQL adbcBridge goes a step
+further and sends each column of a batch as a single array parameter, with the
+multi-row form as the fallback — see [PostgreSQL: one array parameter per
+column](../how-it-works/performance.md#postgresql-one-array-parameter-per-column).
+
+K is chosen from a parameter budget (2000 parameters, at most 1000 row-groups —
+SQL Server's limits are 2100 and 1000) and clipped by the driver's
+`SQL_MAX_STATEMENT_LEN`. ODBC has no "maximum parameters" question to ask, so
+the real ceiling is *probed*: a `SQLPrepare` (or, for a driver that only objects
+later, the first `SQLExecute`) that is refused halves K and asks again, and the
+answer is remembered on the connection. A server with no multi-row `VALUES` at
+all is found the same way, by a two-row `SQLPrepare` before anything is written,
+and ingest carries on in whatever form the server does take (Oracle's
+`INSERT ALL`, Firebird's typed `UNION ALL SELECT`, SQLite's 999-variable build,
+Cloud Spanner's declared 950-parameter ceiling); the per-server table is in
+[Bulk ingest](../how-it-works/performance.md#bulk-ingest). A failure part way
+through is unchanged by any of this: the whole ingest is one transaction, so it
+commits completely or leaves nothing behind. Tune with
+`adbc.odbc.rows_per_insert`, `adbc.odbc.array_binding` and (trading atomicity
+for speed) `adbc.odbc.ingest_connections`; see the [options table](#options).
 
 To turn autocommit off first:
 
@@ -364,7 +454,8 @@ bounded identically.
 ## Known limitations
 
 - **Early release (0.1.0).** The API surface is small and may change. A
-  conformance suite and prebuilt binaries are planned, not shipped.
+  conformance suite is planned, not shipped; prebuilt driver tarballs ship on
+  GitHub Releases, but the crate is not yet on crates.io.
 - **Windows: no prefetch, no parallel ingest.** The prefetch pipeline
   (`adbc.odbc.prefetch`) and the ingest fan-out (`adbc.odbc.ingest_connections`)
   both use POSIX threads and are compiled out on Windows. On Windows those

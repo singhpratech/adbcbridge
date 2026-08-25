@@ -27,9 +27,10 @@ concatenating, in order:
    which never overrides a keyword you already set.
 
 The result is passed to `SQLDriverConnect` with `SQL_DRIVER_NOPROMPT` (no
-interactive dialog). If the narrow call fails with only a truncation diagnostic,
-adbcBridge retries with the wide (`SQLDriverConnectW`) entry point — this is what
-lets some drivers on iODBC connect at all.
+interactive dialog). If the narrow call fails with no diagnostic at all, or with
+only a truncation diagnostic, adbcBridge retries with the wide
+(`SQLDriverConnectW`) entry point — this is what lets some drivers on iODBC, and
+the OpenSearch driver on unixODBC, connect at all.
 
 ### `Driver=` versus `DSN=`
 
@@ -149,9 +150,9 @@ Per-database notes:
 - **Databend**, **Apache Doris**, **GreptimeDB**, **StarRocks** and the
   **MongoDB BI Connector** set an unconditional `NO_SSPS=1;` — their servers do
   not support `COM_STMT_PREPARE`.
-- **MatrixOne** and **OceanBase** carry no `Database=` in the template
-  (the schema is created during test setup); OceanBase's `User=root@test` puts
-  the tenant in the login name.
+- **MatrixOne**, **Apache Doris** and **StarRocks** carry no `Database=` in the
+  template (the schema is created during test setup); OceanBase's
+  `User=root@test` puts the tenant in the login name.
 - **MySQL** and **MariaDB** are set to `ANSI_QUOTES` mode during test setup so
   identifiers can be double-quoted.
 

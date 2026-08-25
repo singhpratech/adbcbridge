@@ -26,7 +26,7 @@ ROWS=10000, FETCH_ROWS=100000, **REPS=1, single samples**, the four compiled har
 database running concurrently against it (they use tables of their own) and two databases at a
 time — so read rows for cross-language agreement, not absolute rate. Python's row is
 `matrix_bench.py`'s (ADBC ingest = its array-binding column, native = pyodbc), as the Linux
-file records it. 220 of 230 (language, database) rows measured; 216 ADBC-fetch cells with a number.
+file records it. 219 of 230 (language, database) rows measured (the eleven without a number are listed under "Why a cell is empty"); 216 ADBC-fetch cells with a number.
 
 | Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
 |---|---|---:|---:|---:|---:|

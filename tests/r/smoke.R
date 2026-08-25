@@ -199,7 +199,7 @@ check_equal("append mode adds a row", as.integer(total$n), n + 1L)
 
 cat("\n[5] the \"Use from R\" README snippet\n")
 
-# readme_snippet.R holds the top-level README's snippet verbatim. Run it for
+# readme_snippet.R holds the docs/languages/r.md snippet verbatim. Run it for
 # real -- with the placeholder paths swapped for this test's -- so the snippet
 # in the docs cannot rot into something that no longer works.
 execute_adbc(con, "CREATE TABLE my_table (id INTEGER, name TEXT)")
@@ -215,23 +215,23 @@ while (length(snippet) && !nzchar(trimws(tail(snippet, 1L)))) {
   snippet <- head(snippet, -1L)
 }
 
-# The top-level README must carry this snippet verbatim. Find the fenced r
+# docs/languages/r.md must carry this snippet verbatim. Find the fenced r
 # block that starts with library(adbcdrivermanager) and compare it line for
 # line, so editing one of the two without the other fails here.
-readme_file <- file.path(this_dir, "..", "..", "README.md")
+readme_file <- file.path(this_dir, "..", "..", "docs", "languages", "r.md")
 if (file.exists(readme_file)) {
   readme <- readLines(readme_file, encoding = "UTF-8")
   fences <- grep("^```", readme)
   opens <- fences[readme[fences] == "```r" &
                   readme[pmin(fences + 1L, length(readme))] ==
                     "library(adbcdrivermanager)"]
-  check_equal("README.md has exactly one 'Use from R' code block",
+  check_equal("docs/languages/r.md has exactly one 'Use from R' code block",
               length(opens), 1L)
   closing <- fences[fences > opens[1]][1]
   block <- readme[(opens[1] + 1L):(closing - 1L)]
   check_equal("... byte-identical to readme_snippet.R", block, snippet)
 } else {
-  cat("  skip  README.md not mounted\n")
+  cat("  skip  docs/languages/r.md not mounted\n")
 }
 
 snippet <- gsub("/path/to/libadbc_driver_odbc.so", driver_path, snippet, fixed = TRUE)

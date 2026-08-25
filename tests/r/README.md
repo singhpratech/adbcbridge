@@ -58,7 +58,7 @@ Expected output ends with:
 ```
 [5] the "Use from R" README snippet
   ok  readme_snippet.R has exactly one snippet marker
-  ok  README.md has exactly one 'Use from R' code block
+  ok  docs/languages/r.md has exactly one 'Use from R' code block
   ok  ... byte-identical to readme_snippet.R
   ok  the README snippet runs end to end
   ok  ... inserting its two bound rows
@@ -136,11 +136,12 @@ string.
 
 ## The README snippet
 
-`readme_snippet.R` holds the "Use from R" snippet from the top-level
-`README.md` verbatim, below a marker comment. Section 5 of `smoke.R` does two
-things with it:
+`readme_snippet.R` holds the "Use from R" snippet from the R docs page
+([`docs/languages/r.md`](../../docs/languages/r.md)) verbatim, below a marker
+comment. Section 5 of `smoke.R` does two things with it:
 
-- **Compares** it line for line against the fenced `r` block in `README.md`, so
+- **Compares** it line for line against the fenced `r` block in
+  `docs/languages/r.md` that opens with `library(adbcdrivermanager)`, so
   editing one without the other fails the test. (Verified by hand: adding a
   trailing comment to one copy makes the check fail.)
 - **Runs** it — with the two placeholder paths and the database file name
@@ -149,8 +150,8 @@ things with it:
   defined. The documented snippet is therefore executed, not just eyeballed,
   and the docs cannot drift into an API that no longer works.
 
-The comparison is skipped, with a `skip` line, if `README.md` is not mounted —
-running `smoke.R` against a bare copy of `tests/r` still works.
+The comparison is skipped, with a `skip` line, if `docs/languages/r.md` is not
+mounted — running `smoke.R` against a bare copy of `tests/r` still works.
 
 ## Notes
 

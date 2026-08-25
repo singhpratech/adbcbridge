@@ -45,7 +45,7 @@ The default build type is `Release` if none is given. The install lays out:
 
 | Component | Destination |
 |---|---|
-| the shared library | `<prefix>/lib` (`<prefix>/bin` on Windows) |
+| the shared library | `<prefix>/lib` (or `lib64`, per CMake's `GNUInstallDirs` on Fedora/RHEL-style 64-bit systems; `<prefix>/bin` on Windows) |
 | the ADBC driver manifest `odbc.toml` | `<prefix>/etc/adbc/drivers` (configurable) |
 
 ### Quick user install
@@ -58,7 +58,8 @@ the driver is immediately loadable by the name `odbc`:
 ./install.sh
 ```
 
-It installs the library under `~/.local/lib` and the manifest under
+It installs the library under `~/.local/lib` (`lib64` on Fedora/RHEL-style
+64-bit systems; `install.sh` prints the actual path) and the manifest under
 `~/.config/adbc/drivers` (or `~/Library/Application Support/ADBC/Drivers` on
 macOS). Its behaviour is tunable through environment variables: `PREFIX`,
 `MANIFEST_DIR`, `BUILD_DIR`, `BUILD_TYPE`, and `JOBS`.
@@ -85,10 +86,10 @@ silently fall through to some other library called "odbc".
 
 | Option | Default | Meaning |
 |---|---|---|
-| `ADBC_ODBC_BUILD_SHARED` | `ON` | Build the shared library. |
+| `ADBC_ODBC_BUILD_SHARED` | `ON` | Accepted but currently has no effect: the library is always built shared. |
 | `ADBC_ODBC_BUILD_TESTS` | `ON` | Build the C smoke test and the C unit tests. |
 | `ADBC_ODBC_ASAN` | `OFF` | Build with AddressSanitizer and UndefinedBehaviorSanitizer (requires GCC or Clang). |
-| `ADBCBRIDGE_BUILD_SHARED` | `ON` | Build the shared library (a second shared-build toggle alongside `ADBC_ODBC_BUILD_SHARED`). |
+| `ADBCBRIDGE_BUILD_SHARED` | `ON` | Accepted but currently has no effect, like `ADBC_ODBC_BUILD_SHARED`. |
 | `ADBCBRIDGE_INSTALL_MANIFEST` | `ON` | Install the `odbc.toml` ADBC driver manifest. |
 | `ADBCBRIDGE_MANIFEST_DIR` | `etc/adbc/drivers` | Where to install the manifest, relative to the install prefix (or an absolute path, as `install.sh` uses to place it in the user config dir). |
 
@@ -106,6 +107,10 @@ Tests are built when `ADBC_ODBC_BUILD_TESTS` is `ON` and run with `ctest`:
 ctest --test-dir build --output-on-failure
 ```
 
+On Windows, where the Visual Studio generator is multi-config, add the
+configuration — `ctest --test-dir build -C Release --output-on-failure` (or
+`-C Debug`) — otherwise `ctest` runs no tests.
+
 ### C unit tests
 
 These compile the driver's own sources and exercise pieces of it in isolation,
@@ -114,7 +119,7 @@ source file under `tests/c/`:
 
 | Target | Source | Exercises |
 |---|---|---|
-| `test_utf16` | `test_utf16.c` | The UTF-8 ↔ SQLWCHAR (wide-character) codecs used on the parameter and connect paths. |
+| `test_utf16` | `test_utf16.c` | The reader's SQLWCHAR (UTF-16) to UTF-8 conversion on the fetch path, plus NaN/Inf passthrough for float columns. |
 | `test_types` | `test_types.c` | The type-mapping logic (see [Type mapping](types.md)). |
 | `test_sqllen32` | `test_sqllen32.c` | The 32-bit-`SQLLEN` accessors that read a narrow driver's lengths and indicators. |
 | `test_objects` | `test_objects.c` | The `GetObjects` catalog/schema/table metadata assembly. |
@@ -122,10 +127,11 @@ source file under `tests/c/`:
 | `test_multirow` | `test_multirow.c` | The multi-row `INSERT` batching used by bulk ingest. |
 | `test_partition` | `test_partition.c` | Splitting a query into partitions for `ExecutePartitions`. |
 
-When the ODBC headers define `SQL_WCHART_CONVERT` (a four-byte SQLWCHAR, as iODBC
-always has), two extra targets — `test_utf16_wchar32` and `test_multirow_wchar32`
-— rebuild those two tests against the four-byte width, so the wide-character
-codecs are proven for an iODBC-style build without needing iODBC present.
+When the ODBC headers support `SQL_WCHART_CONVERT` (unixODBC's `sqltypes.h`
+does), two extra targets — `test_utf16_wchar32` and `test_multirow_wchar32` —
+rebuild those two tests with that macro defined, giving the four-byte SQLWCHAR
+iODBC always has, so the wide-character codecs are proven for an iODBC-style
+build without needing iODBC present.
 
 ### C smoke test
 
@@ -139,25 +145,67 @@ path or a registered driver name); with none set it reports "skipped".
 SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so ctest --test-dir build
 ```
 
-The test build also produces two helper libraries never installed:
+The test build also produces helper libraries never installed:
 `adbc_fake_native_driver` (a stand-in native ADBC driver for the delegation
 tests) and, on ELF/glibc, a pair of TLS libraries that reproduce a specific
 loader failure for `tests/test_driver_load_errors.py`.
 
 ### Python integration tests and the compatibility matrix
 
-The end-to-end tests under `tests/` (`test_sqlite.py`, `test_delegate.py`,
-`test_long_columns.py`, `test_partitions.py`, `test_prefetch.py`,
-`test_pg_array_ingest.py`, `test_parallel_ingest.py`, `test_windows_text.py`,
-`test_plug_and_play.py`, `test_driver_load_errors.py`) drive the built library
-through the ADBC Python driver manager. They read:
+The end-to-end tests under `tests/` drive the built library through the ADBC
+Python driver manager. `test_sqlite.py` is the smoke test; `test_delegate.py`
+covers [native delegation](../how-it-works/delegation.md); `test_plug_and_play.py`
+covers the install; and the feature tests — `test_partitions.py`,
+`test_prefetch.py`, `test_parallel_ingest.py`, `test_long_columns.py`,
+`test_pg_array_ingest.py`, `test_driver_load_errors.py`, `test_windows_text.py`
+— sit beside them. They read:
 
-- `ADBC_ODBC_DRIVER` — path to the built `libadbc_driver_odbc.so`;
+- `ADBC_ODBC_DRIVER` — path to the built `libadbc_driver_odbc.so` (default
+  `<repo>/build/libadbc_driver_odbc.so`);
 - `SQLITE_ODBC_DRIVER` / `POSTGRES_ODBC_DRIVER` / … — the vendor ODBC driver for
   the database under test.
 
-The compatibility matrix runner, `tests/compat/test_matrix.py`, exercises all 46
-databases (see [Connection strings](connection-strings.md)). It reads:
+To run the smoke test by hand, from the repository root:
+
+```sh
+python -m venv .venv && .venv/bin/pip install 'adbc-driver-manager>=1.7' pyarrow
+SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_sqlite.py
+```
+
+That the install itself is plug-and-play — install into a temporary prefix,
+then load the driver by the name `odbc` — is covered by `test_plug_and_play.py`.
+It exercises both discovery routes (`cmake --install --prefix` plus
+`ADBC_DRIVER_PATH`, and `install.sh` into the per-user config directory with
+nothing set in the environment), each connection in a subprocess with an
+explicitly built environment so a manifest already installed on the machine
+cannot make it pass by accident:
+
+```sh
+SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_plug_and_play.py
+```
+
+The Python package (`python/`) has its own pytest suite, which also runs
+against SQLite:
+
+```sh
+.venv/bin/pip install -e python pytest
+SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python -m pytest python/tests
+```
+
+Native delegation needs the native ADBC drivers installed and the
+`adbc_fake_native_driver` helper from the test build; each case skips when its
+native driver, ODBC driver (`POSTGRES_ODBC_DRIVER`, `MARIADB_ODBC_DRIVER`) or
+server is missing:
+
+```sh
+.venv/bin/pip install adbc-driver-postgresql adbc-driver-sqlite
+SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_delegate.py
+```
+
+The compatibility matrix runner,
+[`tests/compat/test_matrix.py`](../../tests/compat/test_matrix.py), is what
+produces the numbers in [Compatibility](../COMPATIBILITY.md); it exercises all
+46 databases (see [Connection strings](connection-strings.md)). It reads:
 
 - `ADBC_ODBC_DRIVER` — the driver under test (default
   `<repo>/build/libadbc_driver_odbc.so`);
@@ -167,27 +215,108 @@ databases (see [Connection strings](connection-strings.md)). It reads:
 - `ADBC_MATRIX_SUFFIX` — a table-name suffix to isolate concurrent runs.
 
 The servers themselves are brought up by `tests/compat/docker-compose.yml`, which
-defines one service per database with the ports the matrix templates connect to.
-See `tests/compat/README.md` for how the fleet is started and which vendor ODBC
-drivers each entry expects.
+defines a service for every server-backed database (`sqlite`, `duckdb` and
+`access` are file-based and need none) with the ports the matrix templates
+connect to.
+See [`tests/compat/README.md`](../../tests/compat/README.md) for how the fleet is
+started and which vendor ODBC drivers each entry expects.
+
+### Smoke tests from the other bindings
+
+The same smoke test exists for every language binding, each a standalone project
+under `tests/` that depends only on published packages. All of them read
+`SQLITE_ODBC_DRIVER` (a path or a registered driver name; default `SQLite3`) and
+`ADBC_ODBC_DRIVER` (default `../../build/libadbc_driver_odbc.so`, relative to the
+project), and need no DSN, `odbc.ini` entry or server. Build the driver first.
+
+From Rust (see [`tests/rust/README.md`](../../tests/rust/README.md)):
+
+```sh
+cd tests/rust && SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so cargo test
+```
+
+From C#, with the .NET 8 SDK and unixODBC on the host
+([`tests/csharp/README.md`](../../tests/csharp/README.md) has a `docker run`
+one-liner that needs no .NET SDK on the host):
+
+```sh
+cd tests/csharp && SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so dotnet test
+```
+
+From R, in a container built from `tests/r` (see
+[`tests/r/README.md`](../../tests/r/README.md)); `/path/to/odbc/drivers` is the
+host directory holding `libsqlite3odbc.so`:
+
+```sh
+docker build -t adbcbridge-r tests/r
+docker run --rm -v "$PWD:/repo:ro" -v /path/to/odbc/drivers:/odbc:ro \
+  -e ADBC_ODBC_DRIVER=/repo/build/libadbc_driver_odbc.so \
+  -e SQLITE_ODBC_DRIVER=/odbc/libsqlite3odbc.so \
+  adbcbridge-r Rscript /repo/tests/r/smoke.R
+```
+
+From Java, in a container, so no JDK, Maven or unixODBC is needed on the host
+(see [`tests/java/README.md`](../../tests/java/README.md)); the named volume
+caches the Maven downloads between runs:
+
+```sh
+docker run --rm \
+  -v "$PWD":/work \
+  -v /path/to/odbc/drivers:/odbc:ro \
+  -v adbcbridge-m2:/root/.m2 \
+  -w /work/tests/java \
+  -e ADBC_ODBC_DRIVER=/work/build/libadbc_driver_odbc.so \
+  -e SQLITE_ODBC_DRIVER=/odbc/libsqlite3odbc.so \
+  maven:3-eclipse-temurin-21 \
+  bash -c 'apt-get update -qq && apt-get install -y -qq unixodbc && mvn -B test'
+```
+
+From Go (`tests/go/`), which skips unless both variables are set:
+
+```sh
+cd tests/go && ADBC_ODBC_DRIVER=/abs/path/libadbc_driver_odbc.so \
+  SQLITE_ODBC_DRIVER=/abs/path/libsqlite3odbc.so go test ./...
+```
+
+### What CI runs
+
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs on every push
+to `main` and every pull request. Its single `build` job is a matrix over Ubuntu,
+macOS, Windows x64 and Windows Win32 (32-bit, where `SQLLEN` is 32 bits wide, as
+the Access, Excel and Text drivers on a 32-bit Office machine require). Each leg
+installs the ODBC driver manager where needed, configures (`Debug`, except Win32,
+which builds `Release` because that is the configuration people ship), builds,
+runs the C unit tests with `ctest --test-dir build -C Debug --output-on-failure`
+(`-C Release` on Win32), installs,
+and prints the installed `odbc.toml`.
+
+The end-to-end tests need an actual ODBC driver, so the Linux leg alone installs
+`libsqliteodbc` and Python 3.12 and additionally runs:
+
+- the SQLite end-to-end test, `tests/test_sqlite.py`;
+- the Python package's pytest suite (`pip install -e python`, then
+  `pytest python/tests`);
+- the manifest discovery check: a connection by the name `odbc` through
+  `ADBC_DRIVER_PATH`, against both the prefix given at configure time and a
+  second prefix given at install time with `cmake --install --prefix`. The
+  latter is a regression test — the manifest used to freeze the library path at
+  configure time, so a relocated install shipped a manifest pointing at the old
+  prefix.
 
 ---
 
 ## Release workflow
 
-`.github/workflows/ci.yml` builds and tests on every push and pull request across
-Ubuntu, macOS, and Windows (x64 and Win32), runs the C unit tests everywhere, and
-on Linux additionally installs a SQLite ODBC driver to run the Python tests and
-verify manifest discovery.
+Continuous integration is described under [What CI runs](#what-ci-runs).
 
 `.github/workflows/release.yml` runs on a `v*` tag (or as a dry run via
 `workflow_dispatch`) and produces, for each platform, on a GitHub Release:
 
 | Job | Artifact |
 |---|---|
-| `linux` (x86_64, aarch64, manylinux_2_28) | the `.so`, an auditwheel-repaired Python wheel, and `adbcbridge-<tag>-<rid>.tar.gz` |
-| `macos` (arm64) | the `.dylib`, a delocated wheel, and `…-osx-arm64.tar.gz` |
-| `windows` (x64) | the `.dll`, a wheel, and `…-win-x64.tar.gz` |
+| `linux` (x86_64, aarch64, manylinux_2_28) | an auditwheel-repaired Python wheel and `adbcbridge-<tag>-<rid>.tar.gz` (containing the `.so`) |
+| `macos` (arm64) | a delocated wheel and `…-osx-arm64.tar.gz` (containing the `.dylib`) |
+| `windows` (x64) | a wheel and `…-win-x64.tar.gz` (containing the `.dll`) |
 | `sdist` | a Python source distribution |
 | `crate` | the Rust crate (`cargo package`) |
 | `nuget` | a NuGet package bundling the four native libraries |
@@ -249,7 +378,7 @@ dotnet pack csharp/AdbcBridge -c Release -p:NativeRoot=/path/to/natives
 ### Java (`java/`)
 
 `mvn package` builds the jar; the `adbcbridge.natives` property points it at a
-directory of native libraries to bundle under `native/`:
+directory of native libraries to bundle under `org/adbcbridge/native/`:
 
 ```sh
 mvn -f java/pom.xml package -Dadbcbridge.natives=/path/to/natives

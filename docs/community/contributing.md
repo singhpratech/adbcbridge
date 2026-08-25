@@ -48,9 +48,9 @@ directory:
 | `odbc_driver.c` | The top-level ADBC driver: the database/connection lifecycle, connection setup, option setters and getters, and the driver-quirk detection in `OdbcDetectQuirks`. `struct OdbcDatabase` holds the environment handle, connection string / DSN / credentials, reader options and the native-delegation proxy. |
 | `odbc_reader.c` | The result-set reader: turns ODBC rowset fetches into Arrow record batches (`ArrowArrayStream`). Statement-handle refcounting, the block-cursor fetch/repair machinery, and the read-side 32-bit-`SQLLEN` handling. |
 | `odbc_bind.c` | Parameter binding (Arrow → `SQLBindParameter`) and bulk ingest. `struct ParamSlot` is the per-parameter scratch (C/SQL type, column size, indicator, UTF-16 conversion buffer, dictionary view). |
-| `odbc_delegate.c` / `odbc_delegate.h` | [Native delegation](../../README.md#native-delegation): when a native ADBC driver exists for the target, let it serve the connection and use ODBC only as the fallback. The header is the contract — the decision happens in `AdbcDatabaseInit` — and defines the `adbc.odbc.delegate*` option names and the `OdbcDelegateMode` enum. |
+| `odbc_delegate.c` / `odbc_delegate.h` | [Native delegation](../how-it-works/delegation.md): when a native ADBC driver exists for the target, let it serve the connection and use ODBC only as the fallback. The header is the contract — the decision happens in `AdbcDatabaseInit` — and defines the `adbc.odbc.delegate*` option names and the `OdbcDelegateMode` enum. |
 | `odbc_objects.c` | `ConnectionGetObjects`: ODBC catalog functions → the ADBC nested catalog/schema/table/column object schema, reading columns defensively for minimal drivers (MDB Tools, sqliteodbc) that return empty or NULL for absent catalogs. |
-| `odbc_partition.c` | [Partitioned reads](../../README.md#partitioned-reads-executepartitions) (`AdbcStatementExecutePartitions` / `AdbcConnectionReadPartition`): each descriptor is the original `SELECT` narrowed to a disjoint, half-open slice of the table. Carries the exactness argument and the per-backend split strategies. |
+| `odbc_partition.c` | [Partitioned reads](../how-it-works/partitioned-reads.md) (`AdbcStatementExecutePartitions` / `AdbcConnectionReadPartition`): each descriptor is the original `SELECT` narrowed to a disjoint, half-open slice of the table. Carries the exactness argument and the per-backend split strategies. |
 | `odbc_text.c` | Every string-carrying ODBC call, in UTF-8 end to end. On Linux/macOS these are thin passthroughs to the narrow entry points; on Windows they route through the wide (`W`) entry points, because the DM would otherwise transcode narrow text through the ANSI code page. |
 | `odbc_internal.h` | The central internal header: platform and SQL-type shims, the `ADBC_ODBC_EXPORT` macro, `struct OdbcReaderOptions` (home of nearly all the quirk flags, documented field by field), and the `SQLLEN` read/indicator helpers. |
 | `utils.c` / `utils.h`, `options.h` | Vendored from Apache Arrow ADBC — see [Vendored code](#vendored-code). |
@@ -119,7 +119,7 @@ Representative flags: `no_param_arrays`, `wchar_as_utf8`, `narrow_sql`,
 `narrow_params`, `ind_stride_32bit`, `sqllen_32bit`, `bigint_param_as_string`,
 `no_ssps`, `pg_array_ingest`. Several are also exposed as `adbc.odbc.*` options so
 a user can force them for an unlisted driver — see the option table in
-[Use (Python)](../../README.md#use-python).
+[Use (Python)](../languages/python.md).
 
 ---
 
@@ -147,7 +147,7 @@ protocol as the template.
    the driver download/build steps, the run command with its expected `PASS`
    line, and any entry notes (identifier folding, tolerance flags, server-side
    setup).
-5. **`docs/COMPATIBILITY.md`** and the **README matrix** — a row recording the
+5. **`docs/COMPATIBILITY.md`** — a row recording the
    database, its driver, the `PASS`/read-only status, and every quirk handled with
    its reason. Record the result for each operating system it was measured on.
 

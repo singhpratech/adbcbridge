@@ -33,7 +33,7 @@ bundle them.
    Python · Rust · C# · Java · Go · R · C          your application + its ADBC client
                     │  ADBC ABI (1.0.0 / 1.1.0)
                     ▼
-        libadbc_driver_odbc.{so,dylib,dll}          adbcBridge — one C file
+        libadbc_driver_odbc.{so,dylib,dll}          adbcBridge — one shared library
                     │  ODBC API
                     ▼
    unixODBC · iODBC · the Windows driver manager     the driver manager (yours)
@@ -49,7 +49,7 @@ A `SELECT` becomes Arrow record batches; parameters, prepared statements,
 transactions, bulk ingest, and catalog metadata all map onto the ODBC calls
 underneath. Where a database already has a first-class native ADBC driver
 (PostgreSQL, SQLite, DuckDB, and others), adbcBridge can hand the whole
-connection over to it — see [Native delegation](reference/quirks.md).
+connection over to it — see [Native delegation](how-it-works/delegation.md).
 
 ## Who it is for
 
@@ -123,9 +123,11 @@ planned.
 | Look up a driver option (`adbc.odbc.*`) | [reference/options.md](reference/options.md) |
 | Write an ODBC connection string | [reference/connection-strings.md](reference/connection-strings.md) |
 | Understand the Arrow type mapping | [reference/types.md](reference/types.md) |
-| Understand a per-driver quirk or native delegation | [reference/quirks.md](reference/quirks.md) |
+| Understand a per-driver quirk | [reference/quirks.md](reference/quirks.md) |
+| Understand native delegation | [how-it-works/delegation.md](how-it-works/delegation.md) |
 | Build from source | [reference/building.md](reference/building.md) |
-| Use the command line and environment variables | [reference/cli-and-env.md](reference/cli-and-env.md) |
+| Use the command line | [languages/python.md](languages/python.md#the-command-line-tool) |
+| Use environment variables | [reference/options.md](reference/options.md#environment-variables) |
 | Fix an error | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 | See exactly which databases are verified | [COMPATIBILITY.md](COMPATIBILITY.md) |
 | See what is planned | [ROADMAP.md](ROADMAP.md) |

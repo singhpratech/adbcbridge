@@ -57,8 +57,10 @@ driver. Install that separately and point the connection string at it.
 
 ## Installation
 
-Wheels are published on the project's GitHub Releases. Install the wheel for your
-platform:
+The `python/` directory of the repository holds the `adbcbridge` package, a thin
+pip-installable wrapper that locates the shared library for you and hands it to
+the ADBC driver manager. Wheels are published on the project's GitHub Releases.
+Install the wheel for your platform:
 
 ```sh
 pip install adbcbridge
@@ -66,8 +68,8 @@ pip install adbcbridge
 
 `pip install adbcbridge` works once the package is published to
 [PyPI](https://pypi.org/) (the Python Package Index). Until then, download the
-`.whl` file for your platform from the repository's GitHub Releases page and
-install it directly:
+`.whl` file for your platform from the repository's GitHub Releases page
+(`adbcbridge-0.1.0-py3-none-<platform>.whl`) and install it directly:
 
 ```sh
 pip install ./adbcbridge-0.1.0-py3-none-manylinux_2_28_x86_64.whl
@@ -78,6 +80,8 @@ Or install from a source checkout:
 ```sh
 pip install ./python
 ```
+
+The package-only README lives at [`python/README.md`](../../python/README.md).
 
 ### What the wheel contains
 
@@ -92,6 +96,18 @@ deliberate: a foreign `libodbc` would change which `odbcinst.ini` your ODBC
 drivers are read from. `auditwheel` (Linux) and `delocate` (macOS) run with
 `libodbc` excluded, so the wheel uses the system driver manager already on your
 machine.
+
+### Building a wheel yourself
+
+Wheels are pure Python unless a driver library is present at build time, in
+which case it is bundled into the wheel and the wheel is tagged for the current
+platform:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+python -m build --wheel python     # picks up ./build/libadbc_driver_odbc.so
+# or: ADBCBRIDGE_LIBRARY=/path/to/libadbc_driver_odbc.so python -m build --wheel python
+```
 
 ### Platform tags
 
@@ -109,13 +125,22 @@ matching wheel it produces a pure-Python package with no bundled library; at run
 time `adbcbridge.driver_path()` then falls back to a driver manifest or a
 system-wide install (see [Loading the driver](#loading-the-driver)).
 
-**Tip:** confirm which library the package resolved with the bundled command-line
-tool:
+### The command-line tool
+
+The package installs an `adbcbridge` command (`python -m adbcbridge` is the same
+thing). Use it to confirm which library the package resolved, to list the ODBC
+drivers on the machine, or to run a query without writing a script:
 
 ```sh
-adbcbridge driver-path      # prints the libadbc_driver_odbc.* that will be used
-adbcbridge drivers          # lists the ODBC drivers registered in odbcinst.ini
+adbcbridge query "Driver=SQLite3;Database=my.db;" "SELECT * FROM t"   # --format table|csv|schema, --limit N, -p PARAM
+adbcbridge drivers          # ODBC drivers registered in odbcinst.ini (-v adds descriptions)
+adbcbridge driver-path      # which libadbc_driver_odbc.* would be used
 ```
+
+`query` takes the connection string and the SQL as its two arguments. Each
+`-p VALUE` supplies one `?` parameter, in order, always sent as a string;
+`--limit N` prints at most `N` rows; `--format` is `table` (default), `csv` or
+`schema`; `--driver-path PATH` overrides the auto-detected library.
 
 ---
 
@@ -185,16 +210,23 @@ If nothing matches it raises `adbcbridge.DriverNotFoundError`.
 
 ### 2. `adbc_driver_manager` with an explicit path
 
-If you would rather drive the ADBC layer yourself, point it at the library:
+If you would rather drive the ADBC layer yourself, point it at the library. The
+`Driver=` in the connection string can be a registered name or, as here, the
+path of the ODBC driver library itself:
 
 ```python
 import adbc_driver_manager.dbapi as dbapi
 
 conn = dbapi.connect(
     driver="/path/to/libadbc_driver_odbc.so",
-    db_kwargs={"uri": "Driver=SQLite3;Database=my.db;"},
+    db_kwargs={"uri": "Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so;Database=my.db;"},
 )
+with conn.cursor() as cur:
+    cur.execute("SELECT * FROM my_table")
+    table = cur.fetch_arrow_table()
 ```
+
+Options are set on the database through `db_kwargs` (see [Options](#options)).
 
 ### 3. By name, via the driver manifest
 
@@ -220,13 +252,13 @@ manager searches and that the path recorded inside it exists.
 
 ### The import-order rule (Linux)
 
-`import adbcbridge` deliberately does **not** import pyarrow. `pyarrow` is imported
-only when you call `connect()`, after the ODBC driver named in the connection
-string has been opened. This matters for a small number of ODBC drivers —
-MySQL Connector/ODBC is the one seen in the wild — which can only be loaded while
-`libstdc++` has not yet been pinned to dynamic thread-local storage, and importing
-pyarrow pins it. `connect()` opens the ODBC driver first, so this is handled for
-you.
+`import adbcbridge` deliberately does **not** import pyarrow —
+`adbc_driver_manager.dbapi` (and with it pyarrow) is imported only when you call
+`connect()`, after the ODBC driver named in the connection string has been
+opened. That order matters for a handful of ODBC drivers — MySQL Connector/ODBC
+is the one seen in the wild — that need `libstdc++`'s thread-locals in *static*
+thread-local storage, which importing pyarrow first makes impossible.
+`connect()` opens the ODBC driver first, so this is handled for you.
 
 If you drive `adbc_driver_manager` or `pyodbc` yourself, do the same as the very
 first thing in your program, before anything imports pyarrow, pandas, or
@@ -240,11 +272,22 @@ adbcbridge.preload_odbc_driver("MySQL ODBC 9.4 Unicode Driver")  # or a full pat
 import adbc_driver_manager.dbapi  # imports pyarrow; now harmless
 ```
 
-`preload_odbc_driver()` accepts a driver path, a driver name from `odbcinst.ini`,
-or `uri=`/`dsn=`. It is best-effort by default; pass `strict=True` to have it
-raise when it cannot resolve or load the library. Set `ADBCBRIDGE_PRELOAD=0` to
-switch off the automatic preload inside `connect()`. See
-[`docs/TROUBLESHOOTING.md`](../TROUBLESHOOTING.md) for the full explanation.
+`preload_odbc_driver()` does on its own what `connect()` does automatically, for
+programs that use `adbc_driver_manager` or pyodbc directly. Its signature:
+
+```python
+adbcbridge.preload_odbc_driver(driver=None, *, uri=None, dsn=None, strict=False)
+    -> str | None     # the library path that was loaded, or None
+```
+
+`driver` is a driver path or a driver name from `odbcinst.ini`; leave it out and
+the driver is taken from the `Driver=` of `uri`, or from the `Driver` of the
+`dsn` section of `odbc.ini`. It is best-effort by default — a driver that will
+not preload is left to fail, with its real reason, at connection time; pass
+`strict=True` to have it raise `OSError` when it cannot resolve or load the
+library. On Windows it is a no-op, since static TLS is an ELF concept. Set
+`ADBCBRIDGE_PRELOAD=0` to switch off the automatic preload inside `connect()`.
+See [`docs/TROUBLESHOOTING.md`](../TROUBLESHOOTING.md) for the full explanation.
 
 ---
 
@@ -328,16 +371,16 @@ one's value unless overridden.
 | `adbc.odbc.connection_string` | database | string | — | ODBC connection string; alias of the standard `uri` |
 | `adbc.odbc.batch_size` | database, connection, statement | integer > 0 | `1024` | Rows per Arrow batch produced by the reader |
 | `adbc.odbc.rowset_bytes` | database | integer > 0 | `8388608` (8 MiB) | Ceiling on a reader's bound rowset buffers. The rowset holds `batch_size` rows unless that would exceed this, in which case it holds as many as fit |
-| `adbc.odbc.max_bind_bytes` | database | integer > 0 | `32768` (32 KiB) | Widest declared column width that still gets a full bound buffer. Wider columns are bound only at `long_bind_bytes` |
-| `adbc.odbc.long_bind_bytes` | database | integer > 0 | `2048` (2 KiB) | Width to bind a column whose declared width is not a real bound — a `TEXT`/`NVARCHAR(MAX)`/`bytea` column. Values longer than this are re-read in full, so this trades only speed |
+| `adbc.odbc.max_bind_bytes` | database | integer > 0 | `32768` (32 KiB) | Widest value bound at the width the driver declares for it. Wider columns are bound at `long_bind_bytes` instead, or read with `SQLGetData` where the driver cannot re-read a clipped value |
+| `adbc.odbc.long_bind_bytes` | database | integer > 0 | `2048` (2 KiB) | Width to bind a column whose declared width is not a real bound — a `TEXT`/`NVARCHAR(MAX)`/`LONGTEXT`/`bytea` column, which drivers describe by what the *type* could hold (past `max_bind_bytes`), or by nothing at all (a width of 0, which is how psqlodbc describes PostgreSQL's `bytea`). Values longer than this are read again in full, so this trades nothing but speed. Where enough of them turn out not to fit — the reader watches the first 256 rows and compares the bytes it had to re-read against what the block cursor is worth — it stops binding that column for the rest of the result set and reads it with `SQLGetData` instead, since a buffer the values do not fit in costs more than it saves |
 | `adbc.odbc.decimal_as_string` | database | `"true"` enables | `false` | Return `DECIMAL`/`NUMERIC` columns as Arrow strings (exact digits, no precision loss) |
-| `adbc.odbc.prefetch` | database, connection, statement | integer `0`–`8` | `0` (off) | Rowsets kept in flight on a background fetch thread. `1` is double-buffering. See [Prefetch](#prefetch) |
-| `adbc.odbc.partitions` | statement | integer `0`–`256` | `0` (auto) | How many partitions `execute_partitions` splits a query into. `0` chooses from table size; `1` never splits. See [Partitioned reads](#partitioned-reads) |
+| `adbc.odbc.prefetch` | database, connection, statement | integer `0`–`8` | `0` (off) | Rowsets kept in flight on a background fetch thread, so `SQLFetch` for the next one overlaps the Arrow conversion of the current one. `1` is double-buffering. See [Prefetch](#prefetch) |
+| `adbc.odbc.partitions` | statement | integer `0`–`256` | `0` (auto) | How many partitions `execute_partitions` splits a query into. `0` chooses from the table's size (its block count, its row estimate, or the span of its key, whichever the chosen strategy has — one partition per 64 MiB, at most 8); `1` never splits. A count the driver cannot honour is reduced, never faked: it will not hand out a slice that reads nothing. See [Partitioned reads](#partitioned-reads) |
 | `adbc.odbc.array_binding` | statement | `"true"` / `"false"` | `"true"` | Bind each Arrow batch as a column-wise ODBC parameter array (one execute per batch). `false` forces row-at-a-time. Drivers that mishandle arrays fall back automatically |
 | `adbc.odbc.rows_per_insert` | statement | integer `0`–`2147483647` | `0` (auto) | Row-groups per multi-row `INSERT` for bulk ingest. `1` disables the rewrite. See [Bulk ingest](#bulk-ingest) |
 | `adbc.odbc.ingest_connections` | statement | integer `1`–`64` | `1` | Connections a bulk ingest may fan out over. `N > 1` trades atomicity for speed. See [Bulk ingest](#bulk-ingest) |
-| `adbc.odbc.sqllen_32bit` | database, connection, statement | `"true"`/`"1"` / `"false"`/`"0"` | autodetect | Force the 32-bit-`SQLLEN` driver quirk on or off. Autodetected from `SQL_DRIVER_NAME`; you normally never set it |
-| `adbc.odbc.tune` | database | `"true"` / `"false"` | `"true"` | Allow adbcBridge to add ODBC connection keywords suited to how it reads results. `false` sends your connection string through untouched |
+| `adbc.odbc.sqllen_32bit` | database, connection, statement | `"true"`/`"1"` / `"false"`/`"0"` | autodetect | Force the 32-bit-`SQLLEN` driver quirk on or off. Autodetected from `SQL_DRIVER_NAME` (on for IBM Db2's `libdb2.so`, which also drives Informix, and for MDB Tools), so you normally never set it. Turn it on for any other ODBC driver that was built with a 32-bit `SQLLEN`/`SQLULEN` on a 64-bit platform — the giveaway is undetected NULLs, garbage string lengths, and row counts of `4294967295` |
+| `adbc.odbc.tune` | database | `"true"` / `"false"` | `"true"` | May adbcBridge add ODBC connection keywords of its own where it recognises the target driver? See [Connection keywords set for you](../how-it-works/connection-keywords.md) for the complete list; `false` sends your connection string through untouched |
 | `adbc.odbc.driver_name` | connection (read-only) | string | — | The `SQL_DRIVER_NAME` of the backing ODBC driver |
 
 ### Native delegation options (`adbc.odbc.delegate*`)
@@ -345,16 +388,17 @@ one's value unless overridden.
 When a first-class native ADBC driver exists for the target (PostgreSQL, SQLite,
 DuckDB, Snowflake, BigQuery, Flight SQL), adbcBridge can hand the whole database
 over to it. All of these are **database**-scoped and frozen once the database is
-initialised.
+initialised. See [Native delegation](../how-it-works/delegation.md) for how the
+choice is made.
 
 | Key | Values | Default | Purpose |
 |---|---|---|---|
 | `adbc.odbc.delegate` | `auto` / `never` / `always` | `auto` | Whether to delegate to a native driver. `auto` falls back to ODBC if none is available; `always` makes a missing native driver an error |
 | `adbc.odbc.delegate.driver` | string | — | Force a specific native driver: a bare name (`postgresql`) or manifest name; a filesystem path only with `allow_paths` |
-| `adbc.odbc.delegate.search_path` | path list | — | Extra directories to search for native drivers; needs `allow_paths` |
+| `adbc.odbc.delegate.search_path` | path list | — | Extra directories to search for native drivers (`:`-separated; `;` on Windows); needs `allow_paths` |
 | `adbc.odbc.delegate.allow_paths` | `"true"` / `"false"` | `false` | Permit the two options above to name filesystem paths |
 | `adbc.odbc.delegate.last_error` | (read-only) | — | Why delegation did not happen (empty if it did) |
-| `adbc.odbc.delegated_to` | (read-only) | — | The native driver serving this database/connection, or `odbc` |
+| `adbc.odbc.delegated_to` | (read-only) | — | The native driver serving this database/connection, or `odbc` (empty before the database is initialised) |
 
 **Note:** `adbc.odbc.delegate.driver` accepts a *path* only when
 `adbc.odbc.delegate.allow_paths` is `true`, because a database option that names a
@@ -366,7 +410,7 @@ caller-supplied options.
 | Key | Scope | Notes |
 |---|---|---|
 | `uri` | database | ODBC connection string (alias of `adbc.odbc.connection_string`) |
-| `dsn` | database | ODBC DSN name |
+| `dsn` | database | DSN name from `odbc.ini`; appended to the connection string as `DSN=...` |
 | `username`, `password` | database | Appended as `UID=`/`PWD=` |
 | `adbc.connection.autocommit` | connection | `"true"`/`"false"`; default autocommit is on at the ODBC level, but `connect()` runs transactionally unless you pass `autocommit=True` |
 | `adbc.connection.catalog` | connection | Current catalog; requires a live connection |
@@ -418,7 +462,7 @@ cur.execute("SELECT * FROM sales")
 df = cur.fetch_df()        # pandas.DataFrame  (needs pandas installed)
 
 cur.execute("SELECT * FROM sales")
-pl = cur.fetch_polars()    # polars.DataFrame  (needs polars installed)
+pl = cur.fetch_polars()    # polars.DataFrame  (needs polars installed and adbc-driver-manager >= 1.6)
 ```
 
 Equivalently, convert a fetched Arrow table yourself:
@@ -574,7 +618,7 @@ conn.adbc_get_objects(depth="tables", table_name_filter="par%")
 schema = conn.adbc_get_table_schema("my_table")    # pyarrow.Schema
 ```
 
-Takes optional `catalog=` and `db_schema=` arguments to disambiguate.
+Takes optional `catalog_filter=` and `db_schema_filter=` arguments to disambiguate.
 
 ### `adbc_get_info` — driver and server facts
 
@@ -648,7 +692,8 @@ table's size, `1` never splits. The driver splits only what it can prove is safe
 a bare `SELECT <columns> FROM <one table>` on PostgreSQL-wire servers with a heap
 or a usable integer primary key — and otherwise returns a single descriptor
 carrying the original query, which is always correct and never slower than not
-partitioning.
+partitioning. The strategies and their measurements are in
+[Partitioned reads](../how-it-works/partitioned-reads.md).
 
 **Note:** partitions are read on separate connections and therefore under separate
 snapshots. Against a table being written concurrently, the union of the slices is
@@ -676,7 +721,8 @@ silently for that query, changing nothing about the rows or the errors.
 **In practice it is worth very little**: most ODBC drivers have already buffered
 the whole result set client-side by the time `SQLFetch` is called, so there is no
 socket wait to hide. For a big PostgreSQL read, [partitioning](#partitioned-reads)
-is the mechanism that pays.
+is the mechanism that pays. The measurements are in
+[Prefetch](../how-it-works/prefetch.md).
 
 ---
 
@@ -758,7 +804,8 @@ finally:
 
 The row-oriented `fetchone()`/`fetchmany()`/`fetchall()` methods work, but for
 anything data-heavy the Arrow methods (`fetch_arrow_table`, `fetch_record_batch`,
-`fetch_df`, `fetch_polars`) are both faster and lossless.
+`fetch_df`, `fetch_polars` — the last needs adbc-driver-manager >= 1.6) are both
+faster and lossless.
 
 You can also drive the connection directly instead of through the `adbcbridge`
 package:

@@ -14,13 +14,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# The "Use from R" snippet from the top-level README.md, kept here so it cannot
+# The "Use from R" snippet from docs/languages/r.md, kept here so it cannot
 # silently rot.
 #
 # Everything below the marker line is the snippet verbatim. smoke.R reads this
 # file, swaps the two placeholder paths and the database file name for real
 # ones, and runs it -- so the snippet is executed, not just eyeballed. Keep it
-# and the README block byte-identical.
+# and the docs block byte-identical.
 
 # --- README SNIPPET BELOW THIS LINE ---
 library(adbcdrivermanager)

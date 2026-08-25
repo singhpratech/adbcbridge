@@ -35,7 +35,7 @@ odbcinst -j
 (named data sources / DSNs) live. On a Homebrew install these are under the
 Homebrew prefix.
 
-### 🍎 When you need a bridge built against iODBC instead
+### When you need a bridge built against iODBC instead
 
 A handful of vendor drivers for macOS are compiled against **iODBC**, the *other*
 ODBC driver manager, and only ship in that form. The reason is a low-level
@@ -136,13 +136,19 @@ pip install adbc-driver-manager pyarrow
 ```sh
 brew install cmake unixodbc
 git clone https://github.com/singhpratech/adbcbridge && cd adbcbridge
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DADBCBRIDGE_MANIFEST_DIR="$HOME/Library/Application Support/ADBC/Drivers"
 cmake --build build -j
 cmake --install build --prefix "$HOME/.local"
 ```
 
+`ADBCBRIDGE_MANIFEST_DIR` is given as an absolute path because its default
+(`etc/adbc/drivers`, relative to the prefix) would put the manifest in
+`~/.local/etc/adbc/drivers`, a directory the ADBC driver manager does not
+search, so `driver="odbc"` would not resolve.
+
 To build against iODBC instead, pass `-DODBC_INCLUDE_DIR` and `-DODBC_LIBRARY`
-as shown in [the iODBC section](#-when-you-need-a-bridge-built-against-iodbc-instead).
+as shown in [the iODBC section](#when-you-need-a-bridge-built-against-iodbc-instead).
 
 ### Via install.sh
 

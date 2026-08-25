@@ -45,12 +45,20 @@ nav:
       - Java: languages/java.md
       - Go: languages/go.md
       - C and C++: languages/c.md
+      - R: languages/r.md
+  - How it works:
+      - Performance, with conditions: how-it-works/performance.md
+      - Native delegation: how-it-works/delegation.md
+      - Partitioned reads: how-it-works/partitioned-reads.md
+      - Prefetch: how-it-works/prefetch.md
+      - Connection keywords: how-it-works/connection-keywords.md
   - Reference:
       - Options: reference/options.md
       - Connection strings: reference/connection-strings.md
       - Type mapping: reference/types.md
       - Driver quirks: reference/quirks.md
-      - Building from source: reference/building.md
+      - Build, install, manifest: reference/install.md
+      - Building and testing: reference/building.md
       - Troubleshooting: TROUBLESHOOTING.md
   - Project:
       - Compatibility: COMPATIBILITY.md

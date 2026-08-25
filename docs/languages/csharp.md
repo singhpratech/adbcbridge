@@ -25,6 +25,7 @@ This page assumes you are comfortable in C# but new to ODBC and ADBC.
 - [Requirements](#requirements)
 - [Install](#install)
 - [The three entry points](#the-three-entry-points)
+- [Without the wrapper: `CAdbcDriverImporter` directly](#without-the-wrapper-cadbcdriverimporter-directly)
 - [How the library is located](#how-the-library-is-located)
 - [Connection strings](#connection-strings)
 - [Driver options](#driver-options)
@@ -102,7 +103,9 @@ dotnet add package AdbcBridge --version 0.1.0 --source adbcbridge-local
 ```
 
 The release `.nupkg` is available on the project's GitHub Releases page at
-<https://github.com/singhpratech/adbcbridge/releases>.
+<https://github.com/singhpratech/adbcbridge/releases>. The package's own
+readme, [`csharp/README.md`](../../csharp/README.md), is the short form of this
+page and ships inside the `.nupkg`.
 
 ### From nuget.org once published
 
@@ -113,16 +116,38 @@ dotnet add package AdbcBridge
 Registry publication follows the first releases; until then, use the local
 source above.
 
+### With only the upstream package
+
+The wrapper is a convenience, not a requirement. The driver is a plain C shared
+library, so the official binding alone can load it:
+
+```sh
+dotnet add package Apache.Arrow.Adbc --version 0.24.0
+```
+
+You then locate the library yourself and hand its path to
+`CAdbcDriverImporter.Load` — see
+[Without the wrapper](#without-the-wrapper-cadbcdriverimporter-directly).
+
 ### Building the package yourself
 
-From a source checkout:
+From a source checkout ([`csharp/`](../../csharp/)):
 
 ```sh
 cd csharp
 dotnet build
+dotnet test                                                         # needs SQLITE_ODBC_DRIVER, skips otherwise
 dotnet pack AdbcBridge -c Release                                   # managed-only package
 dotnet pack AdbcBridge -c Release -p:NativeRoot=/abs/path/to/native # with native assets
 ```
+
+`dotnet test` runs `AdbcBridge.Tests`, which holds one real test: find the
+driver, load it, connect to SQLite through the ODBC driver `SQLITE_ODBC_DRIVER`
+names (`Driver=<value>;Database=:memory:;`), run `SELECT 1` and read the Arrow
+batch. It is skipped with a message when `SQLITE_ODBC_DRIVER` is unset. The
+driver itself is found through `Driver.Path()`, so either set
+`ADBC_ODBC_DRIVER`, or build the repo (`cmake --build build`) and let the
+build-tree lookup find it.
 
 `NativeRoot` must be a directory laid out as `<rid>/libadbc_driver_odbc.{so,dylib,dll}`:
 
@@ -180,6 +205,67 @@ The constants used along the way are public:
 | `Driver.DriverVariable` | `ADBC_ODBC_DRIVER` |
 | `Driver.ManifestPathVariable` | `ADBC_DRIVER_PATH` |
 | `Driver.ManifestName` | `odbc.toml` |
+
+---
+
+## Without the wrapper: `CAdbcDriverImporter` directly
+
+`Driver.Load()` / `Driver.Connect(connectionString)` are thin: they find the
+library and call `Apache.Arrow.Adbc.C.CAdbcDriverImporter.Load(path)`. With only
+the upstream package (see [Install](#with-only-the-upstream-package)) you make
+that call yourself, with the path of `libadbc_driver_odbc.so` (`.dylib`,
+`.dll`), and open the database and connection by hand:
+
+```csharp
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
+using Apache.Arrow.Adbc.C;
+using Apache.Arrow.Ipc;
+
+using AdbcDriver driver = CAdbcDriverImporter.Load("/path/to/libadbc_driver_odbc.so");
+
+string uri = "Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so;Database=my.db;";
+using AdbcDatabase database = driver.Open(new Dictionary<string, string> { ["uri"] = uri });
+using AdbcConnection connection = database.Connect(null);
+
+using AdbcStatement statement = connection.CreateStatement();
+statement.SqlQuery = "SELECT * FROM my_table";
+QueryResult result = statement.ExecuteQuery();
+
+IArrowArrayStream stream = result.Stream!;
+while (await stream.ReadNextRecordBatchAsync() is RecordBatch batch)
+{
+    Console.WriteLine($"{batch.Length} rows");
+}
+```
+
+`CAdbcDriverImporter.Load` `dlopen`s the shared library and calls its
+`AdbcDriverInit` export, so no ADBC driver manager or manifest is involved (the
+ODBC driver manager from [Requirements](#requirements) is still needed at run
+time). Pass a second argument to use a different entry point: the library also
+exports `AdbcDriverOdbcInit`, and
+`CAdbcDriverImporter.Load(path, "AdbcDriverOdbcInit")` works the same.
+
+Everything from [Running a query](#running-a-query) onwards applies unchanged —
+the `AdbcConnection` is the same type whichever way you obtained it. The one
+thing you give up is [How the library is located](#how-the-library-is-located);
+`DriverNotFoundException` is the wrapper's, so a wrong path here surfaces as
+the importer's own load error instead.
+
+The smoke test in [`tests/csharp/`](../../tests/csharp/) is a runnable example
+of exactly this path — it depends only on `Apache.Arrow.Adbc` and xunit, not on
+the `AdbcBridge` package — and it also compiles the snippets above so they
+cannot rot. With the .NET 8 SDK and an ODBC driver manager installed:
+
+```sh
+cd tests/csharp
+SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so dotnet test
+```
+
+`ADBC_ODBC_DRIVER` names the driver under test and defaults to
+`build/libadbc_driver_odbc.so` at the repository root; set it to test an
+installed copy. [`tests/csharp/README.md`](../../tests/csharp/README.md) has the
+containerised variant and what each test asserts.
 
 ---
 
@@ -366,9 +452,11 @@ connection.Commit();
 
 ## Parameters
 
-The driver supports parameter binding (`Bind` / `BindStream`). To run a
-parameterised statement, bind a single-row (or multi-row) `RecordBatch` whose
-columns are the parameter values, then execute:
+The driver supports parameter binding (`Bind` / `BindStream`). Parameters are
+bound as an Arrow `RecordBatch`, one column per `?` and one row per execution;
+`Bind` takes the batch and its schema. To run a parameterised statement, bind a
+single-row (or multi-row) `RecordBatch` whose columns are the parameter values,
+then execute:
 
 ```csharp
 using AdbcStatement statement = connection.CreateStatement();
@@ -377,8 +465,36 @@ statement.Bind(parameterBatch, parameterBatch.Schema);  // one column per '?'
 QueryResult result = statement.ExecuteQuery();
 ```
 
-Binding a multi-row batch applies the statement once per row (an ODBC parameter
-array), which is what bulk ingest builds on. The placeholder syntax (`?`, `$1`,
+Building the batch by hand, for a two-row `INSERT` with a `NULL` in the second
+row:
+
+```csharp
+using Apache.Arrow.Types;
+
+Schema parameters = new Schema.Builder()
+    .Field(new Field("id", Int64Type.Default, nullable: true))
+    .Field(new Field("name", StringType.Default, nullable: true))
+    .Build();
+RecordBatch batch = new RecordBatch(
+    parameters,
+    new IArrowArray[]
+    {
+        new Int64Array.Builder().Append(1).Append(2).Build(),
+        new StringArray.Builder().Append("ada").AppendNull().Build(),
+    },
+    length: 2);
+
+using AdbcStatement insert = connection.CreateStatement();
+insert.SqlQuery = "INSERT INTO my_table (id, name) VALUES (?, ?)";
+insert.Prepare();
+insert.Bind(batch, parameters);
+Console.WriteLine($"{insert.ExecuteUpdate().AffectedRows} rows inserted");
+```
+
+Binding a multi-row batch applies the statement once per row — as a column-wise ODBC
+parameter array where the driver handles them (`adbc.odbc.array_binding`, on by default),
+row by row otherwise. Bulk ingest takes its own route, a multi-row `INSERT` rewrite by
+default — see [bulk ingest](../how-it-works/performance.md#bulk-ingest). The placeholder syntax (`?`, `$1`,
 `:name`, …) is whatever the underlying ODBC driver and database accept.
 
 ---

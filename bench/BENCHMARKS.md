@@ -1032,8 +1032,8 @@ cannot win this; the gap is not in our code.
 So the way past it is to do work the native driver does not do. ADBC's own
 `AdbcStatementExecutePartitions` / `AdbcConnectionReadPartition` exist for splitting one
 query across several connections, and PostgreSQL's `ctid` makes an exact split cheap: see
-[Partitioned reads](../README.md#partitioned-reads-executepartitions) in the README for
-the mechanism and the rules for when the driver refuses to split.
+[Partitioned reads](../docs/how-it-works/partitioned-reads.md) for the mechanism and the
+rules for when the driver refuses to split.
 
 `ctid` is only the first of three strategies. It is also the least portable one, and
 [Splitting a table that has no heap](#splitting-a-table-that-has-no-heap) below covers
@@ -1158,7 +1158,7 @@ PostgreSQL wire, and several of them do not store tables in a heap at all:
 Those servers used to take the single-partition fallback, which means adbcbridge went
 into the comparison against `adbc_driver_postgresql` — the driver their users actually
 reach for — with its one advantage switched off. Two more strategies now cover them; see
-[Partitioned reads](../README.md#partitioned-reads-executepartitions) for the mechanism
+[Partitioned reads](../docs/how-it-works/partitioned-reads.md) for the mechanism
 and the rules. What follows is what each is worth, measured.
 
 #### Which strategy, measured against the alternatives
@@ -1370,7 +1370,7 @@ the fallback path pays only the part of the probe that fails.
 ### Prefetch: measured, and largely worthless
 
 The other mechanism tried was overlapping `SQLFetch` with the Arrow conversion on a
-background thread (`adbc.odbc.prefetch`; see [Prefetch](../README.md#prefetch)). It
+background thread (`adbc.odbc.prefetch`; see [Prefetch](../docs/how-it-works/prefetch.md)). It
 works, it is correct, and it is worth almost nothing:
 
 | driver | 1,000,000 rows | prefetch=0 | prefetch=1 | prefetch=2 |
@@ -1826,7 +1826,7 @@ INSERT INTO t ("a", "b", "c", "d")
 ```
 
 That is `ncols` parameters per statement however many rows it carries. See
-[Bulk ingest](../README.md#bulk-ingest) for the guard (it is a PostgreSQL-only quirk, and
+[Bulk ingest](../docs/how-it-works/performance.md#bulk-ingest) for the guard (it is a PostgreSQL-only quirk, and
 several servers speak the PostgreSQL wire protocol without being PostgreSQL) and for the
 Arrow types it covers. Everything below is 1,000,000 rows of
 `(bigint, float8, text, date)` into PostgreSQL 16.15 in Docker, over psqlodbc 16.
@@ -1964,7 +1964,7 @@ Where the remaining 1.2x would have to come from, and why none of it is availabl
 So the array form is kept for what it is — a 1.97x on the default single-connection
 ingest, a 1.31x at N=16, and 35% less total CPU — and not because it reaches the bar. A
 caller who needs native ingest speed against PostgreSQL should let the driver
-[delegate](../README.md#native-delegation) to `adbc_driver_postgresql`, which is what
+[delegate](../docs/how-it-works/delegation.md) to `adbc_driver_postgresql`, which is what
 `adbc.odbc.delegate=auto` does with a `postgresql://` URI; the benchmarks here set
 `delegate=never` on purpose, to measure the ODBC path.
 

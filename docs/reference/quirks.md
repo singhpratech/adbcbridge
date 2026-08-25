@@ -90,7 +90,7 @@ MySQL-wire warehouse matches `myodbc` and then a server probe narrows it further
 | `sqora` | Oracle | `bigint_param_as_string`, `multirow_insert_all`, `fixed_rowset`, `getdata_repair=false` | Rejects `SQL_C_SBIGINT`; has no multi-row VALUES (uses `INSERT ALL`); segfaults if the rowset size changes mid-cursor; cannot re-read a truncated LOB value |
 | `msodbcsql` | Microsoft SQL Server | `ddl_string_type_name="NVARCHAR(MAX)"` | Its `SQL_LONGVARCHAR` is the deprecated `TEXT`, which cannot be sorted, grouped, de-duplicated or compared |
 | `db2` + `SQL_DBMS_NAME` = `IDS…` | IBM Informix | `wchar_as_utf8`, `narrow_params`, `bool_param_as_int` | Gives up on a UTF-16 surrogate pair (-415); a `SQL_C_BIT` param breaks the DRDA stream |
-| `db2` (not `libdb2o`) | IBM Db2 | `ddl_string_as_max_varchar` | Its `SQL_LONGVARCHAR` is `LONG VARCHAR`, ~700× slower to bulk-insert than VARCHAR |
+| `db2` + `SQL_DBMS_NAME` not `IDS…` | IBM Db2 | `ddl_string_as_max_varchar` | Its `SQL_LONGVARCHAR` is `LONG VARCHAR`, ~700× slower to bulk-insert than VARCHAR |
 | `myodbc` + 4-byte SQLWCHAR | MySQL Connector/ODBC on iODBC (macOS) | `wide_utf16_pairs`, `wchar_as_utf8` | Writes UTF-16 units into 4-byte slots but mangles wide params under `NO_SSPS`; its narrow path is clean UTF-8 |
 
 ### Autodetected `sqllen_32bit`

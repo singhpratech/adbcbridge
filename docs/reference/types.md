@@ -65,13 +65,14 @@ reports as a short character column) is detected by name and mapped to Arrow
 | `SQL_SS_TIMESTAMPOFFSET`, `SQL_TYPE_TIMESTAMP_WITH_TIMEZONE` | — | `timestamp[us, UTC]` | text | SQL Server `datetimeoffset` and ODBC 4.0 timestamp-with-zone |
 
 **Timestamp precision** (`TimestampUnitForColumn`): the Arrow time unit follows
-the column's fractional-second precision — scale 0 gives `s`, 1–3 gives `ms`,
-4–6 gives `us`, 7–9 gives `ns`. When the driver reports scale 0 but a column size
-of 21–29 (a driver that encodes precision in the width, e.g. `column_size − 20`),
-that width is used instead. When neither is trustworthy (MySQL Connector/ODBC
-reports scale 0 / size 19 for `DATETIME(6)`), the unit falls back to microseconds,
-which cannot silently drop sub-second digits the way whole seconds would.
-Timestamps carrying a zone are always `us`.
+the column's fractional-second precision — scale 1–3 gives `ms`, 4–6 gives `us`,
+7–9 gives `ns`. A reported scale of 0 is not trusted on its own: when the column
+size is 21–29 (a driver that encodes precision in the width, e.g.
+`column_size − 20`), that width is used instead; with any other size (MySQL
+Connector/ODBC reports scale 0 / size 19 for `DATETIME(6)`, SQLiteODBC scale 0 /
+size 32 for every `TIMESTAMP`) the unit falls back to microseconds, which cannot
+silently drop sub-second digits the way whole seconds would. `timestamp[s]` is
+therefore never produced. Timestamps carrying a zone are always `us`.
 
 ### Other types
 
@@ -115,9 +116,10 @@ Two Windows-only quirks override that default for specific drivers:
 - **`wchar_as_utf8`** (Apache Ignite): an ANSI-only driver whose narrow path is
   already UTF-8. The column is read `SQL_C_CHAR`; the driver manager leaves a
   `SQL_C_CHAR` buffer alone, so the bytes arrive as written. On POSIX this same
-  quirk is set for Firebird's OdbcFb, Virtuoso's ANSI driver, Informix, and
-  MySQL Connector/ODBC built for iODBC — drivers whose SQLWCHAR handling is not
-  UTF-16.
+  quirk is set for Firebird's OdbcFb, Virtuoso's ANSI driver (on 2-byte-SQLWCHAR
+  builds only, i.e. unixODBC, not the iODBC/macOS build, where its wide path is
+  the correct one), Informix, and MySQL Connector/ODBC built for iODBC — drivers
+  whose SQLWCHAR handling is not UTF-16.
 
 ---
 

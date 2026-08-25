@@ -41,5 +41,5 @@ Windows-only; covers the few remaining sources that have OLE DB providers but no
 ## Non-goals
 
 - Replacing native ADBC drivers where they exist (PostgreSQL, Snowflake, BigQuery, …): those
-  will always be faster. adbcbridge is for everything else, and for the long tail of enterprise
+  will always be faster. adbcBridge is for everything else, and for the long tail of enterprise
   databases that will never get a native driver.

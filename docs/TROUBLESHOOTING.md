@@ -9,7 +9,7 @@ saying *why* the loader refused the file is discarded before the driver manager
 sees it. So a driver that is present, readable and perfectly valid is reported
 as missing, which sends you looking for the wrong problem.
 
-adbcbridge opens the same path itself when a connection fails that way, and puts
+adbcBridge opens the same path itself when a connection fails that way, and puts
 the real reason in the ADBC error:
 
 ```
@@ -34,8 +34,8 @@ process.
 
 ### What you see
 
-From Python, after importing pyarrow — with adbcbridge, with pyodbc, or with a
-bare `ctypes.CDLL`; adbcbridge is not involved in causing it:
+From Python, after importing pyarrow — with adbcBridge, with pyodbc, or with a
+bare `ctypes.CDLL`; adbcBridge is not involved in causing it:
 
 ```
 OSError: /lib/x86_64-linux-gnu/libstdc++.so.6: cannot allocate memory in static TLS block
@@ -107,7 +107,7 @@ Percona, MatrixOne, GreptimeDB, Databend, OceanBase and MongoDB (BI connector).
 
 **Load the ODBC driver before anything imports pyarrow.** Opening the driver
 first is what gives libstdc++ its static TLS offset; everything afterwards —
-pyarrow included — then uses that offset. The adbcbridge Python package does
+pyarrow included — then uses that offset. The `adbcbridge` Python package does
 this for you: `import adbcbridge` deliberately does not import pyarrow, and
 `adbcbridge.connect()` opens the ODBC driver named in the connection string
 before it imports `adbc_driver_manager.dbapi`. Nothing is needed from you.
@@ -158,9 +158,9 @@ kernel, a worker started by a framework that imports pandas first.
   A `dlopen`ed library gets a static TLS offset only when something demands one,
   and a plain `dlopen` does not. Preload the *driver*, or use `LD_PRELOAD`.
 * **Loading the driver again after the first failure.** There is no retry that
-  helps, which is why adbcbridge does not attempt one.
+  helps, which is why adbcBridge does not attempt one.
 
-Nothing here can be fixed from inside adbcbridge for a process that has already
+Nothing here can be fixed from inside adbcBridge for a process that has already
 imported pyarrow. The durable fix belongs upstream, in a Connector/ODBC build
 that does not use initial-exec TLS.
 
@@ -188,7 +188,7 @@ Symptoms seen on Windows 11 with builds before `d364312` (2026-08-24):
 Cause: the Windows driver manager transcodes every *narrow* (`SQLCHAR*`, `SQL_C_CHAR`)
 string between the driver and the process's ANSI code page (1252 on a Western install).
 unixODBC and iODBC pass narrow bytes through untouched, so on Linux and macOS the narrow
-entry points and the `SQL_C_CHAR` fetch path carry UTF-8 end to end, and adbcbridge was
+entry points and the `SQL_C_CHAR` fetch path carry UTF-8 end to end, and adbcBridge was
 written on that assumption. Bound parameters and `SQL_WCHAR` columns were always correct
 (they are UTF-16), which is what hid both halves for as long as it did.
 

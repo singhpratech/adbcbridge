@@ -36,6 +36,9 @@ The import path ends in `go`, so give the package an explicit name on import:
 import adbcbridge "github.com/singhpratech/adbcbridge/go"
 ```
 
+The module's own [`go/README.md`](../../go/README.md) is the shorter reference
+for the same API and describes how to run its tests.
+
 ### cgo and a C compiler
 
 The ADBC Go driver manager is a cgo package. Building anything that imports this
@@ -125,7 +128,7 @@ func main() {
 
 | Function / method | What it does |
 |---|---|
-| `DriverPath() (string, error)` | Absolute path of the adbcbridge shared library, found as [described below](#where-the-library-comes-from). The error is a `*DriverNotFoundError` whose `Searched` field lists every place tried. |
+| `DriverPath() (string, error)` | Absolute path of the adbcBridge shared library (`libadbc_driver_odbc`), found as [described below](#where-the-library-comes-from). The error is a `*DriverNotFoundError` whose `Searched` field lists every place tried. |
 | `NewDriver(alloc memory.Allocator) (adbc.Driver, error)` | An `adbc.Driver` (concretely `*adbcbridge.Driver`, wrapping `drivermgr.Driver`) whose `NewDatabase(opts)` adds the resolved path under the `"driver"` option. Pass `"uri"` and any `adbc.odbc.*` options yourself. |
 | `Open(ctx, alloc, connectionString, options) (adbc.Database, error)` | `NewDriver` + `NewDatabase` with `connectionString` stored under `"uri"` and `options` (may be `nil`) passed through. The database is initialised, not connected: call `Open(ctx)` on it for an `adbc.Connection`. |
 | `Driver.Path() string` | the shared library `NewDatabase` loads |
@@ -150,7 +153,11 @@ kept only for API parity; passing `nil` selects `memory.DefaultAllocator`.
 
 ## Where the library comes from
 
-`DriverPath` returns the first hit from, in order:
+The module finds the library the same way the other language packages do — an
+environment variable, a copy carried by the package, the ADBC `odbc.toml`
+manifest, then the usual install directories — so one installed driver serves
+Go, Python, Java and Rust alike. `DriverPath` returns the first hit from, in
+order:
 
 1. the `ADBC_ODBC_DRIVER` environment variable, then `ADBCBRIDGE_LIBRARY` — an
    explicit value that does not exist is an **error**, not a silent fallback;
@@ -346,7 +353,7 @@ any ADBC Go driver; adbcBridge adds nothing of its own here.
 | Type | When |
 |---|---|
 | `*adbcbridge.DriverNotFoundError` | `DriverPath` / `NewDriver` / `Open` could not find the shared library. Fields: `Library` (the file name looked for on this OS) and `Searched` (every place checked, each with a note on why it did not match). The `Error()` text ends with how to fix it. |
-| `adbc.Error` | query, connection and statement failures from the driver manager, carrying the structured ODBC diagnostics (SQLSTATE plus the native error code) adbcbridge maps from the driver. |
+| `adbc.Error` | query, connection and statement failures from the driver manager, carrying the structured ODBC diagnostics (SQLSTATE plus the native error code) adbcBridge maps from the driver. |
 
 Detect a missing driver with `errors.As`:
 
@@ -406,7 +413,7 @@ loading it does.
 - **No `database/sql` interface.** This module exposes the ADBC Go API
   (`adbc.Database` / `adbc.Connection` / `adbc.Statement`), not a
   `database/sql` driver. If you need `database/sql` against ODBC, that is a
-  separate third-party driver, unrelated to adbcbridge.
+  separate third-party driver, unrelated to adbcBridge.
 - **Windows: no prefetch, no parallel ingest.** The prefetch pipeline
   (`adbc.odbc.prefetch`) and the ingest fan-out (`adbc.odbc.ingest_connections`)
   use POSIX threads and are compiled out on Windows; those options have no
