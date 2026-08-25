@@ -4,7 +4,7 @@
 **Status: measured, one machine, campaign closed — 25 of 46 databases pass (five native
 installs, then a Docker Desktop tier one container at a time), 5 fail on one connector rule,
 1 has no driver, 3 servers cannot run in the VM, 12 vendor-driver entries were not attempted
-(each with its reason in `docs/COMPATIBILITY.md`); 131 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
+(each with its reason in `docs/COMPATIBILITY.md`); 132 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
 CI was reporting that to nobody. The first person to build on Windows found ten defects across the repository — driver,
 tests and benchmark harnesses — and all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
 `windows.h` first; `strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT`
