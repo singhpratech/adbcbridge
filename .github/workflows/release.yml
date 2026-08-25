@@ -14,23 +14,25 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Release: build the driver library on every supported platform, wrap it into
-# the per-language packages, attach everything to a GitHub Release, and (on a
-# tag) publish the Python wheels to PyPI through trusted publishing.
+# Release: build the driver library on every supported platform, wrap it into the
+# per-language packages, and put everything on a GitHub Release.
 #
-# Every platform job produces the same three things: the driver library, a
-# Python wheel with it bundled, and the bare library under natives/<rid>/ for
-# the NuGet, Maven and Go packaging jobs that follow. The wheels are tagged
-# py3-none-<platform> -- there is no Python extension module in them, only a
-# C shared library -- and depend on the OS's own ODBC driver manager
-# (unixODBC / iODBC / odbc32), which is deliberately NOT bundled: bundling a
-# foreign libodbc would change which odbcinst.ini the user's drivers are read
-# from. auditwheel/delocate therefore run with that library excluded.
+# Files move between jobs through the Release itself (`gh release upload` /
+# `gh release download`), not through Actions artifacts: Releases are free and
+# unmetered on every plan, artifacts are not. A workflow_dispatch run without a
+# tag is a dry run against a draft release that the last job deletes.
 #
-# Publishing to PyPI needs a trusted publisher configured on the PyPI project
-# for this repository and workflow (environment "pypi"); without it the publish
-# job fails and nothing else is affected. The crates.io, NuGet and Maven Central
-# steps are documented in each package's README and run by a maintainer.
+# Every platform job produces the driver library, a Python wheel with it bundled
+# (py3-none-<platform>: a C shared library, no Python extension module, so one
+# wheel per platform serves every Python version) and the bare library as
+# <rid>.tar.gz for the NuGet and Maven jobs. The OS's own ODBC driver manager
+# (unixODBC / iODBC / odbc32) is deliberately NOT bundled: a foreign libodbc
+# would change which odbcinst.ini the user's drivers are read from, so
+# auditwheel/delocate run with it excluded.
+#
+# PyPI: the separate publish-pypi.yml publishes a tag's wheels through trusted
+# publishing once the PyPI project has a trusted publisher for this repository
+# and that workflow (environment "pypi").
 
 name: Release
 
@@ -38,25 +40,62 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build and attach assets to; empty = dry run on a draft release"
+        required: false
+        default: ""
 
 permissions:
-  contents: read
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
+  prepare:
+    name: Create or reuse the release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      dryrun: ${{ steps.tag.outputs.dryrun }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"; DRY=false
+          elif [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"; DRY=false
+          else
+            TAG="dryrun-${{ github.run_number }}"; DRY=true
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"; echo "dryrun=$DRY" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists; assets will be replaced"
+          elif [ "$DRY" = true ]; then
+            gh release create "$TAG" --draft --prerelease --title "dry run $TAG" --notes "Dry run of the release workflow; deleted automatically." --target "$GITHUB_SHA"
+          else
+            gh release create "$TAG" --draft --title "adbcBridge $TAG" --generate-notes
+          fi
+
   linux:
     name: Linux ${{ matrix.arch }} (manylinux_2_28)
+    needs: prepare
     runs-on: ${{ matrix.runner }}
     container: quay.io/pypa/manylinux_2_28_${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { arch: x86_64,  runner: ubuntu-latest,        rid: linux-x64 }
-          - { arch: aarch64, runner: ubuntu-24.04-arm,     rid: linux-arm64 }
+          - { arch: x86_64,  runner: ubuntu-latest,    rid: linux-x64 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, rid: linux-arm64 }
     steps:
       - uses: actions/checkout@v4
-      - name: Install unixODBC headers
-        run: dnf install -y unixODBC-devel
+      - name: Install unixODBC headers and the GitHub CLI
+        run: |
+          dnf install -y unixODBC-devel
+          dnf install -y 'dnf-command(config-manager)' && dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && dnf install -y gh
       - name: Build the driver
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -69,25 +108,16 @@ jobs:
           ADBCBRIDGE_LIBRARY=$PWD/build/libadbc_driver_odbc.so $PY -m build --wheel python -o wheelhouse-raw
           $PY -m auditwheel repair --exclude libodbc.so.2 --plat manylinux_2_28_${{ matrix.arch }} -w wheelhouse wheelhouse-raw/*.whl
           ls -l wheelhouse
-      - name: Stage the bare library
+      - name: Upload to the release
         run: |
-          mkdir -p natives/${{ matrix.rid }}
-          cp build/libadbc_driver_odbc.so natives/${{ matrix.rid }}/
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: wheel-${{ matrix.rid }}
-          path: wheelhouse/*.whl
-          retention-days: 7
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: native-${{ matrix.rid }}
-          path: natives/
-          retention-days: 7
+          mkdir -p natives/${{ matrix.rid }} && cp build/libadbc_driver_odbc.so natives/${{ matrix.rid }}/
+          tar czf adbcbridge-${{ needs.prepare.outputs.tag }}-${{ matrix.rid }}.tar.gz -C natives ${{ matrix.rid }}
+          git config --global --add safe.directory "$PWD"
+          gh release upload "${{ needs.prepare.outputs.tag }}" wheelhouse/*.whl adbcbridge-*-${{ matrix.rid }}.tar.gz --clobber
 
   macos:
     name: macOS arm64
+    needs: prepare
     runs-on: macos-latest
     env:
       MACOSX_DEPLOYMENT_TARGET: "14.0"
@@ -105,32 +135,22 @@ jobs:
       - name: Build and repair the wheel
         run: |
           python -m pip install --upgrade build delocate
-          # setup-python's macOS interpreter is a universal2 build, which would tag
-          # the wheel universal2 and make delocate demand an x86_64 slice; the
-          # library is arm64 only, so say so.
+          # setup-python's macOS interpreter is a universal2 build, which would tag the
+          # wheel universal2 and make delocate demand an x86_64 slice; the library is
+          # arm64 only, so say so.
           _PYTHON_HOST_PLATFORM=macosx-14.0-arm64 ADBCBRIDGE_LIBRARY=$PWD/build/libadbc_driver_odbc.dylib \
             python -m build --wheel python -o wheelhouse-raw
           delocate-wheel --exclude libodbc --require-archs arm64 -w wheelhouse -v wheelhouse-raw/*.whl
           ls -l wheelhouse
-      - name: Stage the bare library
+      - name: Upload to the release
         run: |
-          mkdir -p natives/osx-arm64
-          cp build/libadbc_driver_odbc.dylib natives/osx-arm64/
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: wheel-osx-arm64
-          path: wheelhouse/*.whl
-          retention-days: 7
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: native-osx-arm64
-          path: natives/
-          retention-days: 7
+          mkdir -p natives/osx-arm64 && cp build/libadbc_driver_odbc.dylib natives/osx-arm64/
+          tar czf adbcbridge-${{ needs.prepare.outputs.tag }}-osx-arm64.tar.gz -C natives osx-arm64
+          gh release upload "${{ needs.prepare.outputs.tag }}" wheelhouse/*.whl adbcbridge-*-osx-arm64.tar.gz --clobber
 
   windows:
     name: Windows x64
+    needs: prepare
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -142,32 +162,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build the wheel
+      - name: Build the wheel and upload
         shell: bash
         run: |
           python -m pip install --upgrade build
           ADBCBRIDGE_LIBRARY=$PWD/build/Release/libadbc_driver_odbc.dll python -m build --wheel python -o wheelhouse
           ls -l wheelhouse
-      - name: Stage the bare library
-        shell: bash
-        run: |
-          mkdir -p natives/win-x64
-          cp build/Release/libadbc_driver_odbc.dll natives/win-x64/
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: wheel-win-x64
-          path: wheelhouse/*.whl
-          retention-days: 7
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: native-win-x64
-          path: natives/
-          retention-days: 7
+          mkdir -p natives/win-x64 && cp build/Release/libadbc_driver_odbc.dll natives/win-x64/
+          tar czf adbcbridge-${{ needs.prepare.outputs.tag }}-win-x64.tar.gz -C natives win-x64
+          gh release upload "${{ needs.prepare.outputs.tag }}" wheelhouse/*.whl adbcbridge-*-win-x64.tar.gz --clobber
 
   sdist:
     name: Source distribution
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -177,147 +184,87 @@ jobs:
       - run: |
           python -m pip install --upgrade build
           python -m build --sdist python -o sdist
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: sdist
-          path: sdist/*.tar.gz
-          retention-days: 7
+          gh release upload "${{ needs.prepare.outputs.tag }}" sdist/*.tar.gz --clobber
 
   crate:
     name: Rust crate (cargo package)
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y unixodbc-dev
       - uses: dtolnay/rust-toolchain@stable
-      - name: Verify the bundled sources are in sync, then package
+      - name: Verify the bundled sources are in sync, package, upload
         working-directory: rust
         run: |
           cargo test --release
           cargo package --allow-dirty
-          ls -l target/package/*.crate
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: crate
-          path: rust/target/package/*.crate
-          retention-days: 7
+          gh release upload "${{ needs.prepare.outputs.tag }}" target/package/*.crate --clobber
 
   nuget:
     name: NuGet package with native assets
-    needs: [linux, macos, windows]
+    needs: [prepare, linux, macos, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: native-*
-          path: artifacts
-          merge-multiple: true
+      - name: Fetch the native libraries from the release
+        run: |
+          mkdir -p natives && cd natives
+          gh release download "${{ needs.prepare.outputs.tag }}" --pattern 'adbcbridge-*-linux-x64.tar.gz' --pattern 'adbcbridge-*-linux-arm64.tar.gz' --pattern 'adbcbridge-*-osx-arm64.tar.gz' --pattern 'adbcbridge-*-win-x64.tar.gz'
+          for f in *.tar.gz; do tar xzf "$f"; done; rm -f *.tar.gz; ls -R
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
-      - name: Pack
-        # With the native artifacts present the package carries them under
-        # runtimes/<rid>/native; on a dry run whose uploads were refused it is
-        # packed managed-only, so the step still proves the pack itself.
+      - name: Pack and upload
         run: |
-          ls -R artifacts 2>/dev/null | head -20 || true
-          if ls artifacts/*/libadbc_driver_odbc.* >/dev/null 2>&1; then
-            dotnet pack csharp/AdbcBridge -c Release -p:NativeRoot=$PWD/artifacts -o nupkg
-            unzip -l nupkg/*.nupkg | grep runtimes/
-          else
-            echo "::warning::no native artifacts were downloaded; packing managed-only"
-            dotnet pack csharp/AdbcBridge -c Release -o nupkg
-          fi
-          unzip -l nupkg/*.nupkg
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: nuget
-          path: nupkg/*.nupkg
-          retention-days: 7
+          dotnet pack csharp/AdbcBridge -c Release -p:NativeRoot=$PWD/natives -o nupkg
+          unzip -l nupkg/*.nupkg | grep runtimes/
+          gh release upload "${{ needs.prepare.outputs.tag }}" nupkg/*.nupkg --clobber
 
   maven:
     name: Maven jar with natives
-    needs: [linux, macos, windows]
+    needs: [prepare, linux, macos, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: native-*
-          path: artifacts
-          merge-multiple: true
+      - name: Fetch the native libraries from the release
+        run: |
+          mkdir -p dl && cd dl
+          gh release download "${{ needs.prepare.outputs.tag }}" --pattern 'adbcbridge-*-linux-x64.tar.gz' --pattern 'adbcbridge-*-linux-arm64.tar.gz' --pattern 'adbcbridge-*-osx-arm64.tar.gz' --pattern 'adbcbridge-*-win-x64.tar.gz'
+          for f in *.tar.gz; do tar xzf "$f"; done; rm -f *.tar.gz
+          cd .. && mkdir -p natives
+          for pair in linux-x64:linux-x86_64 linux-arm64:linux-aarch64 osx-arm64:macos-aarch64 win-x64:windows-x86_64; do
+            rid=${pair%%:*}; osarch=${pair##*:}
+            [ -d "dl/$rid" ] && cp -r "dl/$rid" "natives/$osarch"
+          done; ls -R natives
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
           cache: maven
-      - name: Lay out natives as <os>-<arch> and package
+      - name: Package and upload
         run: |
-          mkdir -p natives
-          for pair in linux-x64:linux-x86_64 linux-arm64:linux-aarch64 osx-arm64:macos-aarch64 win-x64:windows-x86_64; do
-            rid=${pair%%:*}; osarch=${pair##*:}
-            if [ -d "artifacts/$rid" ]; then cp -r "artifacts/$rid" "natives/$osarch"; fi
-          done
-          if [ -n "$(ls -A natives)" ]; then
-            mvn -q -B -f java/pom.xml package -DskipTests -Dadbcbridge.natives=$PWD/natives
-            unzip -l java/target/adbcbridge-*[0-9].jar | grep native/
-          else
-            echo "::warning::no native artifacts were downloaded; packaging the pure jar"
-            mvn -q -B -f java/pom.xml package -DskipTests
-          fi
-          ls -l java/target/*.jar
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name == 'workflow_dispatch' }}
-        with:
-          name: maven
-          path: java/target/adbcbridge-*.jar
-          retention-days: 7
+          mvn -q -B -f java/pom.xml package -DskipTests -Dadbcbridge.natives=$PWD/natives
+          unzip -l java/target/adbcbridge-*[0-9].jar | grep native/
+          gh release upload "${{ needs.prepare.outputs.tag }}" java/target/adbcbridge-*.jar --clobber
 
-  release:
-    name: GitHub Release
-    needs: [linux, macos, windows, sdist, crate, nuget, maven]
-    if: startsWith(github.ref, 'refs/tags/v')
+  finish:
+    name: Publish the release (or delete the dry run)
+    needs: [prepare, linux, macos, windows, sdist, crate, nuget, maven]
+    if: always() && needs.prepare.result == 'success'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - name: Lay out release assets
-        run: |
-          mkdir -p assets
-          cp artifacts/wheel-*/*.whl artifacts/sdist/*.tar.gz assets/
-          cp artifacts/crate/*.crate artifacts/nuget/*.nupkg artifacts/maven/*.jar assets/
-          for d in artifacts/native-*/*/; do
-            rid=$(basename "$d"); (cd "$d" && tar czf "$OLDPWD/assets/adbcbridge-${GITHUB_REF_NAME}-$rid.tar.gz" .)
-          done
-          ls -l assets
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: assets/*
-          generate_release_notes: true
-
-  pypi:
-    name: Publish to PyPI
-    needs: [linux, macos, windows, sdist]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+      - uses: actions/checkout@v4
       - run: |
-          mkdir -p dist
-          cp artifacts/wheel-*/*.whl artifacts/sdist/*.tar.gz dist/
-          ls -l dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist
+          TAG="${{ needs.prepare.outputs.tag }}"
+          if [ "${{ needs.prepare.outputs.dryrun }}" = "true" ]; then
+            gh release view "$TAG" --json assets -q '.assets[].name'
+            gh release delete "$TAG" --yes --cleanup-tag || gh release delete "$TAG" --yes
+            echo "dry run: draft release deleted"
+          elif [ "${{ needs.linux.result }}" = "success" ] && [ "${{ needs.macos.result }}" = "success" ] && [ "${{ needs.windows.result }}" = "success" ] && [ "${{ needs.sdist.result }}" = "success" ] && [ "${{ needs.crate.result }}" = "success" ] && [ "${{ needs.nuget.result }}" = "success" ] && [ "${{ needs.maven.result }}" = "success" ]; then
+            gh release edit "$TAG" --draft=false
+            gh release view "$TAG" --json assets -q '.assets[].name'
+          else
+            echo "::error::one or more build jobs failed; $TAG stays a draft with the assets that did build"
+            exit 1
+          fi
