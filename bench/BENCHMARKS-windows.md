@@ -143,7 +143,10 @@ prune -af` between entries.
 | clickhouse | PASS (`ClickHouse (via ODBC) 26.7.5.10`), clickhouse-odbc 1.5.5 from the GitHub MSI, server at 1 GB (97 MB used); pyodbc ingest at one HTTP request per row was at 3,501 rows after 15 min and was capped (`--pyodbc-timeout 120`) | 159,763 | 107,933 | 282 (516) | — |
 | doris | **server not runnable here**: 7 GB image against 5–10 GB free host disk, ~2.5 GB resident under a 6 GB cap, 2.4 GB VM — not attempted, since the pull would have filled the disk under Docker | | | | |
 
-**A class, not four incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone, mongodbbi. Everything else in
+| ydb | PASS (`PostgreSQL (via ODBC) 14.0.5`) with psqlodbc 16.00.0007, registered by hand — 18.00.0002 fails at connect (`unrecognized configuration parameter "datestyle"`), and a DLL path in `Driver=` gets `IM002` from the Windows driver manager (unixODBC accepts one); 1,024 MB used at 1536m | 101,712 | 61,361 | 750 (756) | 38 |
+| starrocks | **FAIL** at the astral check only — fifth member of the class; StarRocks 4.x at 1536m (976 MB used) | 402,109 | 213,907 | 2,603 (3,957) | — |
+
+**A class, not five incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone, mongodbbi, starrocks. Everything else in
 their workloads passes, and their read rates are among the best on this machine.
 
 openGauss operator note: the `adbc` role must be created *inside* the container as `omm` via
