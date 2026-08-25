@@ -758,8 +758,14 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // for SQL_WVARCHAR, before any value is looked at.  Its SQL_C_WCHAR buffers are also
     // sized in wchar_t (4 bytes on Linux) where unixODBC passes UTF-16, the same way
     // Firebird's OdbcFb sizes them.  Its narrow path is UTF-8 -- Ignite stores strings as
-    // UTF-8 and the driver hands the bytes straight through -- so use it.
+    // UTF-8 and the driver hands the bytes straight through -- so use it.  On Windows the
+    // wchar_as_utf8 route is switched off below (the narrow *fetch* path there is the
+    // ANSI code page for most drivers), which left Ignite binding SQL_WVARCHAR parameters
+    // it refuses (HYC00 at SQLBindParameter, found on Windows); narrow_params keeps the
+    // parameter side on SQL_C_CHAR everywhere, where the driver manager does not
+    // transcode, while fetched text takes whichever path the platform uses.
     conn->reader_opts.wchar_as_utf8 = true;
+    conn->reader_opts.narrow_params = true;
     // Column-wise parameter arrays are accepted and executed, but the NULL indicator is
     // read from the wrong row: Parameter::Write() tests `buffer.GetInputSize()` on the
     // whole bound array -- element offset 0 -- and only then copies the buffer and points
@@ -792,6 +798,13 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // rows, but binds SQL_C_TYPE_DATE from the first parameter set only: every row of a
     // bound array gets row 0's date, silently.  One execute per row instead.
     conn->reader_opts.no_param_arrays = true;
+#if defined(_WIN32)
+    // virtodbc.dll reports the SQL_GD_* extensions that make the in-place truncation
+    // repair legal, but SQLSetPos(SQL_POSITION) fails on it (found on Windows: single-row
+    // reads fine, the first block-cursor repair dies).  Without the repair a long column
+    // stays unbound and the rowset collapses to one row, which needs no positioning.
+    conn->reader_opts.getdata_repair = false;
+#endif
   }
   if (strstr((const char*)name, "monetdb")) {
     // MonetDBODBClib accepts SQL_ATTR_PARAMSET_SIZE, executes only the first parameter

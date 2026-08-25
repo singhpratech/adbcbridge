@@ -336,7 +336,7 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
     case NANOARROW_TYPE_STRING: case NANOARROW_TYPE_LARGE_STRING:
     case NANOARROW_TYPE_STRING_VIEW: {
       int64_t units = 0;
-      if (opts->wchar_as_utf8) {  // see OdbcReaderOptions::wchar_as_utf8
+      if (opts->wchar_as_utf8 || opts->narrow_params) {  // see OdbcReaderOptions::wchar_as_utf8, narrow_params
         struct ArrowStringView s = {NULL, 0};
         p->c_type = SQL_C_CHAR;
         if (p->indicator != SQL_NULL_DATA) {
@@ -775,7 +775,7 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
         *supported = false;
         return;
       }
-      const bool wide = !binary && !opts->wchar_as_utf8;
+      const bool wide = !binary && !opts->wchar_as_utf8 && !opts->narrow_params;
       p->utf16_pairs = opts->wide_utf16_pairs;
       int64_t max = ArrayParamVarLenMax(av, binary, wide, opts->wide_utf16_pairs, nrows);
       if (max < 0) {  // too wide to stage: this batch goes row-at-a-time

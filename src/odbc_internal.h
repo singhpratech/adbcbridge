@@ -387,6 +387,13 @@ struct OdbcReaderOptions {
   // Bound wide parameters are then encoded that way; the reader accepts both forms
   // regardless, since a surrogate is never a valid code point on its own.
   bool wide_utf16_pairs;
+  // Driver quirk: bind string parameters as SQL_C_CHAR (UTF-8 bytes) even where the wide
+  // path is the default -- for a driver that has no wide SQL type at all (Apache Ignite:
+  // SQLBindParameter answers HYC00 for SQL_WVARCHAR) and whose narrow path hands the
+  // bytes through.  Unlike wchar_as_utf8 this holds on Windows too: the driver manager
+  // transcodes narrow *statement text*, never a bound SQL_C_CHAR buffer, so the bytes
+  // reach such a driver intact while fetched text still comes back wide.
+  bool narrow_params;
   // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
   bool no_describe_param;
   // Driver quirk: the driver describes a column as SQL_TYPE_TIMESTAMP but has no
