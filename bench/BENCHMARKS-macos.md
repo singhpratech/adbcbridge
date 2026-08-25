@@ -50,7 +50,7 @@ python tests/test_plug_and_play.py
 | postgres | PASS | `PostgreSQL (via ODBC) 15.15.0` |
 | mssql | PASS | `Microsoft SQL Server (via ODBC) 16.00.4265` |
 
-### Python: adbcbridge vs pyodbc (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`)
+### Python: adbcBridge vs pyodbc (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`)
 
 | database | ADBC ingest rows/s | pyodbc ingest | ADBC fetch rows/s | pyodbc fetch |
 |---|---:|---:|---:|---:|

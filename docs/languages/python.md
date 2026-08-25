@@ -72,7 +72,7 @@ pip install adbcbridge
 (`adbcbridge-0.1.0-py3-none-<platform>.whl`) and install it directly:
 
 ```sh
-pip install ./adbcbridge-0.1.0-py3-none-manylinux_2_28_x86_64.whl
+pip install ./adbcbridge-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 ```
 
 Or install from a source checkout:
@@ -115,10 +115,14 @@ Binary wheels are built for these platforms:
 
 | Platform | Wheel tag |
 |---|---|
-| Linux x86-64 | `py3-none-manylinux_2_28_x86_64` |
-| Linux aarch64 (ARM64) | `py3-none-manylinux_2_28_aarch64` |
+| Linux x86-64 | `py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64` |
+| Linux aarch64 (ARM64) | `py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64` |
 | macOS arm64 (Apple Silicon, macOS 14+) | `py3-none-macosx_14_0_arm64` |
 | Windows x64 | `py3-none-win_amd64` |
+
+The Linux wheels are built for `manylinux_2_28`; `auditwheel repair` writes the
+compressed tag set (`manylinux2014`, `manylinux_2_17`, `manylinux_2_28`) into
+the file name, which is why the Linux names are long.
 
 A source distribution (`sdist`) is also published. Installed on a platform with no
 matching wheel it produces a pure-Python package with no bundled library; at run

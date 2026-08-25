@@ -1,6 +1,6 @@
-# adbcbridge for Rust
+# adbcBridge for Rust
 
-Find and load [adbcbridge](https://github.com/singhpratech/adbcbridge) -- the
+Find and load [adbcBridge](https://github.com/singhpratech/adbcbridge) -- the
 ADBC driver for any ODBC data source -- through the `adbc_driver_manager`
 crate.
 

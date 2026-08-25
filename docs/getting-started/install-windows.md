@@ -65,7 +65,9 @@ The Windows release asset is `adbcbridge-<tag>-win-x64.tar.gz`, containing
 The Windows wheel bundles the DLL. Install it, plus the ADBC client:
 
 ```
-pip install adbcbridge
+pip install adbcbridge          # once published to PyPI
+# or, from a downloaded release wheel:
+pip install adbcbridge-0.1.0-py3-none-win_amd64.whl
 pip install adbc-driver-manager pyarrow
 ```
 
@@ -125,7 +127,7 @@ means `driver="odbc"` will not find the library.
 > imports the Go module needs a GCC (MinGW-w64) on `PATH` with `CGO_ENABLED=1`.
 > See [languages/go.md](../languages/go.md).
 
-## What the Windows build does not have
+## Prefetch and parallel ingest on Windows
 
 Two features are compiled out on Windows because both are built on pthreads,
 which is a POSIX facility (the guard is `_WIN32`):
@@ -140,8 +142,8 @@ Everything else — queries, types, parameters, single-connection bulk ingest,
 metadata, error mapping — works. Because these two are absent, a Windows read or
 ingest measures a materially different code path from the Linux one; keep that in
 mind when comparing performance across platforms. A Win32 port of both (using
-SRWLOCK, CONDITION_VARIABLE and `_beginthreadex`) is the first Windows roadmap
-item — see [ROADMAP.md](../ROADMAP.md).
+SRWLOCK, CONDITION_VARIABLE and `_beginthreadex`) is on the roadmap — see
+[ROADMAP.md](../ROADMAP.md).
 
 > **Tip: `NO_SSPS=1` for MySQL Connector/ODBC against non-MySQL servers.** The
 > Windows MySQL Connector/ODBC needs `NO_SSPS=1` (no server-side prepared

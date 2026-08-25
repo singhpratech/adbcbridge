@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# adbcbridge read-path benchmarks
+# adbcBridge read-path benchmarks
 
 Fetching 1,000,000 rows of `(int, double, 20-char text, date)` out of SQLite,
-comparing adbcbridge against the usual Python ODBC path.
+comparing adbcBridge against the usual Python ODBC path.
 
 Reproduce with:
 
@@ -15,7 +15,7 @@ SQLITE_ODBC_DRIVER=... python bench/fetch_bench.py --rows 1000000 --sweep 9   # 
 
 ## Headline
 
-adbcbridge is **2.4x faster than `pyodbc.fetchall()` -> `pyarrow.Table`** and
+adbcBridge is **2.4x faster than `pyodbc.fetchall()` -> `pyarrow.Table`** and
 **2.8x faster than `pyodbc.fetchall()` -> `pandas.DataFrame`**, and it lands
 within **7% of the raw-ODBC floor** — the cost of `SQLBindCol` + `SQLFetch`
 with no Arrow work at all. On this workload there is very little headroom left
@@ -36,7 +36,7 @@ inside our own code; see [Where the time goes](#where-the-time-goes).
 
 Data: a 50.2 MiB SQLite file, `CREATE TABLE bench (id INTEGER, val DOUBLE, txt
 VARCHAR(20), dt DATE)`, 1,000,000 rows, no nulls, no index; queried as
-`SELECT id, val, txt, dt FROM bench`. adbcbridge returns
+`SELECT id, val, txt, dt FROM bench`. adbcBridge returns
 `int32, double, string, date32[day]` — 40.0 MB of Arrow buffers.
 
 The machine was not otherwise quiesced (other agents were running), so numbers
@@ -52,7 +52,7 @@ driver built `-DCMAKE_BUILD_TYPE=Release`:
 
 | Path | Median | Throughput | Relative |
 |---|---:|---:|---:|
-| **(a) adbcbridge `cur.fetch_arrow_table()`** | **0.476 s** | **2.10 M rows/s** | **1.00x** |
+| **(a) adbcBridge `cur.fetch_arrow_table()`** | **0.476 s** | **2.10 M rows/s** | **1.00x** |
 | (b) pyodbc `fetchall()` -> `pyarrow.Table` | 1.155 s | 0.87 M rows/s | 2.43x slower |
 | (c) pyodbc `fetchall()` -> `pandas.DataFrame` | 1.319 s | 0.76 M rows/s | 2.77x slower |
 | *reference*: stdlib `sqlite3.fetchall()`, no ODBC | 0.540 s | 1.85 M rows/s | 1.13x slower |
@@ -60,7 +60,7 @@ driver built `-DCMAKE_BUILD_TYPE=Release`:
 
 For (b) and (c), `fetchall()` alone accounts for 0.949 s and 0.940 s; the
 remaining 0.21 s and 0.38 s is building the Arrow table / DataFrame from the
-list of `pyodbc.Row` objects. So adbcbridge beats pyodbc's *row materialisation
+list of `pyodbc.Row` objects. So adbcBridge beats pyodbc's *row materialisation
 alone*, before any columnar conversion is charged to it. Note pyodbc's path
 infers `int64` for `id` where we return the declared `int32`.
 
@@ -75,7 +75,7 @@ optimisation #1):
 
 | Path | Median | Throughput |
 |---|---:|---:|
-| adbcbridge `fetch_arrow_table()` (Debug `-O0`) | 0.522 s | 1.91 M rows/s |
+| adbcBridge `fetch_arrow_table()` (Debug `-O0`) | 0.522 s | 1.91 M rows/s |
 | *floor* (always built `-O2`) | 0.449 s | 2.23 M rows/s |
 
 ### Effect of `adbc.odbc.batch_size`
@@ -180,7 +180,7 @@ against the same query; *native* is `adbc_driver_postgresql` (libpq, no ODBC).
 | Path | before | after | | |
 |---|---:|---:|---|---|
 | native `adbc_driver_postgresql` | 0.42 s | 0.42 s | | |
-| **adbcbridge (ODBC)** | **1.10 s** | **0.67 s** | | **1.64x faster** |
+| **adbcBridge (ODBC)** | **1.10 s** | **0.67 s** | | **1.64x faster** |
 | — of which execute | 0.54 s | 0.43 s | floor 0.44 s | |
 | — of which fetch + convert | 0.45 s | 0.25 s | floor 0.24 s | |
 | *floor*: raw `SQLBindCol`+`SQLFetch` | 0.68 s | 0.68 s | | |
@@ -1011,7 +1011,7 @@ exactly 10 rows/s; Doris: 7). Multi-row batching does not make an `INSERT` cheap
 there be 20 of them instead of 10,000 — which is worth 478x and 312x respectively, and is
 as far as the ODBC path goes. Past K = 500 both flatten (Doris: 2,250 rows/s at both 500
 and 1,000 row-groups), so the remaining cost is the server's per-row work, not round
-trips. Anyone loading these at volume should use Stream Load; adbcbridge cannot, and this
+trips. Anyone loading these at volume should use Stream Load; adbcBridge cannot, and this
 is the ceiling of what it can do through a MySQL wire.
 
 **YDB is capped by its own SQL text.** YDB's PostgreSQL wire cannot bind a NULL — a Bind
@@ -1023,7 +1023,7 @@ one `INSERT` per row manages.
 
 ## Beating the native driver: partitioned reads
 
-The section above ends at a wall. adbcbridge reads PostgreSQL within a couple of percent
+The section above ends at a wall. adbcBridge reads PostgreSQL within a couple of percent
 of the raw-ODBC floor, and the floor is 1.6x slower than the native
 `adbc_driver_postgresql` — because the floor *is* psqlodbc's text-protocol decoding, and
 no bridge can remove the ODBC driver from underneath itself. Shaving the inner loop
@@ -1062,7 +1062,7 @@ Treat the ratios as solid and the third significant figure as noise.
 Every timing is **wall clock, end to end** — opening the connections, executing,
 fetching and building the Arrow table — because that is what a caller waits for. The
 variants are interleaved within each repetition so a drift in load lands on all of them,
-and the median of 5 is reported with the spread. Every adbcbridge run is checksummed
+and the median of 5 is reported with the spread. Every adbcBridge run is checksummed
 (count, sum, min and max of every column) against the single-connection read, and the
 benchmark aborts on a mismatch: none occurred.
 
@@ -1070,10 +1070,10 @@ benchmark aborts on a mismatch: none occurred.
 
 | variant | median | min | max | Mrow/s | vs native |
 |---|---:|---:|---:|---:|---:|
-| adbcbridge, N=1 | 0.526 s | 0.511 | 0.544 | 1.90 | 0.40x |
-| adbcbridge, N=2 | 0.298 s | 0.283 | 0.305 | 3.35 | 0.70x |
-| adbcbridge, N=4 | 0.199 s | 0.197 | 0.224 | 5.02 | 1.04x |
-| **adbcbridge, N=8** | **0.156 s** | 0.145 | 0.166 | **6.43** | **1.34x** |
+| adbcBridge, N=1 | 0.526 s | 0.511 | 0.544 | 1.90 | 0.40x |
+| adbcBridge, N=2 | 0.298 s | 0.283 | 0.305 | 3.35 | 0.70x |
+| adbcBridge, N=4 | 0.199 s | 0.197 | 0.224 | 5.02 | 1.04x |
+| **adbcBridge, N=8** | **0.156 s** | 0.145 | 0.166 | **6.43** | **1.34x** |
 | native `adbc_driver_postgresql` | 0.208 s | 0.207 | 0.225 | 4.81 | 1.00x |
 | *floor*: raw `SQLBindCol`+`SQLFetch` | 0.493 s | 0.483 | 0.513 | 2.03 | — |
 
@@ -1081,10 +1081,10 @@ benchmark aborts on a mismatch: none occurred.
 
 | variant | median | min | max | Mrow/s | vs native |
 |---|---:|---:|---:|---:|---:|
-| adbcbridge, N=1 | 5.145 s | 5.047 | 5.415 | 1.94 | 0.36x |
-| adbcbridge, N=2 | 2.747 s | 2.601 | 2.888 | 3.64 | 0.68x |
-| adbcbridge, N=4 | 1.712 s | 1.507 | 1.747 | 5.84 | 1.10x |
-| **adbcbridge, N=8** | **1.216 s** | 1.207 | 1.308 | **8.22** | **1.54x** |
+| adbcBridge, N=1 | 5.145 s | 5.047 | 5.415 | 1.94 | 0.36x |
+| adbcBridge, N=2 | 2.747 s | 2.601 | 2.888 | 3.64 | 0.68x |
+| adbcBridge, N=4 | 1.712 s | 1.507 | 1.747 | 5.84 | 1.10x |
+| **adbcBridge, N=8** | **1.216 s** | 1.207 | 1.308 | **8.22** | **1.54x** |
 | native `adbc_driver_postgresql` | 1.875 s | 1.774 | 1.894 | 5.33 | 1.00x |
 | *floor*: raw `SQLBindCol`+`SQLFetch` | 4.898 s | 4.745 | 5.004 | 2.04 | — |
 
@@ -1155,7 +1155,7 @@ PostgreSQL wire, and several of them do not store tables in a heap at all:
 | CockroachDB v26.3 | `42703  column "ctid" does not exist` |
 | YugabyteDB 2026.1 (PG 15 engine) | `0A000  system column "ctid" is not supported yet` |
 
-Those servers used to take the single-partition fallback, which means adbcbridge went
+Those servers used to take the single-partition fallback, which means adbcBridge went
 into the comparison against `adbc_driver_postgresql` — the driver their users actually
 reach for — with its one advantage switched off. Two more strategies now cover them; see
 [Partitioned reads](../docs/how-it-works/partitioned-reads.md) for the mechanism
@@ -1232,9 +1232,9 @@ The native driver reads by asking for `COPY … WITH (FORMAT binary)` and decodi
 PostgreSQL's binary tuples straight into Arrow, and CockroachDB does not implement binary
 `COPY TO`. Every `SELECT` fails, including the ones this benchmark would need to build its
 own reference. So there is no native ADBC baseline to hold to 1.2x — there is no native
-ADBC path at all, and adbcbridge is the only one.
+ADBC path at all, and adbcBridge is the only one.
 
-What can be measured is what partitioning is worth against adbcbridge's own single
+What can be measured is what partitioning is worth against adbcBridge's own single
 connection:
 
 | N | median | min | max | Mrow/s | vs N=1 |
@@ -1510,7 +1510,7 @@ type is one the server barely supports.
 
 `SQLGetTypeInfo(SQL_LONGVARCHAR)` on IBM's clidriver answers **`LONG VARCHAR`**, which IBM
 deprecated in Db2 9. Writing 20,000 rows of `(INTEGER, DOUBLE, <string>, DATE)` straight
-through the ODBC API with no adbcbridge in the way, medians of 3 — this is the *server*,
+through the ODBC API with no adbcBridge in the way, medians of 3 — this is the *server*,
 not the bridge:
 
 | `txt` column type | multi-row `VALUES`, K=500 | parameter arrays, 8192 |
@@ -1523,7 +1523,7 @@ not the bridge:
 
 Every string type Db2 has is within 25% of the fastest. `LONG VARCHAR` alone is 700x off
 it. It is also close to unusable: `ORDER BY`, `GROUP BY` and `DISTINCT` on one are all
-`SQL0134N`, "improper use of a string column" — so a table adbcbridge created could not be
+`SQL0134N`, "improper use of a string column" — so a table adbcBridge created could not be
 sorted or grouped on its own text column.
 
 This is what made Db2 look like a bridge problem. In-driver instrumentation of a
@@ -1564,11 +1564,11 @@ The same question asked of msodbcsql: `SQLGetTypeInfo(SQL_LONGVARCHAR)` answers 
 which Microsoft deprecated in SQL Server 2005. A `text` column cannot be sorted (error
 306), grouped (306), de-duplicated (`SELECT DISTINCT`, 421) — or even compared:
 `WHERE s = 'a'` is error 402, "the data types text and varchar are incompatible". A table
-adbcbridge created on SQL Server could not be filtered on its own string column.
+adbcBridge created on SQL Server could not be filtered on its own string column.
 
 `NVARCHAR(MAX)`, which is what Microsoft documents as the replacement, holds the same
 2 GB, is Unicode rather than the database's code page, and is faster both ways.
-20,000-row ingest and 100,000-row read through adbcbridge, medians of 5, interleaved:
+20,000-row ingest and 100,000-row read through adbcBridge, medians of 5, interleaved:
 
 | `txt` DDL type | ingest rows/s | fetch rows/s |
 |---|---:|---:|
@@ -1583,7 +1583,7 @@ number and cannot be derived from `SQLGetTypeInfo`.
 Both fixes are guarded by `text_sortable` in `tests/compat/test_matrix.py`, which reads an
 ingest-created table back with `ORDER BY`, `GROUP BY` and `DISTINCT` on its text column.
 It is opt-in rather than universal because the same restriction is genuine on some servers
-whatever adbcbridge does — Oracle's `SQL_LONGVARCHAR` is `CLOB`, and `ORDER BY` on a
+whatever adbcBridge does — Oracle's `SQL_LONGVARCHAR` is `CLOB`, and `ORDER BY` on a
 `CLOB` is ORA-00932 — so it is claimed only where it has been checked: sqlite, duckdb,
 mssql and db2.
 
@@ -1732,10 +1732,10 @@ partitions, which is why it beats the plain heap table of the same size.
 
 | variant | median | min | max | vs native |
 |---|---:|---:|---:|---:|
-| adbcbridge, N=1 (what a partitioned parent used to get) | 0.513 s | 0.496 | 0.520 | 0.42x |
-| adbcbridge, N=2 | 0.296 s | 0.281 | 0.319 | 0.74x |
-| adbcbridge, N=4 | 0.191 s | 0.179 | 0.209 | 1.14x |
-| **adbcbridge, N=8** | **0.164 s** | 0.154 | 0.194 | **1.33x** |
+| adbcBridge, N=1 (what a partitioned parent used to get) | 0.513 s | 0.496 | 0.520 | 0.42x |
+| adbcBridge, N=2 | 0.296 s | 0.281 | 0.319 | 0.74x |
+| adbcBridge, N=4 | 0.191 s | 0.179 | 0.209 | 1.14x |
+| **adbcBridge, N=8** | **0.164 s** | 0.154 | 0.194 | **1.33x** |
 | native `adbc_driver_postgresql` | 0.218 s | 0.209 | 0.222 | 1.00x |
 
 (`bench/partition_bench.py`, median of 5 in one warm process, 1 M rows over four child
@@ -1833,7 +1833,7 @@ Arrow types it covers. Everything below is 1,000,000 rows of
 
 ### The floor, measured without the driver in the way
 
-A standalone C program against psqlodbc — no adbcbridge, no Arrow, values generated in a
+A standalone C program against psqlodbc — no adbcBridge, no Arrow, values generated in a
 loop — writing 1,000,000 rows of `(bigint, float8, text, date)` into a fresh table on one
 connection. Wall clock, client CPU by `getrusage`, server CPU from the container's
 `cpu.stat`:
@@ -1974,13 +1974,13 @@ caller who needs native ingest speed against PostgreSQL should let the driver
   sweep, per-column attribution, unbound-column cliff, cProfile).
 - `bench/odbc_floor.c` — raw `SQLBindCol`/`SQLFetch` floor, built on demand by
   the harness with `cc -O2 ... -lodbc`.
-- `bench/partition_bench.py` — the partitioned read: adbcbridge at N partitions on N
+- `bench/partition_bench.py` — the partitioned read: adbcBridge at N partitions on N
   threads over N connections, against native `adbc_driver_postgresql` and the raw ODBC
   floor, with a full-result checksum at every N.
 - `bench/prefetch_bench.py` — `adbc.odbc.prefetch` at several depths against any ODBC
   driver, checksummed against the depth-0 read.
 - `bench/ingest_bench.py`, `bench/matrix_bench.py` — the write path.
-- `bench/native_threshold.py` — the 1.2x threshold harness: adbcbridge against the
+- `bench/native_threshold.py` — the 1.2x threshold harness: adbcBridge against the
   native ADBC driver on both fetch and ingest, fresh process per run, interleaved,
   mean of three, checksum-verified, `PASS`/`FAIL`.
 - `bench/verify_array_binding.py` — differential check that array binding and the

@@ -1,4 +1,4 @@
-| csharp | arcadedb | — | 304,373 | — | — || java | arcadedb | — | 274,520 | — | — || go | arcadedb | — | 281,320 | — | — || rust | arcadedb | — | 276,685 | — | 321,745 || csharp | spanner | 8,761 | 126,408 | — | — || java | spanner | 7,222 | 111,714 | — | — || go | spanner | 8,301 | 125,034 | — | — || rust | spanner | 7,061 | 106,509 | — | 126,469 |<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # The same benchmark, from every language — macOS
 
 The workload of [`LANGUAGE_BENCHMARKS.md`](LANGUAGE_BENCHMARKS.md) run on **macOS 26.5,
@@ -9,7 +9,7 @@ Desktop; the ones marked emulated are amd64 images under Rosetta-class emulation
 was never idle (1-minute load 2.4–10.5, recorded per entry in `BENCHMARKS-macos.md`), so read
 rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's, whose
 `alexbrainman/odbc` binding faults on every server here except SQLite, Access and Informix
-(the same failure the Linux file records). The campaign is complete: 183 cells, every empty one explained below.
+(the same failure the Linux file records). The campaign is complete: 191 cells (the eight Spanner and ArcadeDB re-runs included), every empty one explained below.
 
 | Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
 |---|---|---:|---:|---:|---:|
@@ -114,15 +114,15 @@ rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's
 | java | materialize | 31,575 | 149,707 | — | — |
 | csharp | materialize | 31,466 | 327,977 | — | — |
 | python | spanner | 6,115 | 81,367 | 265 | 112,280 |
-| rust | spanner | — | — | — | — |
-| go | spanner | — | — | — | — |
-| java | spanner | — | — | — | — |
-| csharp | spanner | — | — | — | — |
+| rust | spanner | 7,061 | 106,509 | — | 126,469 |
+| go | spanner | 8,301 | 125,034 | — | — |
+| java | spanner | 7,222 | 111,714 | — | — |
+| csharp | spanner | 8,761 | 126,408 | — | — |
 | python | arcadedb | — | 289,023 | — | — |
-| rust | arcadedb | — | — | — | — |
-| go | arcadedb | — | — | — | — |
-| java | arcadedb | — | — | — | — |
-| csharp | arcadedb | — | — | — | — |
+| rust | arcadedb | — | 276,685 | — | 321,745 |
+| go | arcadedb | — | 281,320 | — | — |
+| java | arcadedb | — | 274,520 | — | — |
+| csharp | arcadedb | — | 304,373 | — | — |
 | python | tdengine | — | 552,492 | — | — |
 | rust | tdengine | — | 507,308 | — | — |
 | python | tidb | 105,077 | 46,796 | 3,296 | 44,287 |

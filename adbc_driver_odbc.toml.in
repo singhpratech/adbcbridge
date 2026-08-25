@@ -40,10 +40,10 @@ supported = [
   'get table schema',
   'execute schema',
   'cancel',
+  'partitioned results',
 ]
 unsupported = [
   'async',
-  'partitioned results',
   'statistics',
 ]
 

@@ -19,7 +19,7 @@
 
 # ADBC Driver Foundry validation suite
 
-This directory wires adbcbridge into the
+This directory wires adbcBridge into the
 [ADBC Driver Foundry validation suite](https://github.com/adbc-drivers/validation),
 running it against SQLite through the SQLite ODBC driver.
 
@@ -77,7 +77,7 @@ recreates its own tables, so reusing it is fine.
 |---|---|---|
 | `SQLITE_ODBC_DRIVER` | `SQLite3` | Path to `libsqlite3odbc.so` (or a registered driver name). |
 | `ADBCBRIDGE_VALIDATION_DB` | `/tmp/adbcbridge-validation.sqlite` | SQLite database file the suite runs against. |
-| `ADBC_ODBC_DRIVER` | `<repo>/build/libadbc_driver_odbc.so` | Path to the built adbcbridge shared library. |
+| `ADBC_ODBC_DRIVER` | `<repo>/build/libadbc_driver_odbc.so` | Path to the built adbcBridge shared library. |
 | `ADBCBRIDGE_VALIDATION_URI` | derived from the two above | Full ODBC connection string. Set it to override completely. |
 
 ### Useful flags

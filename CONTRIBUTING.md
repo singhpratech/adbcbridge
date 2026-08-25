@@ -1,6 +1,6 @@
-# Contributing to adbcbridge
+# Contributing to adbcBridge
 
-Thanks for your interest in adbcbridge — an [ADBC](https://arrow.apache.org/adbc/)
+Thanks for your interest in adbcBridge — an [ADBC](https://arrow.apache.org/adbc/)
 driver that bridges any ODBC data source to Apache Arrow. Website:
 <https://adbcbridge.org>.
 
@@ -89,7 +89,7 @@ patch them locally — send the fix upstream and re-vendor.
 
 ## Licensing
 
-adbcbridge is Apache-2.0. By contributing you agree that your contribution is
+adbcBridge is Apache-2.0. By contributing you agree that your contribution is
 licensed under those terms.
 
 Every new non-vendored source file starts with the license header:

@@ -453,9 +453,11 @@ bounded identically.
 
 ## Known limitations
 
-- **Early release (0.1.0).** The API surface is small and may change. A
-  conformance suite is planned, not shipped; prebuilt driver tarballs ship on
-  GitHub Releases, but the crate is not yet on crates.io.
+- **Early release (0.1.0).** The API surface is small and may change. The
+  ADBC Driver Foundry validation suite runs against the driver from
+  `tests/validation/` (latest results in `tests/validation/RESULTS.md`; driver
+  defects it found are still being worked through); prebuilt driver tarballs
+  ship on GitHub Releases, but the crate is not yet on crates.io.
 - **Windows: no prefetch, no parallel ingest.** The prefetch pipeline
   (`adbc.odbc.prefetch`) and the ingest fan-out (`adbc.odbc.ingest_connections`)
   both use POSIX threads and are compiled out on Windows. On Windows those

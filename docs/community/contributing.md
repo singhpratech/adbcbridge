@@ -117,7 +117,7 @@ Two variations matter:
 
 Representative flags: `no_param_arrays`, `wchar_as_utf8`, `narrow_sql`,
 `narrow_params`, `ind_stride_32bit`, `sqllen_32bit`, `bigint_param_as_string`,
-`no_ssps`, `pg_array_ingest`. Several are also exposed as `adbc.odbc.*` options so
+`temporal_binary_param_as_varchar`, `pg_array_ingest`. Several are also exposed as `adbc.odbc.*` options so
 a user can force them for an unlisted driver — see the option table in
 [Use (Python)](../languages/python.md).
 

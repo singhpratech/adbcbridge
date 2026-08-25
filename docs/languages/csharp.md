@@ -141,10 +141,13 @@ dotnet pack AdbcBridge -c Release                                   # managed-on
 dotnet pack AdbcBridge -c Release -p:NativeRoot=/abs/path/to/native # with native assets
 ```
 
-`dotnet test` runs `AdbcBridge.Tests`, which holds one real test: find the
-driver, load it, connect to SQLite through the ODBC driver `SQLITE_ODBC_DRIVER`
-names (`Driver=<value>;Database=:memory:;`), run `SELECT 1` and read the Arrow
-batch. It is skipped with a message when `SQLITE_ODBC_DRIVER` is unset. The
+`dotnet test` runs `AdbcBridge.Tests`, which holds two tests. The first is the
+real thing: find the driver, load it, connect to SQLite through the ODBC driver
+`SQLITE_ODBC_DRIVER` names (`Driver=<value>;Database=:memory:;`), run
+`SELECT 1` and read the Arrow batch. It is skipped with a message when
+`SQLITE_ODBC_DRIVER` is unset. The second points `ADBCBRIDGE_LIBRARY` at a path
+that does not exist and checks that `DriverNotFoundException` names the
+variable, the path, and every place searched. The
 driver itself is found through `Driver.Path()`, so either set
 `ADBC_ODBC_DRIVER`, or build the repo (`cmake --build build`) and let the
 build-tree lookup find it.

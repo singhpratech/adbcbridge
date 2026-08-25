@@ -23,7 +23,7 @@ driver setup (root-free) and run commands:
 
 ### A note on the PostgreSQL-wire rows
 
-Eighteen entries below reach their server through psqlodbc, and most of them are not
+Fourteen entries below reach their server through psqlodbc, and most of them are not
 PostgreSQL. One behaviour is keyed on being PostgreSQL rather than on speaking its wire:
 bulk ingest sends a batch as one array parameter per column
 (`INSERT … SELECT * FROM unnest(?::bigint[], ?::text[], …)`) instead of K row-groups of

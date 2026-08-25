@@ -104,8 +104,8 @@ you both the binding and the driver in one step:
 
 ```sh
 pip install adbcbridge          # once published to PyPI
-# or, from a downloaded release wheel:
-pip install adbcbridge-0.1.0-py3-none-manylinux_2_28_x86_64.whl
+# or, from a downloaded release wheel (the aarch64 wheel is named likewise):
+pip install adbcbridge-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 pip install adbc-driver-manager pyarrow
 ```
 
@@ -145,7 +145,8 @@ config directory so discovery just works.
 ./install.sh
 ```
 
-It puts the library in `~/.local/lib/libadbc_driver_odbc.so` and the manifest in
+It puts the library in `~/.local/lib/libadbc_driver_odbc.so` (`lib64` on
+Fedora/RHEL-style 64-bit systems) and the manifest in
 `~/.config/adbc/drivers/odbc.toml`, then prints both paths. Re-running it is
 safe — it reconfigures the same build tree and overwrites the same two files. It
 honours these environment overrides:
@@ -258,7 +259,8 @@ you installed the Python wheel you can use its convenience wrapper instead —
 > checks worth knowing: `adbcbridge drivers` lists the ODBC drivers the driver
 > manager can see, and `adbcbridge driver-path` prints which
 > `libadbc_driver_odbc.so` would be loaded. See
-> [CLI and environment](../reference/options.md).
+> [the command-line tool](../languages/python.md#the-command-line-tool) and
+> [environment variables](../reference/options.md#environment-variables).
 
 ## Known limitations
 

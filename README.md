@@ -32,7 +32,7 @@ you get native speed from the same install.
   batched reads, catalog, error mapping — against a real server or file; every cell that
   is not a pass names its reason. [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
 - **Five languages × 46 databases on one binary** — Python, Rust, C#, Java and Go,
-  229 of 230 cells on Linux, 183 on macOS, 219 of 230 on Windows, every empty cell
+  229 of 230 cells on Linux, 191 on macOS, 219 of 230 on Windows, every empty cell
   explained. [`bench/LANGUAGE_BENCHMARKS.md`](bench/LANGUAGE_BENCHMARKS.md)
 - **1.2–1.5× the native PostgreSQL ADBC driver** on a 1,000,000-row read split over eight
   connections — on a quiet host; 0.97× on a busy one, 0.60× on an M4 Max. Bulk ingest does
@@ -81,8 +81,10 @@ Once the manifest is installed, every ADBC binding loads the driver by the name 
 
 ## Use it from every language
 
-One library, loaded by name from every binding. The five packages below are built and
-tested on every release; the full page for each language covers options, parameters,
+One library, loaded by name from every binding. Four of the five packages below — the
+wheel, the crate, the nupkg and the jar — are built and attached by the release workflow
+(which tests the crate; the bindings' own suites live under `tests/`), and the Go module
+comes from the tagged source; the full page for each language covers options, parameters,
 bulk ingest, metadata, errors and known limitations.
 
 ### Python
@@ -231,9 +233,11 @@ Everything below except the benchmark index lives under [`docs/`](docs/index.md)
 ## Language packages
 
 One driver library, five packages that find and load it. Four of them — the wheel, the
-crate, the nupkg and the jar — are built, tested and attached to every
+crate, the nupkg and the jar — are built and attached to every
 [release](https://github.com/singhpratech/adbcbridge/releases) together with the bare
-libraries; the Go module is fetched with `go get` from the tagged source. None of them is
+libraries (the release workflow tests the crate; the bindings' own suites live under
+`tests/`); the Go module is fetched with `go get` from the tagged source (`go/v0.1.0`,
+the sub-module tag). None of them is
 on PyPI, crates.io, NuGet or Maven Central yet — install from the release assets;
 registry publication, PyPI first, is the next step.
 

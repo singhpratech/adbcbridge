@@ -114,8 +114,10 @@ tar xzf adbcbridge-v0.1.0-osx-arm64.tar.gz
 
 ### From the Python wheel (bundles the library)
 
-The macOS wheel is tagged **`macosx-14.0-arm64`** — that is, it targets macOS
-14.0 or later on Apple Silicon (`MACOSX_DEPLOYMENT_TARGET` is `14.0`).
+The macOS wheel is tagged **`macosx_14_0_arm64`** — that is, it targets macOS
+14.0 or later on Apple Silicon (`MACOSX_DEPLOYMENT_TARGET` is `14.0`; the
+release build passes `_PYTHON_HOST_PLATFORM=macosx-14.0-arm64`, which the wheel
+tag normalises to).
 
 ```sh
 pip install adbcbridge          # once published to PyPI
@@ -126,7 +128,7 @@ pip install adbc-driver-manager pyarrow
 
 > **Note (the universal caveat):** the wheel is **arm64 only**, not a
 > universal2 (fat) wheel. Python interpreters from python.org are often
-> universal2 builds; the release build tags the wheel `macosx-14.0-arm64`
+> universal2 builds; the release build tags the wheel `macosx_14_0_arm64`
 > explicitly so packaging tools do not demand a nonexistent x86-64 slice. On an
 > Intel Mac, or under an x86-64 (Rosetta) Python, this wheel will not match —
 > build from source instead.

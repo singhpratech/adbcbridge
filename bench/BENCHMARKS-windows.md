@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks — Windows
 
-**Status: measured on two machines — 45 of 46 databases pass on the second (14-core, 32 GB, every server in Docker Desktop) at `a4d6ce5` plus the four Windows fixes in `src/` that this campaign found, 1 fails on a vendor driver's ANSI-code-page conversion (ANSI-code-page conversion inside the driver: tdengine), none on the bridge; the first machine's campaign (7.7 GB laptop, 26 pass) is kept below as history; five languages × 46 databases on the second machine in `LANGUAGE_BENCHMARKS-windows.md`, 220 of 230 language rows measured, on top of the first machine's 142 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
+**Status: measured on two machines — 45 of 46 databases pass on the second (14-core, 32 GB, every server in Docker Desktop) at `a4d6ce5` plus the four Windows fixes in `src/` that this campaign found, 1 fails on a vendor driver's ANSI-code-page conversion (ANSI-code-page conversion inside the driver: tdengine), none on the bridge; the first machine's campaign (7.7 GB laptop, 26 pass) is kept below as history; five languages × 46 databases on the second machine in `LANGUAGE_BENCHMARKS-windows.md`, 219 of 230 language rows measured, on top of the first machine's 142 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
 CI was reporting that to nobody. The first person to build on Windows found ten defects across the repository — driver,
 tests and benchmark harnesses — and all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
 `windows.h` first; `strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT`
@@ -353,7 +353,7 @@ same way on a fresh box. The setup line above now includes `tzdata`.
 | Driver manager | Windows ODBC (odbc32.dll), ANSI code page 1252 |
 | Build | CMake 4.4.2, MSVC 19.44.35228 (VS Build Tools 17.14, toolset 14.44), Windows SDK 10.0.26100; `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --config Release`; DLL links, **7/7 ctest** (`adbc_odbc_c_smoke` is POSIX-only by design), **zero warnings** at /W3; `cmake --install` puts `bin\libadbc_driver_odbc.dll`, `lib\adbc_driver_odbc.lib` and `etc\adbc\drivers\odbc.toml` (keyed `windows_amd64`) in the prefix |
 | Python | `C:\...\Python312\python.exe` 3.12.10 x64 (no `py` launcher on this machine), adbc-driver-manager 1.12.0, pyarrow 25.0.1, pyodbc 5.3.0, pytest 9.1.1 |
-| ODBC drivers (64-bit) | SQL Server; ODBC Driver 17 for SQL Server; ODBC Driver 18 for SQL Server; SQLite3 ODBC Driver (sqliteodbc_w64, SQLite 3.43.2). Access, Excel and Text drivers on this machine are **32-bit only** and cannot be loaded by a 64-bit adbcbridge — the 64-bit Access Database Engine 2016 redistributable is needed first |
+| ODBC drivers (64-bit) | SQL Server; ODBC Driver 17 for SQL Server; ODBC Driver 18 for SQL Server; SQLite3 ODBC Driver (sqliteodbc_w64, SQLite 3.43.2). Access, Excel and Text drivers on this machine are **32-bit only** and cannot be loaded by a 64-bit adbcBridge — the 64-bit Access Database Engine 2016 redistributable is needed first |
 | Build features | **no prefetch pipeline, no ingest fan-out** (both pthreads, compiled out on `_WIN32`; `adbc.odbc.ingest_connections` clamped to 1) |
 | Load | one server at a time; nothing else running |
 
@@ -387,7 +387,7 @@ PostgreSQL on the same 8 GB machine: the EDB installer or Docker Desktop with
 | mysql | PASS | `MySQL (via ODBC) 8.4.9` — winget's `Oracle.MySQL` binaries, `mysqld --initialize-insecure` and a standalone `mysqld` on a spare port (no service, no admin); MySQL Connector/ODBC 8.4.0. Byte-exact probe (validated against PostgreSQL first): `VARCHAR(50)` reports `column_size` 50, `TEXT` 65535, `héllo` and `日本語` round-trip exactly on read and on a bound-parameter write read back with pyodbc. Needs no `LD_PRELOAD`-style workaround, unlike the connector under pyarrow on Linux |
 | postgres | PASS | `PostgreSQL (via ODBC) 16.15.0` — native install, psqlodbc 18.00.0002 "PostgreSQL Unicode(x64)"; **FAIL at 18e1a8d–76223c9** with `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9`, see the second bug below |
 
-### Python: adbcbridge vs pyodbc (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`)
+### Python: adbcBridge vs pyodbc (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`)
 
 | database | ADBC ingest rows/s | pyodbc ingest | ADBC fetch rows/s | pyodbc fetch |
 |---|---:|---:|---:|---:|
@@ -444,7 +444,7 @@ same way. Verified at `5b932c5`: all four probes byte-exact (`68c3a96c6c6f`,
 ### Five languages, five databases (`bench/*/run.sh`, ROWS=10000 FETCH_ROWS=100000 REPS=1)
 
 **24 of 25 cells** on Windows: [`LANGUAGE_BENCHMARKS-windows.md`](LANGUAGE_BENCHMARKS-windows.md).
-adbcbridge ingest / fetch rows/s, single samples on the 4-core laptop:
+adbcBridge ingest / fetch rows/s, single samples on the 4-core laptop:
 
 | database | python | go | rust | csharp | java |
 |---|---:|---:|---:|---:|---:|
@@ -485,8 +485,8 @@ Three harness defects the first Windows run found, all fixed on main:
 The ACE drivers on this machine (Access, Excel, Text) are 32-bit — they arrive with a
 32-bit Office install — and a 64-bit process cannot load them. Microsoft's 64-bit Access
 Database Engine redistributable refuses to install alongside 32-bit Office, so the only
-route to those three from x64 adbcbridge is to replace Office, and the alternative — a
-32-bit adbcbridge build with a 32-bit Python — is out of scope: the project targets 64-bit
+route to those three from x64 adbcBridge is to replace Office, and the alternative — a
+32-bit adbcBridge build with a 32-bit Python — is out of scope: the project targets 64-bit
 systems. Recorded as *driver unavailable on x64* for `access`, and the two Windows-only
 entries that were on the list (the Excel driver, the Text driver for CSV) are unreachable
 for the same reason. Anyone with 32-bit Office and a 64-bit client hits exactly this, which

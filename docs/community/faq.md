@@ -71,7 +71,7 @@ driver itself, not the bridge.
 For a single connection, no — a native driver talks the wire protocol and builds
 Arrow directly, which is the ceiling for one connection. 1,000,000 PostgreSQL
 rows take 0.42 s through the native `adbc_driver_postgresql` and 0.67 s through
-adbcBridge over psqlodbc; on 10 M rows a single bridge connection is 0.30–0.36×
+adbcBridge over psqlodbc; on 10 M rows a single bridge connection is 0.36×
 native. The bridge beats the native driver only by doing work it does not:
 [splitting one query across several connections](#what-are-partitioned-reads).
 At eight partitions on a quiet host adbcBridge reads 1 M rows 1.2–1.5× faster

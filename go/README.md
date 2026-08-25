@@ -1,6 +1,6 @@
-# adbcbridge for Go
+# adbcBridge for Go
 
-`github.com/singhpratech/adbcbridge/go` loads adbcbridge — the ADBC-over-ODBC
+`github.com/singhpratech/adbcbridge/go` loads adbcBridge — the ADBC-over-ODBC
 driver built as `libadbc_driver_odbc.so` / `.dylib` / `.dll` — through the ADBC
 Go driver manager (`github.com/apache/arrow-adbc/go/adbc/drivermgr`). It finds
 the shared library, hands its path to the driver manager and fills in the ODBC
@@ -74,7 +74,7 @@ func main() {
 
 | function | what it does |
 |---|---|
-| `DriverPath() (string, error)` | Absolute path of the adbcbridge shared library, found as described below. The error is a `*DriverNotFoundError` whose `Searched` field lists every place that was tried. |
+| `DriverPath() (string, error)` | Absolute path of the adbcBridge shared library, found as described below. The error is a `*DriverNotFoundError` whose `Searched` field lists every place that was tried. |
 | `NewDriver(alloc memory.Allocator) (adbc.Driver, error)` | An `adbc.Driver` (concretely `*adbcbridge.Driver`, wrapping `drivermgr.Driver`) whose `NewDatabase(opts)` adds the resolved path under the `"driver"` option. Pass `"uri"` and any `adbc.odbc.*` options yourself. `alloc` is the allocator ADBC Go drivers conventionally take; `drivermgr` v1.8.0 imports Arrow data through the C Data Interface and does not use one, so it is kept for API parity (`nil` means `memory.DefaultAllocator`). |
 | `Open(ctx, alloc, connectionString, options) (adbc.Database, error)` | `NewDriver` + `NewDatabase` with `connectionString` stored under `"uri"` and `options` (may be `nil`) passed through. The database is initialised, not connected: call `Open(ctx)` on it for an `adbc.Connection`. |
 
@@ -187,4 +187,4 @@ under `internal/native/`.
 
 ## License
 
-Apache-2.0, like the rest of adbcbridge.
+Apache-2.0, like the rest of adbcBridge.

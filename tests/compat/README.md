@@ -84,7 +84,7 @@ caller's storage:
 Reading a single column with `batch_size=1` mostly looks correct, which is why simple
 probes pass and the damage only shows up with several columns or several rows per fetch.
 
-adbcbridge detects this from `SQL_DRIVER_NAME` (Db2's CLI driver reports `libdb2.a`;
+adbcBridge detects this from `SQL_DRIVER_NAME` (Db2's CLI driver reports `libdb2.a`;
 `libdb2o.a` is excluded) and sets the `sqllen_32bit` reader option, which makes every
 driver-written `SQLLEN`/`SQLULEN` be read back through `OdbcReadLen()` / `OdbcReadULen()` /
 `OdbcIndicatorGet()` in `src/odbc_internal.h` — as a sign-extended `int32`, and as
@@ -259,7 +259,7 @@ One thing worth recording because it is easy to misread as a driver bug: under *
 a `datetime` bound as a parameter reaches a Dolt `DATETIME(6)` column truncated to one
 fractional digit (`13:45:10.123456` → `13:45:10.1`), while the same value inserted as a SQL
 literal round-trips exactly. Dolt describes every `DATETIME` column as scale 0 (`SQLColumns`
-returns a NULL `DECIMAL_DIGITS`), and pyodbc's own parameter binding follows that. adbcbridge
+returns a NULL `DECIMAL_DIGITS`), and pyodbc's own parameter binding follows that. adbcBridge
 binds timestamps with an explicit scale, so it stores and reads back the full microseconds
 and the matrix assertion passes — the benchmark's pyodbc column is the only place the
 truncation is visible.
@@ -345,7 +345,7 @@ rejects them:
 ```
 
 A standalone C probe confirms this is the ODBC driver's own rendering and not anything
-adbcbridge does: binding the identical value as `SQL_C_CHAR -> SQL_VARCHAR` succeeds where
+adbcBridge does: binding the identical value as `SQL_C_CHAR -> SQL_VARCHAR` succeeds where
 `SQL_C_TYPE_DATE -> SQL_TYPE_DATE`, `SQL_C_CHAR -> SQL_TYPE_DATE` and
 `SQL_C_BINARY -> SQL_VARBINARY` all fail -- it is the *SQL* type that decides. The quirk
 therefore binds dates, timestamps and binaries as plain `SQL_VARCHAR` text and lets the
@@ -750,7 +750,7 @@ Notes on this driver/server pair, all visible in the matrix entry:
 * `ts_us`: Firebird's `TIMESTAMP` resolution is 1/10000 s, so `13:45:10.123456` reads back
   as `13:45:10.1234`.
 * OdbcFb sizes `SQL_C_WCHAR` buffers in 4-byte `wchar_t` while unixODBC passes UTF-16.
-  adbcbridge detects the driver (`SQL_DRIVER_NAME` = `OdbcFb`) and stays on the narrow
+  adbcBridge detects the driver (`SQL_DRIVER_NAME` = `OdbcFb`) and stays on the narrow
   UTF-8 path — see `wchar_as_utf8` in `src/odbc_internal.h`.
 * Bulk ingest batches through a third `INSERT` form here. Firebird's dialect has no
   multi-row `VALUES` (`-104 Token unknown` at the second row-group's comma) and no
@@ -1100,7 +1100,7 @@ set as its own bind/execute over the wire either way.
 ### Driver fix: a row count the driver never wrote
 
 The first run reported `0` rows ingested for an ingest that had in fact inserted every
-row. Root cause, from a standalone ODBC probe (no adbcbridge involved): with a parameter
+row. Root cause, from a standalone ODBC probe (no adbcBridge involved): with a parameter
 array of three sets, psqlodbc against CrateDB behaves differently depending on whether a
 transaction is open —
 
@@ -1112,7 +1112,7 @@ prepared, in transaction     ret=0 processed=3 first RowCount=-99 total=0
 ```
 
 `-99` is the value the probe pre-filled: inside a transaction `SQLRowCount` returns
-`SQL_SUCCESS` **without writing the out-parameter at all**. adbcbridge batches a
+`SQL_SUCCESS` **without writing the out-parameter at all**. adbcBridge batches a
 multi-row execute into one transaction, and its `OdbcRowCount()` zeroed the variable
 first (for the 32-bit-`SQLLEN` quirk), so "not written" read as "0 rows affected".
 
@@ -1537,7 +1537,7 @@ completely, and the `.accdb` holding the same rows is more than twice the size
 
 ### What works, and what MDB Tools cannot do
 
-Working through adbcbridge, exactly as for the server-backed databases:
+Working through adbcBridge, exactly as for the server-backed databases:
 
 | | |
 |---|---|
@@ -1654,7 +1654,7 @@ an `SQL_C_WCHAR` parameter and then reads the buffer as if it were narrow, so
 is exact for UTF-8: Virtuoso's own charsets (`DB.DBA.SYS_CHARSETS`) are all single-byte
 and an unqualified connection passes narrow bytes straight through, so UTF-8 text —
 astral-plane emoji included — round-trips byte for byte through both `NVARCHAR` and
-`VARCHAR`. adbcbridge detects the driver from `SQL_DRIVER_NAME` (`virtodbc.so`) and sets
+`VARCHAR`. adbcBridge detects the driver from `SQL_DRIVER_NAME` (`virtodbc.so`) and sets
 the existing `wchar_as_utf8` reader option, the same one Firebird's OdbcFb needs.
 
 Do **not** add `Charset=UTF-8` to the connection string. `UTF-8` is not one of Virtuoso's
@@ -1665,7 +1665,7 @@ with `GPF: Dkbox.c:638 Double free`.
 ### Driver quirk 2: `SQL_C_SBIGINT` parameters store 0
 
 A 64-bit integer parameter is stored as `0`, silently — the driver's conversion table has
-no `SQL_C_SBIGINT`. The entry needs nothing for this: adbcbridge sets the existing
+no `SQL_C_SBIGINT`. The entry needs nothing for this: adbcBridge sets the existing
 `bigint_param_as_string` option (Oracle's Instant Client ODBC needs the same one), which
 sends the value as numeric text; the conversion is exact.
 
@@ -1675,14 +1675,14 @@ sends the value as numeric text; the conversion is exact.
 affected-row count, but binds a `SQL_C_TYPE_DATE` parameter from the *first* set only:
 every row of the array is inserted with row 0's date. Other types (`SQL_C_CHAR`,
 `SQL_C_DOUBLE`, `SQL_C_SLONG`) walk the array correctly, so the damage is invisible
-unless a date column is part of the batch. adbcbridge sets `no_param_arrays`, executing
+unless a date column is part of the batch. adbcBridge sets `no_param_arrays`, executing
 one row at a time as it does for DuckDB, clickhouse-odbc, OdbcFb and MonetDBODBClib.
 
 ### Why not the Unicode driver, `virtodbcu.so`
 
 `virtodbcu.so` does support wide strings, and needs `WideAsUTF16=Y` in the connection
 string to read `SQLWCHAR` as UTF-16 rather than as `wchar_t` — but it cannot be reached
-through unixODBC's ANSI entry points, which is what adbcbridge (and any ANSI ODBC
+through unixODBC's ANSI entry points, which is what adbcBridge (and any ANSI ODBC
 application) calls. The first statement that *fails* aborts the process:
 
 ```
@@ -1690,7 +1690,7 @@ application) calls. The first statement that *fails* aborts the process:
 ```
 
 The crash is inside `libodbc.so.2`, in the ANSI→Unicode translation that follows a
-failed `SQLExecDirect` — not in adbcbridge. This 40-line standalone probe reproduces it
+failed `SQLExecDirect` — not in adbcBridge. This 40-line standalone probe reproduces it
 with no ADBC in the picture (`cc -o vprobe vprobe.c -lodbc`):
 
 ```c
@@ -1889,7 +1889,7 @@ containing `?`, but `SQLNumParams` then reports 0 markers and there is no way to
 value. (`SQLRowCount` also returns -1 after a literal `INSERT`, so there would be no
 affected-row count to check either.)
 
-This is not something adbcbridge can work around — parameter binding *is* the write path
+This is not something adbcBridge can work around — parameter binding *is* the write path
 — so the entry uses the existing `read_only` tolerance flag, as the `access` entry does
 for MDB Tools. `SQLExecDirect` of literal SQL works fine, so the entry's `setup` builds
 `adbc_t` (the same eight columns and the same two rows, spelled as literals) and
@@ -1917,7 +1917,7 @@ result set, which fetches without crashing — the crash is in producing the fir
 `HYC00 Unsupported function`.
 
 A crash leaves no return code to fall back on, so the call has to be skipped outright.
-adbcbridge already has the fallback this needs: `AppendColumnsViaDescribe`
+adbcBridge already has the fallback this needs: `AppendColumnsViaDescribe`
 (`src/odbc_objects.c`) reads a table's columns off the result-set metadata of
 `SELECT * FROM <table> WHERE 1=0`, which is where `GetTableSchema` gets them from anyway.
 Until now it only ran after `SQLColumns` *failed*; the new `no_sql_columns` reader option
@@ -1939,7 +1939,7 @@ The driver's wide path throws on anything outside the BMP —
 `SQLGetData(..., SQL_C_WCHAR, ...)` on a value containing `🚀` fails with
 `HY000 wstring_convert::from_bytes` — while its narrow path is correct UTF-8. It costs
 nothing here, because the driver describes DuckDB's `VARCHAR` as `SQL_VARCHAR` (not
-`SQL_WVARCHAR`), so adbcbridge's reader is on the narrow path already and the emoji
+`SQL_WVARCHAR`), so adbcBridge's reader is on the narrow path already and the emoji
 round-trips. Should a Flight SQL server ever cause a column to be described as
 `SQL_WVARCHAR`, the existing `wchar_as_utf8` option (Firebird's OdbcFb and Virtuoso both
 need it) is the fix, added to the same `arrow flight` block in `OdbcDetectQuirks`.
@@ -1950,7 +1950,7 @@ The driver's Windows build (`arrow-flight-sql-odbc` LATEST-win64, 00.09.0007, `A
 Flight SQL ODBC Driver`) returns a non-BMP character through SQL_C_WCHAR as its low 16 bits
 (U+1F680 reads as U+F680) and through SQL_C_CHAR as the ANSI code page's `?`, while its
 SQL_C_BINARY conversion of a text column hands the server's UTF-8 through byte-exact. Since
-the second Windows campaign adbcbridge reads text columns from this driver as binary on
+the second Windows campaign adbcBridge reads text columns from this driver as binary on
 Windows (`text_as_binary`), which passes the astral check for `flightsql`, `influxdb3` and
 `dremio` alike and is faster than the wide read.
 
@@ -2027,7 +2027,7 @@ FAIL 'SHOW transaction_isolation'     42000 Syntax error in SQL statement …
 
 The repo's usual answer to a misbehaving driver is a keyed entry in `OdbcDetectQuirks`
 (`src/odbc_driver.c`). That cannot apply here: the handshake runs *inside*
-`SQLDriverConnect`, so adbcbridge never gets a connection handle to detect anything on,
+`SQLDriverConnect`, so adbcBridge never gets a connection handle to detect anything on,
 and no `reader_opts` flag is reachable. Nor is it tunable from either end:
 
 - psqlodbc has no option to skip or alter that batch. `Protocol=6.2/6.4/7.4`,
@@ -2038,7 +2038,7 @@ and no `reader_opts` flag is reachable. Nor is it tunable from either end:
   no "ignore unknown settings" switch (`IGNORE_UNKNOWN_SETTINGS` does not exist in
   H2 2.x, and `MODE=PostgreSQL` does not change `SET`/`SHOW` parsing).
 
-So this is a genuine H2-plus-psqlodbc incompatibility, not an adbcbridge gap. It becomes
+So this is a genuine H2-plus-psqlodbc incompatibility, not an adbcBridge gap. It becomes
 testable if H2 teaches `PgServerThread.getSQL()` to swallow unknown `SET`/`SHOW` GUCs, or
 if psqlodbc learns to tolerate a failure of that batch. Tested with H2 2.4.240 and
 2.3.232 (identical `getSQL`) against psqlodbc 16.00.0000.
@@ -2099,7 +2099,7 @@ connection string ends in `{plugin_dir}`, which `conn_uri()` in `test_matrix.py`
 to `PLUGIN_DIR=<dir of the driver>/plugin;` when that directory exists and to nothing when
 it does not — a packaged (rpm/deb) install has no `plugin/` beside the driver and its
 compiled-in default is already right. This is a packaging artefact of running the driver
-from an unpacked tarball, not a driver bug and not something adbcbridge can detect: it
+from an unpacked tarball, not a driver bug and not something adbcBridge can detect: it
 happens inside `SQLDriverConnect`.
 
 ### Notes
@@ -2300,7 +2300,7 @@ depends on, both of which have to be set at startup:
   inherits it, and so do `adbc_t` and every ingest table.
 * `columnstore_cache_inserts = ON`. ColumnStore's bulk-load path is `cpimport`; an
   `INSERT` carrying *bound parameters* goes to `DMLProc` a row at a time, each row
-  committing its own extent. Measured through plain pyodbc, with no adbcbridge involved,
+  committing its own extent. Measured through plain pyodbc, with no adbcBridge involved,
   that is **~2 rows/s** — a 2000-row ingest takes a quarter of an hour, whether the rows
   go as an ODBC parameter array (MariaDB's `COM_STMT_BULK_EXECUTE`) or one execute per
   row. The same rows as one literal `INSERT ... VALUES (...),(...)` run at ~350 rows/s,
@@ -2746,7 +2746,7 @@ Connector/ODBC in front of a non-MySQL" quirks (`temporal_binary_param_as_varcha
 ### The PostgreSQL wire does not work with psqlodbc
 
 The same shape of failure as H2 (below), and for the same reason — psqlodbc's connect
-handshake, not anything adbcbridge does:
+handshake, not anything adbcBridge does:
 
 ```sh
 python - <<'EOF'
@@ -2778,7 +2778,7 @@ The failure is fatal on the driver side, and neither end has a knob for it:
 identically, and the server's only PostgreSQL-side switch is the listen address. It
 becomes testable if GreptimeDB adds the GUC or psqlodbc tolerates a failure of that
 batch. As with H2, no quirk in `OdbcDetectQuirks` could help: the handshake runs *inside*
-`SQLDriverConnect`, so adbcbridge never gets a connection handle.
+`SQLDriverConnect`, so adbcBridge never gets a connection handle.
 
 ### Connection string: `NO_SSPS=1` and `PLUGIN_DIR`
 
@@ -3298,7 +3298,7 @@ StarRocks answers `COM_STMT_PREPARE` for anything other than a `SELECT` with
       This command is not supported in the prepared statement protocol yet.
 ```
 
-which reaches adbcbridge as `SQLPrepare failed` on the parameterised `INSERT`. It is not a
+which reaches adbcBridge as `SQLPrepare failed` on the parameterised `INSERT`. It is not a
 matter of switching the feature on — `enable_prepare_stmt` is already `true`, and
 `PREPARE s FROM 'INSERT INTO t VALUES (?,?)'` fails the same way in the `mysql` client, on
 a duplicate-key table and on a `PRIMARY KEY` table alike, while `PREPARE` of a `SELECT`
@@ -3385,7 +3385,7 @@ Everything else in the standard workload runs on the generic path: the emoji rou
 
 Every StarRocks `INSERT` is its own load transaction whose version has to publish before
 the statement returns, and that costs a flat ~100 ms whatever the statement holds. It is
-not the driver and not adbcbridge — the `mysql` client inside the container measures the
+not the driver and not adbcBridge — the `mysql` client inside the container measures the
 same thing:
 
 ```sh
@@ -3421,7 +3421,7 @@ ProgrammingError: ('42000', '[42000] [MySQL][ODBC 9.4(w) Driver][mysqld-8.0.33]
 ```
 
 pyodbc binds a `datetime` parameter as `SQL_TYPE_TIMESTAMP`, Connector/ODBC renders that
-as `_binary'...'` under `NO_SSPS`, and StarRocks' parser rejects it. adbcbridge writes the
+as `_binary'...'` under `NO_SSPS`, and StarRocks' parser rejects it. adbcBridge writes the
 same table because `temporal_binary_param_as_varchar` sends those parameters as text
 instead.
 
@@ -3550,7 +3550,7 @@ clickhouse-odbc, OdbcFb and MonetDBODBClib carry. One execute per row is correct
 there the element offset is 0 for real.
 
 Standalone repro of the working two-column case, and of the row-0 indicator bug, without
-adbcbridge: bind `SQL_ATTR_PARAMSET_SIZE=3` on `INSERT INTO t (a, b) VALUES (?, ?)` with
+adbcBridge: bind `SQL_ATTR_PARAMSET_SIZE=3` on `INSERT INTO t (a, b) VALUES (?, ?)` with
 `ind[] = {SQL_NTS, SQL_NULL_DATA, SQL_NTS}` — all three rows arrive non-NULL, and with
 `ind[0] = SQL_NULL_DATA` all three arrive NULL.
 
@@ -3631,7 +3631,7 @@ docker rm -f adbcbridge-ignite
 `ignite.odbc.dll` (the 2.18.0 installer, registered as `Apache Ignite`) is an ANSI-only
 driver — no `W` entry points — whose narrow path is UTF-8. The Windows driver manager maps
 every W call onto such a driver through the ANSI code page, so through pyodbc a wide fetch
-reads `hÃ©llo ðŸš€` and a statement literal `'héllo'` matches nothing. adbcbridge keeps its
+reads `hÃ©llo ðŸš€` and a statement literal `'héllo'` matches nothing. adbcBridge keeps its
 narrow fetch route (`wchar_as_utf8`) alive on Windows for this driver and sends caller
 statement text through the narrow entry points (`narrow_sql`), both since the second
 Windows campaign; with them the entry passes on Windows.
@@ -3789,7 +3789,7 @@ ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
 
 ### Driver quirk: the ANSI `SQLDriverConnect` cannot connect at all
 
-adbcbridge connects with the narrow `SQLDriverConnect`, which unixODBC hands straight to
+adbcBridge connects with the narrow `SQLDriverConnect`, which unixODBC hands straight to
 a driver that exports one. Against this driver that returned `SQL_ERROR` **with no
 diagnostic record at all**, while pyodbc — which calls `SQLDriverConnectW` — connected to
 the same server with the same connection string.
@@ -3813,7 +3813,7 @@ of the driver calling its own `SQLDriverConnect` directly reproduces it with no 
 manager in the picture, which is what pinned it on the driver.
 
 No entry in `OdbcDetectQuirks` can fix this: a quirk is keyed off a *live connection*,
-and this is what fails to make one. adbcbridge therefore **retries a connect that failed
+and this is what fails to make one. adbcBridge therefore **retries a connect that failed
 with an empty diagnostic queue through `SQLDriverConnectW`** (`OdbcDriverConnectWide` in
 `src/odbc_driver.c`). The empty queue is the guard as much as the symptom: a connect that
 failed *and said why* — bad credentials, no such host — is a real answer and is left
@@ -3837,7 +3837,7 @@ sem_init(&m_semaphore, 0, capacity);   // WIN32: CreateSemaphore(NULL, initial, 
 empty: `pop()` succeeds on an empty queue, `std::queue::pop()` on an empty queue corrupts
 it, and the next `clear()` deletes a garbage pointer. Fixing the argument (step (e)
 above) fixes the crash. It is a bug in the driver's Linux path rather than anything
-adbcbridge can work around, so it is a patch to the source you build.
+adbcBridge can work around, so it is a patch to the source you build.
 
 ### Types: what the SQL plugin and the driver between them can express
 
@@ -4325,7 +4325,7 @@ column type, none of which mentions NULL:
 | `INTEGER`, `DATE`, `TIMESTAMP`, `NUMERIC`, `BOOLEAN` | `ERROR: invalid input syntax for type <t>: ""` |
 | a row with several NULLs | `Fatal: mkql_terminator.cpp:45: ERROR: invalid byte sequence for encoding "UTF8": 0xff`, and the connection is dropped |
 
-This is the server, not psqlodbc and not adbcbridge, and a ~70-line stdlib PostgreSQL v3
+This is the server, not psqlodbc and not adbcBridge, and a ~70-line stdlib PostgreSQL v3
 frontend with no ODBC anywhere in the path shows it: connect, create
 `(i int4 PRIMARY KEY, v int4, s text)`, then
 
@@ -4595,7 +4595,7 @@ The driver answers `SQL_DRIVER_NAME` `verticaodbcw.so` and `SQL_DBMS_NAME`
 
 ### Driver quirk: parameter arrays beat multi-row INSERT
 
-adbcbridge's default bulk-ingest path packs K rows into one
+adbcBridge's default bulk-ingest path packs K rows into one
 `INSERT ... VALUES (...),(...)`, because that is faster than ODBC parameter arrays on
 every other server measured. Vertica is the second exception after MariaDB
 Connector/ODBC, and by a much wider margin: its driver turns a bound array into a single
@@ -4797,7 +4797,7 @@ Character set '45' is not a compiled character set and is not specified in the
 '/usr/local/mysql/share/charsets/Index.xml' file
 ```
 
-It is `libmysqlclient` inside Connector/ODBC, not adbcbridge, and it is cosmetic. 45 is
+It is `libmysqlclient` inside Connector/ODBC, not adbcBridge, and it is cosmetic. 45 is
 `utf8mb4_general_ci`, OceanBase's default collation; the client library has no compiled-in
 entry for that id and looks for the charset index at the path the *generic tarball* was
 built with, which an unpacked-elsewhere tarball does not have. The connection is
@@ -4967,7 +4967,7 @@ their digits. Dremio writes the Parquet file in about a third of a second.
 ### What works
 
 The whole read side of the workload: `int32`, `double`, `string` (including
-`"héllo 🚀"` — the driver describes Dremio's `VARCHAR` as `SQL_VARCHAR`, so adbcbridge's
+`"héllo 🚀"` — the driver describes Dremio's `VARCHAR` as `SQL_VARCHAR`, so adbcBridge's
 reader is on its correct narrow UTF-8 path and the emoji survives), `VARBINARY` as bytes,
 `DATE`, `TIMESTAMP`, `BOOLEAN`, the all-NULL row, the 100,000-row batched read,
 `GetObjects`, `GetTableSchema` and the error text (`Object 'adbc_no_such_table' not
@@ -5037,7 +5037,7 @@ done
 Then build the connector. Take the **`3.3.6` branch**, not `main`: `main` calls
 `taos_connect_with()`, which is not in the 3.3.6 client's `taos.h`, and the build stops
 at `implicit declaration of function 'taos_connect_with'`. Requirements are cmake, flex,
-bison, gcc and `unixodbc-dev` (all already needed to build adbcbridge itself, except flex
+bison, gcc and `unixodbc-dev` (all already needed to build adbcBridge itself, except flex
 and bison); the build fetches cJSON itself:
 
 ```sh
@@ -5158,7 +5158,7 @@ type)` triple and its table is sparse.
   driver's table, and `bool_param_as_varchar`'s `"true"`/`"false"` is parsed there with
   `strtoll` and refused, so this is its own flag.
 
-Ingest needs no `ansi_ddl_type_names`-style help: adbcbridge quotes generated identifiers
+Ingest needs no `ansi_ddl_type_names`-style help: adbcBridge quotes generated identifiers
 with whatever `SQL_IDENTIFIER_QUOTE_CHAR` reports, and taos-odbc answers with a backtick,
 which is the only identifier quote TDengine's parser has.
 
@@ -5190,7 +5190,7 @@ which is the only identifier quote TDengine's parser has.
   UTF-16 by default, and taos-odbc fails any statement carrying a non-ASCII character
   with `conversion for 'UTF-8' to 'UTF-8' not found` (`SQLExecDirectW`). Add
   `conn.setencoding(encoding="utf-8", ctype=pyodbc.SQL_CHAR)` when probing with pyodbc.
-  adbcbridge is unaffected: it calls the narrow `SQLExecDirect`/`SQLPrepare` throughout.
+  adbcBridge is unaffected: it calls the narrow `SQLExecDirect`/`SQLPrepare` throughout.
 
 ### Benchmark
 
@@ -5448,7 +5448,7 @@ is `Batch`, which refuses DDL in an explicit transaction:
 ```
 
 Nothing in the matrix or the benchmark trips over that — both ingest on an autocommit
-connection, where adbcbridge opens its own transaction *after* the `CREATE TABLE` — but
+connection, where adbcBridge opens its own transaction *after* the `CREATE TABLE` — but
 `adbc_ingest(mode="create")` on a connection with `autocommit=False` does. One session
 setting lifts it, and is worth knowing about rather than working around in the driver:
 
@@ -5585,7 +5585,7 @@ no ingest number — nothing can be written through `mongosqld`.
 
 ### Two Connector/ODBC crashes, and the one that needed a driver quirk
 
-Both were found with a standalone C program against `libmyodbc9w.so` (no adbcbridge in the
+Both were found with a standalone C program against `libmyodbc9w.so` (no adbcBridge in the
 picture), and both are segfaults inside the connector, not error returns.
 
 **1. The handshake, without `PLUGIN_DIR`.** `mongosqld` offers only

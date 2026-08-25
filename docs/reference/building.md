@@ -105,9 +105,12 @@ Tests are built when `ADBC_ODBC_BUILD_TESTS` is `ON` and run with `ctest`:
 
 ```sh
 ctest --test-dir build --output-on-failure
+# on CMake older than 3.20, which has no --test-dir:
+cd build && ctest --output-on-failure
 ```
 
-On Windows, where the Visual Studio generator is multi-config, add the
+`--test-dir` arrived in CMake 3.20; the build itself only needs 3.16, so on an
+older `ctest` run it from inside the build directory as shown. On Windows, where the Visual Studio generator is multi-config, add the
 configuration — `ctest --test-dir build -C Release --output-on-failure` (or
 `-C Debug`) — otherwise `ctest` runs no tests.
 
