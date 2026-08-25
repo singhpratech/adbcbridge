@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks — Windows
 
-**Status: measured, one machine, campaign closed — 24 of 46 databases pass (five native
-installs, then a Docker Desktop tier one container at a time), 6 fail on one connector rule,
+**Status: measured, one machine, campaign closed — 25 of 46 databases pass (five native
+installs, then a Docker Desktop tier one container at a time), 5 fail on one connector rule,
 1 has no driver, 3 servers cannot run in the VM, 12 vendor-driver entries were not attempted
-(each with its reason in `docs/COMPATIBILITY.md`); 130 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
+(each with its reason in `docs/COMPATIBILITY.md`); 131 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
 CI was reporting that to nobody. The first person to build on Windows found ten defects across the repository — driver,
 tests and benchmark harnesses — and all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
 `windows.h` first; `strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT`
@@ -154,7 +154,7 @@ prune -af` between entries.
 
 | oceanbase | **server not runnable here: RAM** — `MODE=SLIM` at 1536m stalled 17 min at 1.442/1.5 GiB after `observer program health check ok`, never `boot success` (OOMKilled=false) | | | | |
 | azuresqledge | PASS (`Microsoft SQL Server (via ODBC) 16.00.5100`), Azure SQL Edge Developer image at 1536m (514 MB used), msodbcsql 18 | 237,448 | 136,506 | 12,127 (21,976) | 20,548 |
-| columnstore | **FAIL before 7cb06ec** — parameters pass with `NO_SSPS=1`, then the generated DDL is refused: the ColumnStore engine probe sat inside the MariaDB-connector block and never ran through MySQL's connector. A bridge bug found by this column, fixed at `7cb06ec` (verified on Linux through maodbc), not re-measured on Windows | | | | |
+| columnstore | PASS (`MySQL (via ODBC) 11.1.1-MariaDB-log`) at `1bb2d88`, Connector/ODBC 8.4.0 + `NO_SSPS=1`, fresh container at 1536m, utf8mb4 from the start — **FAIL before `7cb06ec`**: generated DDL refused because the ColumnStore probe never ran through MySQL's connector; a bridge bug this column found, fixed, and re-measured green here. Not in the astral class: MariaDB exposes the charset variables | 294,795 | 190,464 | 13,206 (13,432) | 1,466 |
 
 **A class, not five incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone, mongodbbi, starrocks. Everything else in
 their workloads passes, and their read rates are among the best on this machine.
