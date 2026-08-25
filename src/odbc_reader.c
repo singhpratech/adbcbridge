@@ -679,7 +679,18 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_WCHAR:
     case SQL_WVARCHAR:
     case SQL_WLONGVARCHAR:
-      if (opts->wchar_as_utf8) {  // see OdbcReaderOptions::wchar_as_utf8 (never on Windows)
+      if (opts->text_as_binary) {  // see OdbcReaderOptions::text_as_binary (Windows only)
+        // The value is UTF-8 bytes with a byte-length indicator, exactly what the
+        // SQL_C_CHAR path below reads, minus the terminator the driver reserves there.
+        c->kind = FETCH_CHAR; c->c_type = SQL_C_BINARY;
+        c->elem_size = (SQLLEN)c->column_size * 4 + 1;
+        ApplyBindWidth(c, opts);
+        break;
+      }
+      // wchar_as_utf8: on Windows only for the driver whose narrow path is UTF-8 there
+      // too (Apache Ignite, see the quirk table); the driver manager leaves a SQL_C_CHAR
+      // buffer alone, so the bytes arrive as the driver wrote them.
+      if (opts->wchar_as_utf8) {  // see OdbcReaderOptions::wchar_as_utf8
         c->kind = FETCH_CHAR; c->c_type = SQL_C_CHAR;
         c->elem_size = (SQLLEN)c->column_size * 4 + 1;
         ApplyBindWidth(c, opts);

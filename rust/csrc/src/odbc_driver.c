@@ -701,15 +701,21 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // MariaDB's maximum TIME scale is 6.
     conn->reader_opts.fractional_time_type_format = "TIME(%d)";
     conn->reader_opts.fractional_time_max_digits = 6;
+  }
+  if (strstr((const char*)name, "maodbc") || strstr((const char*)name, "myodbc")) {
     // MariaDB ColumnStore is a storage engine inside an ordinary MariaDB server, so the
     // driver name and version() are a plain MariaDB's and say nothing about it; ask the
-    // server whether the engine is there instead.  Its DDL parser accepts only its own
-    // list of type names, and two of the names maodbc's SQLGetTypeInfo answers with are
-    // not on it: SQL_LONGVARCHAR is "LONG VARCHAR" and SQL_BIT is "BIT", both refused
-    // with "The syntax or the data type(s) is not supported by Columnstore" even though
-    // the types themselves (MEDIUMTEXT, TINYINT) exist there.  The standard spellings
-    // TEXT and BOOLEAN are accepted, so spell generated ingest DDL in those -- which
-    // plain MariaDB accepts just as well, so this costs an InnoDB table nothing.
+    // server whether the engine is there instead -- through whichever MySQL-wire
+    // connector is in use.  (This probe once sat inside the maodbc block above, so a
+    // ColumnStore reached through MySQL Connector/ODBC -- the only connector obtainable
+    // on Windows -- never ran it and had its DDL refused; found on Windows.)  ColumnStore's
+    // DDL parser accepts only its own list of type names, and two of the names the
+    // connectors' SQLGetTypeInfo answer with are not on it: SQL_LONGVARCHAR is "LONG
+    // VARCHAR" and SQL_BIT is "BIT", both refused with "The syntax or the data type(s) is
+    // not supported by Columnstore" even though the types themselves (MEDIUMTEXT, TINYINT)
+    // exist there.  The standard spellings TEXT and BOOLEAN are accepted, so spell
+    // generated ingest DDL in those -- which plain MariaDB and MySQL accept just as well,
+    // so this costs an InnoDB table nothing.
     char engines[64];
     OdbcServerScalarString(conn->hdbc,
                            "SELECT COUNT(*) FROM information_schema.engines"
@@ -717,7 +723,10 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
                            engines, sizeof(engines));
     if (engines[0] != '\0' && engines[0] != '0') conn->reader_opts.ansi_ddl_type_names = true;
   }
-  if (strstr((const char*)name, "odbcfb")) {
+  // The same driver answers SQL_DRIVER_NAME "OdbcFb" on Linux and "FirebirdODBC" on
+  // Windows (the DLL's name there); match both, or the Windows build binds parameter
+  // arrays the driver silently executes one set of (found on Windows).
+  if (strstr((const char*)name, "odbcfb") || strstr((const char*)name, "firebirdodbc")) {
     // Firebird's OdbcFb sizes SQL_C_WCHAR buffers in wchar_t (4 bytes) while unixODBC
     // hands it UTF-16: bound strings lose three quarters of their characters and fetched
     // SQL_WVARCHAR columns come back as UTF-32. Stay on the narrow (UTF-8) path.
@@ -752,8 +761,22 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // for SQL_WVARCHAR, before any value is looked at.  Its SQL_C_WCHAR buffers are also
     // sized in wchar_t (4 bytes on Linux) where unixODBC passes UTF-16, the same way
     // Firebird's OdbcFb sizes them.  Its narrow path is UTF-8 -- Ignite stores strings as
-    // UTF-8 and the driver hands the bytes straight through -- so use it.
+    // UTF-8 and the driver hands the bytes straight through -- so use it, on Windows
+    // too: this is the one driver the Windows block at the end of this function leaves
+    // wchar_as_utf8 on for, because the driver manager transcodes a SQL_C_WCHAR fetch
+    // from an ANSI-only driver through the ANSI code page and a SQL_C_CHAR one not at
+    // all.  narrow_params keeps the parameter side on SQL_C_CHAR as well (an earlier
+    // Windows build switched wchar_as_utf8 off here and bound SQL_WVARCHAR parameters
+    // the driver refuses, HYC00 at SQLBindParameter).
     conn->reader_opts.wchar_as_utf8 = true;
+    conn->reader_opts.narrow_params = true;
+#if defined(_WIN32)
+    // And statement text: the Windows driver manager maps a W call onto this ANSI-only
+    // driver through the ANSI code page, so a literal 'héllo' arrived as cp1252 bytes
+    // and matched nothing (found on Windows); the narrow entry points hand the UTF-8
+    // through.  See OdbcReaderOptions::narrow_sql.
+    conn->reader_opts.narrow_sql = true;
+#endif
     // Column-wise parameter arrays are accepted and executed, but the NULL indicator is
     // read from the wrong row: Parameter::Write() tests `buffer.GetInputSize()` on the
     // whole bound array -- element offset 0 -- and only then copies the buffer and points
@@ -786,6 +809,19 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // rows, but binds SQL_C_TYPE_DATE from the first parameter set only: every row of a
     // bound array gets row 0's date, silently.  One execute per row instead.
     conn->reader_opts.no_param_arrays = true;
+#if defined(_WIN32)
+    // virtodbc.dll reports the SQL_GD_* extensions that make the in-place truncation
+    // repair legal, but SQLSetPos(SQL_POSITION) fails on it (found on Windows: single-row
+    // reads fine, the first block-cursor repair dies).  Without the repair a long column
+    // stays unbound and the rowset collapses to one row, which needs no positioning.
+    conn->reader_opts.getdata_repair = false;
+    // And it writes the bound-column indicator array at a four-byte stride on a block
+    // cursor (measured on Win64: the second row's 8-byte SQLLEN overwrites the first's
+    // high half), which a mangled indicator once read as a truncation and drove into the
+    // failed SQLSetPos repair.  Reading indicators at the 32-bit stride recovers every
+    // row and NULL and keeps the block cursor.  Read-only: parameter indicators are fine.
+    conn->reader_opts.ind_stride_32bit = true;
+#endif
   }
   if (strstr((const char*)name, "monetdb")) {
     // MonetDBODBClib accepts SQL_ATTR_PARAMSET_SIZE, executes only the first parameter
@@ -1015,6 +1051,14 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // bound columns at all -- so GetObjects has to skip SQLColumns and describe a
     // zero-row SELECT instead.
     conn->reader_opts.no_sql_columns = true;
+#if defined(_WIN32)
+    // On Windows its SQL_C_WCHAR conversion keeps the low 16 bits of a non-BMP code
+    // point (U+1F680 reads back as U+F680) and its SQL_C_CHAR conversion is the ANSI
+    // code page ('?' for anything outside it), while SQL_C_BINARY on a text column hands
+    // the server's UTF-8 through byte-exact (measured with pyodbc against sqlflite and
+    // Dremio 26).  Read text as binary, then; see OdbcReaderOptions::text_as_binary.
+    conn->reader_opts.text_as_binary = true;
+#endif
   }
   if (strstr((const char*)name, "taos_odbc")) {
     // TDengine's own ODBC driver (SQL_DRIVER_NAME "libtaos_odbc.so").  It describes a
@@ -1097,6 +1141,14 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       // "Data conversion error".  The same parameter on the narrow path -- which is
       // UTF-8, the database locale being en_us.utf8 -- stores and reads back unchanged.
       conn->reader_opts.wchar_as_utf8 = true;
+      // wchar_as_utf8 is switched off on Windows below (the narrow *fetch* path there is
+      // the ANSI code page), which left the parameter on SQL_C_WCHAR and the INSERT at
+      // -415 (found on Windows).  narrow_params keeps the parameter side on SQL_C_CHAR
+      // everywhere: the driver manager never transcodes a bound SQL_C_CHAR buffer and the
+      // CLI driver hands the UTF-8 bytes through, so "héllo <U+1F680>" stores byte-exact
+      // there too (verified with pyodbc, SQL_C_CHAR + UTF-8), while fetched text takes
+      // whichever path the platform uses.
+      conn->reader_opts.narrow_params = true;
       // A SQL_C_BIT parameter breaks the DRDA conversation itself: SQL30020N, "syntax
       // error in the communication data stream", after which the connection is dead.
       // Informix describes its BOOLEAN as SMALLINT over DRDA anyway, and an integer
@@ -1142,10 +1194,16 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   }
 #if defined(_WIN32)
   // wchar_as_utf8 steers a driver whose SQLWCHAR is not UTF-16 onto the narrow path,
-  // "which is UTF-8".  On Windows the narrow path is the ANSI code page, never UTF-8,
-  // and SQLWCHAR is two bytes by definition, so the quirk's premise does not hold:
-  // it stays off here whatever the driver.
-  conn->reader_opts.wchar_as_utf8 = false;
+  // "which is UTF-8".  On Windows the narrow path is the ANSI code page for a Unicode
+  // driver -- the driver converts -- and SQLWCHAR is two bytes by definition, so the
+  // quirk's premise does not hold and it stays off here for every such driver.  The
+  // exception is an ANSI-only driver whose own narrow path is UTF-8: the Windows driver
+  // manager transcodes a SQL_C_WCHAR request *for* it through the ANSI code page
+  // ("héllo 🚀" read back as "hÃ©llo ðŸš€"), but passes a SQL_C_CHAR buffer through
+  // untouched, so the narrow route is the correct one there.  Apache Ignite is that
+  // driver (measured on Windows: SQL_C_CHAR byte-exact, SQL_C_WCHAR mangled, and its
+  // statement text and parameters already travel narrow).
+  if (!strstr((const char*)name, "ignite")) conn->reader_opts.wchar_as_utf8 = false;
 #endif
 }
 
@@ -1548,7 +1606,7 @@ static AdbcStatusCode OdbcConnectionGetTableSchema(struct AdbcConnection* connec
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
              "SQLAllocHandle(SQL_HANDLE_STMT)", error);
-  SQLRETURN ret = OdbcExecDirectUtf8(hstmt, sb.buffer);
+  SQLRETURN ret = OdbcExecDirectSql(hstmt, sb.buffer, conn->reader_opts.narrow_sql);
   InternalAdbcStringBuilderReset(&sb);
   AdbcStatusCode s;
   if (!SQL_SUCCEEDED(ret)) {
@@ -2054,7 +2112,7 @@ static AdbcStatusCode OdbcStatementDoPrepare(struct OdbcStatement* stmt,
                                              struct AdbcError* error) {
   if (stmt->prepared) return ADBC_STATUS_OK;
   RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
-  ODBC_CHECK(OdbcPrepareUtf8(stmt->ref->hstmt, stmt->query), SQL_HANDLE_STMT,
+  ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, stmt->reader_opts.narrow_sql), SQL_HANDLE_STMT,
              stmt->ref->hstmt, "SQLPrepare", error);
   stmt->prepared = true;
   return ADBC_STATUS_OK;
@@ -2117,7 +2175,7 @@ static AdbcStatusCode OdbcStatementExecuteQuery(struct AdbcStatement* statement,
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecute", error);
     }
   } else {
-    ret = OdbcExecDirectUtf8(hstmt, stmt->query);
+    ret = OdbcExecDirectSql(hstmt, stmt->query, stmt->reader_opts.narrow_sql);
     if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) {
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecDirect", error);
     }

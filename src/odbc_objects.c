@@ -206,7 +206,7 @@ static bool DescribeTableStmt(struct OdbcConnection* conn, const struct TableRow
       InternalAdbcStringBuilderAppend(&sb, "%s%s%s.", (char*)q, t->schema, (char*)q);
     }
     InternalAdbcStringBuilderAppend(&sb, "%s%s%s WHERE 1=0", (char*)q, t->table, (char*)q);
-    SQLRETURN ret = OdbcExecDirectUtf8(hstmt, sb.buffer);
+    SQLRETURN ret = OdbcExecDirectSql(hstmt, sb.buffer, conn->reader_opts.narrow_sql);
     InternalAdbcStringBuilderReset(&sb);
     if (SQL_SUCCEEDED(ret)) return true;
     SQLFreeStmt(hstmt, SQL_CLOSE);

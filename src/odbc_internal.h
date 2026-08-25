@@ -402,6 +402,23 @@ struct OdbcReaderOptions {
   // transcodes narrow *statement text*, never a bound SQL_C_CHAR buffer, so the bytes
   // reach such a driver intact while fetched text still comes back wide.
   bool narrow_params;
+  // Driver quirk, Windows: read character columns as SQL_C_BINARY and take the bytes as
+  // UTF-8.  For a driver whose SQL_C_WCHAR conversion is lossy and whose SQL_C_CHAR
+  // conversion goes through the ANSI code page, but whose binary conversion of a text
+  // column hands its native UTF-8 through untouched (the Arrow Flight SQL ODBC driver:
+  // U+1F680 arrives as U+F680 wide -- the low 16 bits -- and as '?' narrow, byte-exact as
+  // binary; measured on Windows with pyodbc).  Binary is the one C type neither the
+  // driver manager nor such a driver transcodes.
+  bool text_as_binary;
+  // Driver quirk, Windows: send statement text through the narrow SQLExecDirect /
+  // SQLPrepare entry points as UTF-8 bytes instead of the W ones.  For an ANSI-only
+  // driver whose narrow path is UTF-8 (Apache Ignite): the Windows driver manager maps
+  // a W call onto such a driver by transcoding the text through the ANSI code page, so
+  // a literal 'héllo' reaches it as cp1252 bytes and matches nothing, while a narrow
+  // call is handed over untouched (measured on Windows: the statement-literal step of
+  // the compat workload fails wide and passes narrow).  Only the calls that carry
+  // caller text take this route; the bridge's own ASCII probes stay wide.
+  bool narrow_sql;
   // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
   bool no_describe_param;
   // Driver quirk: the driver describes a column as SQL_TYPE_TIMESTAMP but has no
@@ -686,6 +703,12 @@ int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n, bool utf16_pa
 // passed through as NULL; a length is SQL_NTS or a byte count.
 SQLRETURN OdbcExecDirectUtf8(SQLHSTMT hstmt, const char* sql);
 SQLRETURN OdbcPrepareUtf8(SQLHSTMT hstmt, const char* sql);
+// The same two with the per-connection choice of entry point: `narrow` is
+// OdbcReaderOptions::narrow_sql, and only means something on Windows (the narrow
+// calls are the only ones elsewhere).  Statement text that came from the caller goes
+// through these; the two-argument forms above are for the bridge's own ASCII probes.
+SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, bool narrow);
+SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, bool narrow);
 SQLRETURN OdbcDescribeColUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* name, SQLSMALLINT name_cap,
                               SQLSMALLINT* name_len, SQLSMALLINT* type, SQLULEN* size,
                               SQLSMALLINT* digits, SQLSMALLINT* nullable);

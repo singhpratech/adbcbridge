@@ -372,6 +372,14 @@ struct OdbcReaderOptions {
   bool sqllen_32bit;
   // True once a user option pinned sqllen_32bit; suppresses autodetection.
   bool sqllen_32bit_forced;
+  // Driver quirk, read side only: the driver advances the *bound-column indicator*
+  // array by four bytes per row on a block cursor while striding data buffers correctly
+  // (OpenLink Virtuoso's virtodbc.dll 7.2 on Win64).  Row k+1 overwrites only the high
+  // half of row k's 8-byte SQLLEN, so the low four bytes of every row survive at offset
+  // 4k -- exactly what OdbcReadLen(sqllen_32bit=true) reads.  Unlike sqllen_32bit this is
+  // read-only: parameter indicators (OdbcIndicatorSet) stay 8-byte, which this driver
+  // reads correctly.
+  bool ind_stride_32bit;
   // Driver quirk: the driver's SQLWCHAR width differs from the driver manager's this
   // library was compiled against -- e.g. a driver built with wchar_t (4-byte) SQLWCHAR
   // loaded through unixODBC (Firebird OdbcFb). (A bridge compiled against iODBC uses
@@ -387,6 +395,30 @@ struct OdbcReaderOptions {
   // Bound wide parameters are then encoded that way; the reader accepts both forms
   // regardless, since a surrogate is never a valid code point on its own.
   bool wide_utf16_pairs;
+  // Driver quirk: bind string parameters as SQL_C_CHAR (UTF-8 bytes) even where the wide
+  // path is the default -- for a driver that has no wide SQL type at all (Apache Ignite:
+  // SQLBindParameter answers HYC00 for SQL_WVARCHAR) and whose narrow path hands the
+  // bytes through.  Unlike wchar_as_utf8 this holds on Windows too: the driver manager
+  // transcodes narrow *statement text*, never a bound SQL_C_CHAR buffer, so the bytes
+  // reach such a driver intact while fetched text still comes back wide.
+  bool narrow_params;
+  // Driver quirk, Windows: read character columns as SQL_C_BINARY and take the bytes as
+  // UTF-8.  For a driver whose SQL_C_WCHAR conversion is lossy and whose SQL_C_CHAR
+  // conversion goes through the ANSI code page, but whose binary conversion of a text
+  // column hands its native UTF-8 through untouched (the Arrow Flight SQL ODBC driver:
+  // U+1F680 arrives as U+F680 wide -- the low 16 bits -- and as '?' narrow, byte-exact as
+  // binary; measured on Windows with pyodbc).  Binary is the one C type neither the
+  // driver manager nor such a driver transcodes.
+  bool text_as_binary;
+  // Driver quirk, Windows: send statement text through the narrow SQLExecDirect /
+  // SQLPrepare entry points as UTF-8 bytes instead of the W ones.  For an ANSI-only
+  // driver whose narrow path is UTF-8 (Apache Ignite): the Windows driver manager maps
+  // a W call onto such a driver by transcoding the text through the ANSI code page, so
+  // a literal 'héllo' reaches it as cp1252 bytes and matches nothing, while a narrow
+  // call is handed over untouched (measured on Windows: the statement-literal step of
+  // the compat workload fails wide and passes narrow).  Only the calls that carry
+  // caller text take this route; the bridge's own ASCII probes stay wide.
+  bool narrow_sql;
   // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
   bool no_describe_param;
   // Driver quirk: the driver describes a column as SQL_TYPE_TIMESTAMP but has no
@@ -671,6 +703,12 @@ int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n, bool utf16_pa
 // passed through as NULL; a length is SQL_NTS or a byte count.
 SQLRETURN OdbcExecDirectUtf8(SQLHSTMT hstmt, const char* sql);
 SQLRETURN OdbcPrepareUtf8(SQLHSTMT hstmt, const char* sql);
+// The same two with the per-connection choice of entry point: `narrow` is
+// OdbcReaderOptions::narrow_sql, and only means something on Windows (the narrow
+// calls are the only ones elsewhere).  Statement text that came from the caller goes
+// through these; the two-argument forms above are for the bridge's own ASCII probes.
+SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, bool narrow);
+SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, bool narrow);
 SQLRETURN OdbcDescribeColUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* name, SQLSMALLINT name_cap,
                               SQLSMALLINT* name_len, SQLSMALLINT* type, SQLULEN* size,
                               SQLSMALLINT* digits, SQLSMALLINT* nullable);

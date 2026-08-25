@@ -1156,7 +1156,7 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     processed = 0;
     for (int64_t i = 0; i < n; i++) param_status[i] = SQL_PARAM_UNUSED;
     SQLRETURN r = stmt->prepared ? SQLExecute(hstmt)
-                                 : OdbcExecDirectUtf8(hstmt, stmt->query);
+                                 : OdbcExecDirectSql(hstmt, stmt->query, stmt->reader_opts.narrow_sql);
     if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
       if (OdbcReadULen(&processed, opts->sqllen_32bit) == 0 && row == 0) {
         // Nothing was applied.  Let the row-at-a-time path run: it either
@@ -1294,7 +1294,7 @@ static AdbcStatusCode BindAndExecuteRow(SQLHSTMT hstmt, bool prepared, const cha
                                    (SQLPOINTER)p->data, p->buffer_length, &p->bound_indicator);
     if (!SQL_SUCCEEDED(r)) return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLBindParameter", error);
   }
-  SQLRETURN r = prepared ? SQLExecute(hstmt) : OdbcExecDirectUtf8(hstmt, query);
+  SQLRETURN r = prepared ? SQLExecute(hstmt) : OdbcExecDirectSql(hstmt, query, opts->narrow_sql);
   if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
     return OdbcSetError(SQL_HANDLE_STMT, hstmt, prepared ? "SQLExecute" : "SQLExecDirect", error);
   }
@@ -1472,7 +1472,7 @@ static SQLHSTMT MultiRowPrepareForm(struct OdbcConnection* conn, const char* int
     free(sql);
     return NULL;
   }
-  if (!SQL_SUCCEEDED(OdbcPrepareUtf8(hstmt, sql))) {
+  if (!SQL_SUCCEEDED(OdbcPrepareSql(hstmt, sql, conn->reader_opts.narrow_sql))) {
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
     hstmt = NULL;
   }
@@ -2051,7 +2051,7 @@ static void ArrayIngestSetup(struct ArrayIngest* ai, const struct ArrowSchemaVie
   // A refusal here is about this table -- a column PostgreSQL has no assignment cast to
   // from the Arrow type -- not about the server, so it is not remembered on the
   // connection; the ingest simply keeps the multi-row INSERT path.
-  if (!SQL_SUCCEEDED(OdbcPrepareUtf8(hstmt, sb.buffer))) {
+  if (!SQL_SUCCEEDED(OdbcPrepareSql(hstmt, sb.buffer, conn->reader_opts.narrow_sql))) {
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
     InternalAdbcStringBuilderReset(&sb);
     return;
@@ -2860,7 +2860,7 @@ AdbcStatusCode OdbcStatementExecuteBound(struct OdbcStatement* stmt, struct Arro
                                          int64_t* rows_affected, struct AdbcError* error) {
   RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
   if (!stmt->prepared) {
-    ODBC_CHECK(OdbcPrepareUtf8(stmt->ref->hstmt, stmt->query), SQL_HANDLE_STMT,
+    ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, stmt->reader_opts.narrow_sql), SQL_HANDLE_STMT,
                stmt->ref->hstmt, "SQLPrepare", error);
     stmt->prepared = true;
   }
@@ -3202,7 +3202,7 @@ static AdbcStatusCode ExecSimple(struct OdbcConnection* conn, const char* sql, b
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
              "SQLAllocHandle", error);
-  SQLRETURN ret = OdbcExecDirectUtf8(hstmt, sql);
+  SQLRETURN ret = OdbcExecDirectSql(hstmt, sql, conn->reader_opts.narrow_sql);
   AdbcStatusCode s = ADBC_STATUS_OK;
   if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA && !ignore_error) {
     s = OdbcSetError(SQL_HANDLE_STMT, hstmt, sql, error);

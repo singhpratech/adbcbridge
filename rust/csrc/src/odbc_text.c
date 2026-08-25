@@ -47,6 +47,16 @@ SQLRETURN OdbcPrepareUtf8(SQLHSTMT hstmt, const char* sql) {
   return SQLPrepare(hstmt, (SQLCHAR*)sql, SQL_NTS);
 }
 
+SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, bool narrow) {
+  (void)narrow;  // the narrow call is the only one here
+  return SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS);
+}
+
+SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, bool narrow) {
+  (void)narrow;
+  return SQLPrepare(hstmt, (SQLCHAR*)sql, SQL_NTS);
+}
+
 SQLRETURN OdbcDescribeColUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* name, SQLSMALLINT name_cap,
                               SQLSMALLINT* name_len, SQLSMALLINT* type, SQLULEN* size,
                               SQLSMALLINT* digits, SQLSMALLINT* nullable) {
@@ -209,6 +219,19 @@ SQLRETURN OdbcPrepareUtf8(SQLHSTMT hstmt, const char* sql) {
   SQLRETURN r = SQLPrepareW(hstmt, w, SQL_NTS);
   free(w);
   return r;
+}
+
+// OdbcReaderOptions::narrow_sql: an ANSI-only driver whose narrow path is UTF-8 gets
+// the bytes as they are -- the driver manager transcodes only on the way from a W call
+// to a narrow driver, never a narrow call.
+SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, bool narrow) {
+  if (narrow) return SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS);
+  return OdbcExecDirectUtf8(hstmt, sql);
+}
+
+SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, bool narrow) {
+  if (narrow) return SQLPrepare(hstmt, (SQLCHAR*)sql, SQL_NTS);
+  return OdbcPrepareUtf8(hstmt, sql);
 }
 
 SQLRETURN OdbcDescribeColUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* name, SQLSMALLINT name_cap,
