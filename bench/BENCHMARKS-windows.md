@@ -117,10 +117,11 @@ time, `docker system df` showed nothing, yet `docker_data.vhdx` under `%LOCALAPP
 rmi` frees space *inside* it for reuse but returns none to Windows. `wsl --manage
 docker-desktop --set-sparse true` is refused on WSL 2.7.12 ("currently disabled due to
 potential data corruption", `--allow-unsafe` not forced); `Optimize-VHD` / `diskpart
-compact vdisk` need administrator rights. `wsl --shutdown` recovered 5.3 → 8.9 GB (the
-VM's working memory), and since the allocated space is reused the file stops growing as
-long as images are deleted between pulls. Budget ~13 GB of VHDX for a tier-3 sweep on top
-of Docker Desktop's ~6 GB, and expect to need an administrator to get it back. Containers
+compact vdisk` need administrator rights. **Correction after a later cycle:** on WSL 2.7.12 `wsl --shutdown` *does* compact the VHDX
+when it is mostly empty — 13,228 → 7,078 MB, host free space 6.7 → 13.2 GB. So the remedy that
+needs no administrator is: delete images and volumes, quit Docker Desktop, `wsl --shutdown`,
+relaunch. Budget ~13 GB of VHDX for a tier-3 sweep on top of Docker Desktop's ~6 GB while it
+runs. Containers
 also leave anonymous volumes behind (11 of them, 992 MB, after ten entries): `docker volume
 prune -af` between entries.
 
@@ -133,6 +134,9 @@ prune -af` between entries.
 | databend | **FAIL** at the astral check only: `héllo 🚀` stored byte-exact on every write path, read back as `héllo ???` on every read path including pyodbc — Connector/ODBC 8.4.0 decodes Databend's result sets as 3-byte `utf8`, since Databend implements neither `@@character_set_client` nor `@@character_set_connection` (both 0) and ignores `charset=`; the same driver reads 🚀 from MySQL, TiDB, Percona and MariaDB; Linux passes on 9.4. Everything else passes | 334,776 | — | 7,538 (7,705) | — |
 | greptimedb | **FAIL** at the astral check only — same signature; GreptimeDB 1.1.4, 41 MB | 224,755 | 101,186 | 62,007 (50,294) | — |
 | matrixone | **FAIL** at the astral check only — same signature; MatrixOne v4.2.0, `NO_SSPS=1` needed, 405 MB | 484,587 | 235,948 | 32,259 (34,868) | 683 |
+
+| spanner | PASS (`PostgreSQL (via ODBC) 14.1.0`), emulator + PGAdapter, two 1 GB containers, compat passed twice on fresh emulators — **bench not runnable**: `matrix_bench.py` hung twice after compat (emulator: `cross-database references are not implemented`), and killing it left the emulator refusing every connection (`FATAL: UNAVAILABLE`); recorded, not retried | — | — | — | — |
+| cloudberry | PASS (`PostgreSQL (via ODBC) 14.4.0`), Cloudberry 2.1.0-incubating at `--memory=1536m --shm-size=1g`, 369 MB used, ready in ~40 s | 224,017 | 150,536 | 3,591 (4,171) | 276 |
 
 **A class, not three incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone. Everything else in
 their workloads passes, and their read rates are among the best on this machine.
