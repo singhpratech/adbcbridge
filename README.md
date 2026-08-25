@@ -627,9 +627,10 @@ widths). The full record, including a dozen findings documented but not yet file
 
 ## Language packages
 
-One driver library, five packages that find and load it. All five are built and tested
-in this repository; none is on a public registry yet (the release workflow produces
-them, publication is a maintainer step).
+One driver library, five packages that find and load it. All five are built, tested and
+attached to every [GitHub Release](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0) — the first is v0.1.0 — together with the bare
+libraries for Linux x86_64/aarch64, macOS arm64 and Windows x64. Registry publication
+(PyPI first) follows.
 
 | Language | Package | What it gives you | Where |
 |---|---|---|---|
