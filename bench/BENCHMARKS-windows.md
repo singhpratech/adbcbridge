@@ -146,6 +146,10 @@ prune -af` between entries.
 | ydb | PASS (`PostgreSQL (via ODBC) 14.0.5`) with psqlodbc 16.00.0007, registered by hand — 18.00.0002 fails at connect (`unrecognized configuration parameter "datestyle"`), and a DLL path in `Driver=` gets `IM002` from the Windows driver manager (unixODBC accepts one); 1,024 MB used at 1536m | 101,712 | 61,361 | 750 (756) | 38 |
 | starrocks | **FAIL** at the astral check only — fifth member of the class; StarRocks 4.x at 1536m (976 MB used) | 402,109 | 213,907 | 2,603 (3,957) | — |
 
+| oceanbase | **server not runnable here: RAM** — `MODE=SLIM` at 1536m stalled 17 min at 1.442/1.5 GiB after `observer program health check ok`, never `boot success` (OOMKilled=false) | | | | |
+| azuresqledge | PASS (`SQL Server 16.00.5100`), msodbcsql 18, the Linux image in Docker Desktop — rows in the language file | | | | |
+| columnstore | **FAIL before 7cb06ec** — parameters pass with `NO_SSPS=1`, then the generated DDL is refused: the ColumnStore engine probe sat inside the MariaDB-connector block and never ran through MySQL's connector. A bridge bug found by this column, fixed at `7cb06ec` (verified on Linux through maodbc), not re-measured on Windows | | | | |
+
 **A class, not five incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone, mongodbbi, starrocks. Everything else in
 their workloads passes, and their read rates are among the best on this machine.
 
