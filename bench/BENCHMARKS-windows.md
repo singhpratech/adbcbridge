@@ -186,7 +186,7 @@ immediately after CTAS); rerun clean.
 
 ## First machine (i7-8550U, 7.7 GB) — historical campaign
 
-## Verified at the shipped state — main @ b5d2791
+## Verified at the shipped state — main @ 4b3d9ff
 
 Clean build directory, x64 Release, MSVC 19.44.35228, CMake 4.4.2, Windows SDK 10.0.26100;
 Windows 11 Pro build 26200, i7-8550U (4C/8T), 7.7 GB; Python 3.12.10 x64, adbc-driver-manager
@@ -224,7 +224,7 @@ or not, server runnable in a 2.4 GB VM or not, and why (an IBM or Oracle login, 
 image, a UAC click per MSI, or time). The machine keeps Python, the ODBC drivers and the
 repository, so a re-verification is `pip install` and `cmake` away.
 
-### Tier 3, batch 1 — psqlodbc "PostgreSQL Unicode(x64)" 18.00.0002, x64 Release at b5d2791
+### Tier 3, batch 1 — psqlodbc "PostgreSQL Unicode(x64)" 18.00.0002, x64 Release at 4b3d9ff
 
 | entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
 |---|---|---:|---:|---:|---:|
@@ -238,7 +238,7 @@ Single samples, no prefetch, no fan-out. The five-language rows are in
 ingest is where the multi-row batching shows most on this tier — 7.4× on CockroachDB,
 19.7× on TimescaleDB, 141.6× on CrateDB (57 rows/s row by row) — with fetch within 10%.
 
-### Tier 3, batch 2 — main @ ffecd7a (ctest 7/7, zero warnings)
+### Tier 3, batch 2 — main @ cddd466 (ctest 7/7, zero warnings)
 
 | entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
 |---|---|---:|---:|---:|---:|
@@ -267,7 +267,7 @@ of rows/s on CrateDB and Dolt, so 10,000 rows exceeds a 10-minute window (C# on 
 was still going after 30); the language file marks them `stopped`. Java on Dolt hung on
 the ADBC-only path for over 10 minutes and was killed — recorded as `hung`, unexplained.
 
-### Tier 3, batch 3 — percona/arcadedb at ffecd7a, risingwave/materialize at 9a652ae (ctest 7/7, zero warnings)
+### Tier 3, batch 3 — percona/arcadedb at cddd466, risingwave/materialize at 26bae50 (ctest 7/7, zero warnings)
 
 | entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
 |---|---|---:|---:|---:|---:|
@@ -294,7 +294,7 @@ runs. Containers
 also leave anonymous volumes behind (11 of them, 992 MB, after ten entries): `docker volume
 prune -af` between entries.
 
-### Tier 3, batch 4 (interim) — main @ 9a652ae
+### Tier 3, batch 4 (interim) — main @ 26bae50
 
 | entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
 |---|---|---:|---:|---:|---:|
@@ -317,11 +317,11 @@ prune -af` between entries.
 
 | oceanbase | **server not runnable here: RAM** — `MODE=SLIM` at 1536m stalled 17 min at 1.442/1.5 GiB after `observer program health check ok`, never `boot success` (OOMKilled=false) | | | | |
 | azuresqledge | PASS (`Microsoft SQL Server (via ODBC) 16.00.5100`), Azure SQL Edge Developer image at 1536m (514 MB used), msodbcsql 18 | 237,448 | 136,506 | 12,127 (21,976) | 20,548 |
-| columnstore | PASS (`MySQL (via ODBC) 11.1.1-MariaDB-log`) at `1bb2d88`, Connector/ODBC 8.4.0 + `NO_SSPS=1`, fresh container at 1536m, utf8mb4 from the start — **FAIL before `7cb06ec`**: generated DDL refused because the ColumnStore probe never ran through MySQL's connector; a bridge bug this column found, fixed, and re-measured green here. Not in the astral class: MariaDB exposes the charset variables | 294,795 | 190,464 | 13,206 (13,432) | 1,466 |
+| columnstore | PASS (`MySQL (via ODBC) 11.1.1-MariaDB-log`) at `3ca34a5`, Connector/ODBC 8.4.0 + `NO_SSPS=1`, fresh container at 1536m, utf8mb4 from the start — **FAIL before `52d3533`**: generated DDL refused because the ColumnStore probe never ran through MySQL's connector; a bridge bug this column found, fixed, and re-measured green here. Not in the astral class: MariaDB exposes the charset variables | 294,795 | 190,464 | 13,206 (13,432) | 1,466 |
 
 | monetdb | PASS (`MonetDB (via ODBC) 11.55.0007`), MonetDB ODBC Installer 20260615, container at 1 GB (19 MB used) | 268,684 | 167,720 | 55,696 (55,757) | 236 |
-| virtuoso | **FAIL, bridge-side, fix landed not re-measured**: two virtodbc.dll faults — `SQLSetPos(SQL_POSITION)` fails, and the bound-column indicator array is written at a 4-byte stride on a block cursor. `e42ec91` skipped the repair; the stride is read correctly by the `ind_stride_32bit` quirk. Peer measured the equivalent prototype PASS (fetch 90,426/s); machine closed, committed build not re-measured | — | 75,746 | 1,194 | — |
-| ignite | **FAIL, driver ANSI-only, bridge fix designed/deferred**: ignite.odbc.dll exports no `W` entry point, so the Windows DM mangles statement literals and wide fetches (pyodbc identical). `narrow_params` (`e42ec91`) fixed the parameter side; routing text narrow needs a per-connection switch (peer prototype PASS, fetch 348,579/s) — deferred, `private/` | 274,871 | — | — | — |
+| virtuoso | **FAIL, bridge-side, fix landed not re-measured**: two virtodbc.dll faults — `SQLSetPos(SQL_POSITION)` fails, and the bound-column indicator array is written at a 4-byte stride on a block cursor. `9944616` skipped the repair; the stride is read correctly by the `ind_stride_32bit` quirk. Peer measured the equivalent prototype PASS (fetch 90,426/s); machine closed, committed build not re-measured | — | 75,746 | 1,194 | — |
+| ignite | **FAIL, driver ANSI-only, bridge fix designed/deferred**: ignite.odbc.dll exports no `W` entry point, so the Windows DM mangles statement literals and wide fetches (pyodbc identical). `narrow_params` (`9944616`) fixed the parameter side; routing text narrow needs a per-connection switch (peer prototype PASS, fetch 348,579/s) — deferred, `private/` | 274,871 | — | — | — |
 | tdengine | **FAIL, driver**: taos-odbc's Windows build is ANSI and its iconv has no `CP1252 → UTF-8` table, so statement text handed over in the system code page cannot be converted | | | | |
 | flightsql | **FAIL, driver, astral only**: the Flight SQL ODBC Windows build returns U+1F680 as U+F680 (low 16 bits kept), pyodbc identical; everything else passes, fastest fetch of the campaign | 2,013,077 | — | — | — |
 | influxdb3 | **FAIL, driver**: the same low-16-bit truncation; everything else passes | 1,592,073 | — | — | — |
@@ -344,7 +344,7 @@ installed. It bit CrateDB first only because that was the first Windows entry wh
 workload produces a tz-aware timestamp; any entry with a `timestamptz` column fails the
 same way on a fresh box. The setup line above now includes `tzdata`.
 
-## Host — first human run, 2026-08-24, main @ 199f40e
+## Host — first human run, 2026-08-24, main @ 18e1a8d
 
 | | |
 |---|---|
@@ -385,7 +385,7 @@ PostgreSQL on the same 8 GB machine: the EDB installer or Docker Desktop with
 | duckdb | PASS | `DuckDB (via ODBC) ` (the driver reports no version; duckdb_odbc 1.5.5.0) |
 | mssql | PASS | `Microsoft SQL Server (via ODBC) 17.00.1000` — SQL Server 2025 RTM, native install, Windows auth, `Trusted_Connection=yes;TrustServerCertificate=yes` |
 | mysql | PASS | `MySQL (via ODBC) 8.4.9` — winget's `Oracle.MySQL` binaries, `mysqld --initialize-insecure` and a standalone `mysqld` on a spare port (no service, no admin); MySQL Connector/ODBC 8.4.0. Byte-exact probe (validated against PostgreSQL first): `VARCHAR(50)` reports `column_size` 50, `TEXT` 65535, `héllo` and `日本語` round-trip exactly on read and on a bound-parameter write read back with pyodbc. Needs no `LD_PRELOAD`-style workaround, unlike the connector under pyarrow on Linux |
-| postgres | PASS | `PostgreSQL (via ODBC) 16.15.0` — native install, psqlodbc 18.00.0002 "PostgreSQL Unicode(x64)"; **FAIL at 199f40e–9c07f78** with `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9`, see the second bug below |
+| postgres | PASS | `PostgreSQL (via ODBC) 16.15.0` — native install, psqlodbc 18.00.0002 "PostgreSQL Unicode(x64)"; **FAIL at 18e1a8d–76223c9** with `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9`, see the second bug below |
 
 ### Python: adbcbridge vs pyodbc (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`)
 
@@ -397,19 +397,19 @@ PostgreSQL on the same 8 GB machine: the EDB installer or Docker Desktop with
 | postgres | 86,343 (array 151,542) | 9,506 | 235,955 | 151,745 |
 | mysql | 38,535 (array 42,144) | 6,145 | 397,443 | 269,100 |
 
-All at main @ d364312, x64 Release, **single sample each**, servers as native Windows installs.
+All at main @ 5b932c5, x64 Release, **single sample each**, servers as native Windows installs.
 **Run-to-run variance on this machine swamps build-to-build comparison**: two postgres
 fetches on the same build minutes apart read 187,893 and 235,955 rows/s (26% apart) — a
 4-core mobile CPU with ~1.2 GB free, thermally limited, with the database server and Defender
 on the same box. DuckDB's fetch read 839,721 rows/s on the pre-fix narrow path and 592,742 on
 the wide one, which *looks* like a wide-path cost and cannot be distinguished from that noise;
 a real answer needs a quiet machine and repeated runs. Earlier single-sample sqlite line at
-199f40e: 175,704 / 153,763 / 457,935 / 256,221.
+18e1a8d: 175,704 / 153,763 / 457,935 / 256,221.
 
 Raw line: `sqlite  SQLite (via ODBC) 3.43.2  fetch=457,935/s (pyodbc 256,221/s, native —/s)  ingest=175,704/s array=173,043/s pyodbc=153,763/s`
 — fetch 1.79× pyodbc, ingest 1.14×, on a 4-core mobile CPU with 1.2 GB free and a build with neither prefetch nor fan-out; not comparable with the Linux rows.
 
-### `tests/test_sqlite.py` — FAILED at `199f40e`, and it was a real bug
+### `tests/test_sqlite.py` — FAILED at `18e1a8d`, and it was a real bug
 
 `assert d["s"] == ["héllo", None, ""]` got `'hÃ©llo'`. Not console mangling: statement text
 went to ODBC through the narrow entry points (`SQLExecDirect`, `SQLPrepare`,
@@ -426,7 +426,7 @@ statement-literal step so a PASS means something here.
 
 ### Second bug, found by the fourth database: character columns were read through the ANSI code page
 
-At 199f40e–9c07f78, against PostgreSQL 16.15 with `server_encoding`/`client_encoding` UTF8
+At 18e1a8d–76223c9, against PostgreSQL 16.15 with `server_encoding`/`client_encoding` UTF8
 (the server verifiably holding `68c3a96c6c6f` for `héllo`), `SELECT 'héllo'::varchar` raised
 `UnicodeDecodeError: byte 0xe9` in pyarrow and `SELECT '日本語'::text` came back as `???`,
 silently and irreversibly. The reader bound `SQL_CHAR`/`SQL_VARCHAR`/`SQL_LONGVARCHAR` as
@@ -434,9 +434,9 @@ silently and irreversibly. The reader bound `SQL_CHAR`/`SQL_VARCHAR`/`SQL_LONGVA
 iODBC, never on the Windows driver manager, which transcodes narrow data to the ANSI code
 page (1252 here). SQLite, SQL Server (`NVARCHAR` → wide path) and DuckDB had passed by luck
 of the driver; psqlodbc, which fronts 14 of the 46, honours the conversion. Fixed in
-`9c07f78`: on Windows every character column is read as `SQL_C_WCHAR`, the `wchar_as_utf8`
+`76223c9`: on Windows every character column is read as `SQL_C_WCHAR`, the `wchar_as_utf8`
 quirk (whose premise is the same assumption) is off there, and catalog string reads go the
-same way. Verified at `d364312`: all four probes byte-exact (`68c3a96c6c6f`,
+same way. Verified at `5b932c5`: all four probes byte-exact (`68c3a96c6c6f`,
 `e697a5e69cace8aa9e`), the four entries above PASS, `tests/test_windows_text.py` 9/9,
 `ctest` 7/7, zero warnings. No truncation or doubling seen on these four drivers, whose
 `column_size` is in characters; drivers that report bytes are the ones to watch next.

@@ -3,7 +3,7 @@
 
 The workload of [`LANGUAGE_BENCHMARKS.md`](LANGUAGE_BENCHMARKS.md) run on **Windows 11
 Pro 24H2, Intel Core i7-8550U (4 cores / 8 threads), 7.7 GB RAM, x64**, the OS's own driver
-manager (odbc32.dll), adbcbridge at `a019213` (tier 3 at `b5d2791`, `ffecd7a` and `9a652ae`), x64 Release — a build with **no prefetch
+manager (odbc32.dll), adbcbridge at `459f39b` (tier 3 at `4b3d9ff`, `cddd466` and `26bae50`), x64 Release — a build with **no prefetch
 pipeline and no ingest fan-out** (both compiled out on `_WIN32`). Same harnesses, same
 columns: ADBC ingest and fetch (rows/s) through `libadbc_driver_odbc.dll`, then that
 language's own ODBC client (Java's is JDBC — sqlite-jdbc — not ODBC). ROWS=10000,

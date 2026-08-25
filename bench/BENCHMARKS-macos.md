@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks — macOS
 
-Measured 2026-08-24 on a real machine (first non-CI macOS run), commit `a5bf1b4`.
+Measured 2026-08-24 on a real machine (first non-CI macOS run), commit `e4eb3dd`.
 SQLite, PostgreSQL and SQL Server all measured. **The PostgreSQL numbers are indicative only,
 not the reference comparison**: psqlodbc was built from source, the server is PostgreSQL 15 (not
 16), and the host was not idle — see the Load row. The Linux run in `BENCHMARKS.md` stays the
@@ -97,10 +97,10 @@ create-twice → ProgrammingError, GetObjects (catalogs/tables/columns/PK+FK con
 
 ### `tests/compat/test_matrix.py sqlite` — `sqlite    PASS  (SQLite (via ODBC) 3.51.0)`
 
-### `tests/test_plug_and_play.py` — 1 of 2 flows passed at `a5bf1b4`; the second was Linux-specific as written
+### `tests/test_plug_and_play.py` — 1 of 2 flows passed at `e4eb3dd`; the second was Linux-specific as written
 
 * `install --prefix + ADBC_DRIVER_PATH: CONNECTED ADBC ODBC Driver` — PASS.
-* `install.sh + user config dir` — FAIL on macOS at `a5bf1b4`, **test-harness issue, not a driver
+* `install.sh + user config dir` — FAIL on macOS at `e4eb3dd`, **test-harness issue, not a driver
   issue**: `test_install_sh_flow` set `MANIFEST_DIR=$tmp/xdg/adbc/drivers` and then expected the
   driver manager to find it via `XDG_CONFIG_HOME=$tmp/xdg`. On macOS the driver manager ignores XDG
   and searches only `~/Library/Application Support/ADBC/Drivers` (its error listed
@@ -114,7 +114,7 @@ create-twice → ProgrammingError, GetObjects (catalogs/tables/columns/PK+FK con
   `install.sh` needs `cmake` on PATH and, on a non-Homebrew unixODBC, `CMAKE_PREFIX_PATH` in the
   environment — it has no flag for that.
 
-#### Loop closed at `77e8fd8` (same machine, rebuilt clean, 0 warnings)
+#### Loop closed at `96a9867` (same machine, rebuilt clean, 0 warnings)
 
 * `tests/test_plug_and_play.py` → `PLUG AND PLAY OK`, both flows, negative control and idempotence
   included; nothing left behind in the real `~/.local/lib` or `~/Library/Application Support`.
@@ -131,7 +131,7 @@ create-twice → ProgrammingError, GetObjects (catalogs/tables/columns/PK+FK con
 |---|---|
 | `test_driver_load_errors.py` | 3 ok (`missing_driver_library_is_still_reported_as_missing`, `unreadable_driver_library_says_permission_denied`, `static_tls_exhaustion_is_explained`→SKIP fixture not built, as designed) |
 | `test_prefetch.py` | 24 passed, 3 skipped (need PG_URI) |
-| `test_delegate.py` | 8 PASS, 22 SKIP at `a5bf1b4` — **harness bug, fixed after this run**: the file hard-coded `build/libadbc_fake_native_driver.so`; the target is `.dylib` here, so every delegation test skipped. It now uses the platform's suffix |
+| `test_delegate.py` | 8 PASS, 22 SKIP at `e4eb3dd` — **harness bug, fixed after this run**: the file hard-coded `build/libadbc_fake_native_driver.so`; the target is `.dylib` here, so every delegation test skipped. It now uses the platform's suffix |
 | `test_partitions.py` (with PG) | 85 passed |
 | `test_long_columns.py` (with PG) | 13 passed |
 | `test_parallel_ingest.py` (with PG) | 18 passed |
@@ -189,7 +189,7 @@ create-twice → ProgrammingError, GetObjects (catalogs/tables/columns/PK+FK con
   (absolute path); without Homebrew's unixODBC it must be built from source with
   `odbc_config` on PATH.
 
-## Second pass: the two drivers Linux had to build from source (main @ 199f40e)
+## Second pass: the two drivers Linux had to build from source (main @ 18e1a8d)
 
 * **TDengine — PASS** with the vendor's own arm64 client (`TDengine-client-3.3.6.13-macOS-arm64.pkg`)
   and `taos-connector-odbc` branch 3.3.6 built against it: `tdengine PASS (tdengine (via ODBC)
@@ -214,7 +214,7 @@ create-twice → ProgrammingError, GetObjects (catalogs/tables/columns/PK+FK con
   under Rosetta (`arch -x86_64 python3`), which an Intel-only stack could use; this project does
   not target Intel Macs, so the entry stays Linux-only (where it is built from source).
 
-## Full-matrix campaign (main @ 24dab36) — tier 1, no server
+## Full-matrix campaign (main @ 688229f) — tier 1, no server
 
 | entry | result | matrix_bench (10,000 / 100,000 rows) |
 |---|---|---|
@@ -231,7 +231,7 @@ Reproduced in a ten-line harness; present on upstream `dev` at the time of writi
 to count on a local copy of the pointer. Ubuntu's `odbc-mdbtools` links real glib, which is
 why Linux never sees it. Load 5–6 throughout.
 
-## Full-matrix campaign — batch 1: tiers 1–2 (main @ 24dab36)
+## Full-matrix campaign — batch 1: tiers 1–2 (main @ 688229f)
 
 | entry | result |
 |---|---|
@@ -296,14 +296,14 @@ up, to be restored). Load 5–7 throughout.
 
 Driver fix: `no_param_arrays` keyed on MariaDB Connector/ODBC ≥ 3.2 (the Linux matrix runs
 3.1.15, where arrays are both correct and the faster path); both entries to be re-run.
-| mysql (re-run at 187dfac) | PASS (`MySQL (via ODBC) 08.04.000011`) — python fetch 48,715/s (pyodbc 45,680), ingest 119,319 (array 130,556; pyodbc 4,626) |
-| mariadb (re-run at 187dfac) | PASS (`MariaDB (via ODBC) 11.08.000008`) — python fetch 46,926/s (pyodbc 42,450), ingest 157,034 (array 142,486; pyodbc 4,219). The ~47k fetch on both MySQL-wire servers against ~800k on the PostgreSQL-wire ones is libmaodbc 3.2.9's read path, not the bridge — pyodbc gets the same |
+| mysql (re-run at 34b5863) | PASS (`MySQL (via ODBC) 08.04.000011`) — python fetch 48,715/s (pyodbc 45,680), ingest 119,319 (array 130,556; pyodbc 4,626) |
+| mariadb (re-run at 34b5863) | PASS (`MariaDB (via ODBC) 11.08.000008`) — python fetch 46,926/s (pyodbc 42,450), ingest 157,034 (array 142,486; pyodbc 4,219). The ~47k fetch on both MySQL-wire servers against ~800k on the PostgreSQL-wire ones is libmaodbc 3.2.9's read path, not the bridge — pyodbc gets the same |
 | timescaledb | PASS (`PostgreSQL (via ODBC) 16.15.0`) |
 | questdb | PASS (`PostgreSQL (via ODBC) 11.3.0`) |
 | cloudberry | PASS (`PostgreSQL (via ODBC) 14.4.0`), amd64 emulated |
-| cratedb | FAIL at 187dfac: `AssertionError: decimal128(28, 3)` — psqlodbc 18 describes a NUMERIC whose precision and scale CrateDB does not report as `decimal128(28, 3)`, where psqlodbc 16 on Linux says `decimal128(28, 6)`; the entry now accepts both, re-run pending |
+| cratedb | FAIL at 34b5863: `AssertionError: decimal128(28, 3)` — psqlodbc 18 describes a NUMERIC whose precision and scale CrateDB does not report as `decimal128(28, 3)`, where psqlodbc 16 on Linux says `decimal128(28, 6)`; the entry now accepts both, re-run pending |
 | opengauss | server not runnable here: `enmotech/opengauss` arm64's MOT engine panics at start inside the Docker Desktop VM — `Libnuma library not installed or not configured`, `Invalid NUMA configuration numa_node_of_cpu(0) => -1`, `Failed to allocate highest thread identifier on node 0` → `PANIC: Failed to Initialize core services`; tried `--cap-add=SYS_NICE --shm-size=1g` and `--cpuset-cpus=0-7` |
-| cratedb (re-run at f9c27dc) | PASS (`PostgreSQL (via ODBC) 14.0.0`, CrateDB 6.4.3) — python fetch 454,878/s (pyodbc 352,906), ingest 24,740 (array 29,214; pyodbc 516) |
+| cratedb (re-run at 1f35a5c) | PASS (`PostgreSQL (via ODBC) 14.0.0`, CrateDB 6.4.3) — python fetch 454,878/s (pyodbc 352,906), ingest 24,740 (array 29,214; pyodbc 516) |
 | timescaledb | python fetch 1,074,095/s (pyodbc 581,495), ingest 533,002 (array 508,477; pyodbc 4,370) |
 | questdb | python fetch 545,566/s (pyodbc 373,440), ingest 112,365 (array 138,077; pyodbc 4,802); languages with `ADBC_BENCH_AUTOCOMMIT=1` |
 | cloudberry | arm64 image, singlenode, `--shm-size=1g` — python fetch 1,029,974/s (pyodbc 578,469), ingest 12,327 (array 12,121; pyodbc 1,013) |
@@ -311,9 +311,9 @@ Driver fix: `no_param_arrays` keyed on MariaDB Connector/ODBC ≥ 3.2 (the Linux
 | materialize | PASS (`PostgreSQL (via ODBC) 9.5.0`) — python fetch 164,748/s (pyodbc 101,211), ingest 32,833 (array 27,349; pyodbc 2,423); languages with `ADBC_BENCH_AUTOCOMMIT=1` |
 | ydb | **FAIL** `[HY000] (110) Status: GENERIC_ERROR Issues: <main>:1:1: Error: unrecognized configuration parameter "datestyle"` at `SQLDriverConnect` — psqlodbc 18.00.0002's `CC_connect` sends `SHOW DateStyle;` (connection.c:1109) before anything else and YDB's PG layer rejects it; psqlodbc 16 (Linux) does not issue it. User/GRANT setup as in the README; YDB answers `SELECT 1` through its CLI. A driver-version fact, amd64 emulated — **PASS on psqlodbc 16.00.0005** built from `REL-16_00_0005` for this entry (`PostgreSQL (via ODBC) 14.0.5`, `SQL_DRIVER_VER` confirmed via pyodbc); the 18.x fact stands |
 | spanner | PASS (`PostgreSQL (via ODBC) 14.1.0`), emulator + PGAdapter, 300/2,000 rows — python fetch 81,367/s (pyodbc 112,280), ingest 6,115 (array 7,141; pyodbc 265); the four harness rows first failed (DDL inside a transaction — autocommit off) and pass with `ADBC_BENCH_AUTOCOMMIT=1`: fetch 106,509–126,408/s, ingest 7,061–8,761/s, in `LANGUAGE_BENCHMARKS-macos.md` |
-| arcadedb | PASS (`PostgreSQL (via ODBC) 12.0.0`), read-only fixture — python fetch 289,023/s; the four harnesses first read 0 rows — `conn.py` was recreating `adbc_big` empty per connection (fixed `b883d62`) — and read 274,520–304,373/s with the setup unset |
+| arcadedb | PASS (`PostgreSQL (via ODBC) 12.0.0`), read-only fixture — python fetch 289,023/s; the four harnesses first read 0 rows — `conn.py` was recreating `adbc_big` empty per connection (fixed `09a2a41`) — and read 274,520–304,373/s with the setup unset |
 
-## Verified at the shipped state — main @ 7d6b043
+## Verified at the shipped state — main @ f6a54c8
 
 Fresh `rm -rf build`, `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 -DCMAKE_PREFIX_PATH=<unixODBC prefix>`, `cmake --build build -j`: **0 warnings**.
@@ -338,7 +338,7 @@ four-byte build — Virtuoso all pass through an iODBC-built bridge.
 Databend, GreptimeDB, Doris and StarRocks fail through MariaDB Connector/ODBC and pass through
 MySQL's own connector via an iODBC-built bridge (batch 4 below); both results are kept.
 
-## Batch 3: tier 4, the MySQL-wire servers (main @ f9c27dc)
+## Batch 3: tier 4, the MySQL-wire servers (main @ 1f35a5c)
 
 MariaDB Connector/ODBC 3.2.9 (libmaodbc, `SQL_DRIVER_VER 03.02.0009`) + Connector/C 3.4.9 for
 every MySQL-wire entry, with the `≥ 3.2` quirk (`no_param_arrays`) in place; `PLUGIN_DIR`
@@ -374,15 +374,15 @@ for the language harnesses. `go/monetdb` (autocommit on, `-no-native`); `go/db2`
 empty — the harness's second `SQLDriverConnect` fails on the IBM clidriver every time while
 the other three languages reconnect fine.
 
-## Batch 4: the four MariaDB-connector failures through MySQL's own connector (main @ 5a16131)
+## Batch 4: the four MariaDB-connector failures through MySQL's own connector (main @ 5bb3e3c)
 
 MySQL Connector/ODBC **26.7.1 for macOS arm64 exists** (Oracle renumbered 9.x → 26.x; the
 download page is JavaScript-only and its `/get/` URL refuses `curl`, so it is fetched through
 the "No thanks, just start my download" link) — and it is **built for iODBC**: `libmyodbc26w.so`
 links `@rpath/libiodbcinst.dylib`. It can only be used through a bridge built against iODBC;
 relinking it to unixODBC is not valid (4-byte vs 2-byte `SQLWCHAR`, every call fails with an
-empty diagnostic). That route exposed two bridge bugs, fixed on the way (`60b05e8`, `4280a9d`,
-`5a16131`; see `docs/TROUBLESHOOTING.md`): the wide-text codecs assumed 2-byte units, and this
+empty diagnostic). That route exposed two bridge bugs, fixed on the way (`6843467`, `c2afdfe`,
+`5bb3e3c`; see `docs/TROUBLESHOOTING.md`): the wide-text codecs assumed 2-byte units, and this
 connector reads bound wide parameters inconsistently with how it writes columns, so on a
 4-byte build it now takes the narrow UTF-8 route.
 
@@ -409,7 +409,7 @@ MariaDB Connector/ODBC, which settles where that ceiling lives. And the narrow U
 costs nothing measurable: the pre-fix build that bound narrow by a local patch read 2,234,246
 and 1,295,615 rows/s on the same two servers.
 
-## Batch 5: the four "driver aborts" were unixODBC (main @ f49e27f)
+## Batch 5: the four "driver aborts" were unixODBC (main @ 65cff5b)
 
 Bridge-free root cause, established with a 45-line C program and lldb (no `.ips` crash report
 is written for these aborts). Both macOS drivers — Virtuoso's `virtodbcu_r.so` (Homebrew 7.2.17,
@@ -439,14 +439,14 @@ its first error, while the same driver with 2-byte units survives — on 2.3.12 
 tarball. Reported: [lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239) (the overflow, with that repro),
 [openlink/virtuoso-opensource#1469](https://github.com/openlink/virtuoso-opensource/issues/1469) and [dremio/warpdrive#16](https://github.com/dremio/warpdrive/issues/16) (the undocumented width).
 
-Through a bridge built against iODBC (f49e27f, 0 warnings), read-only entries, `matrix_bench.py`:
+Through a bridge built against iODBC (65cff5b, 0 warnings), read-only entries, `matrix_bench.py`:
 
 | entry | result | ADBC fetch |
 |---|---|---:|
 | flightsql | PASS (`sqlflite (via ODBC) 00.00.0000`, DuckDB 1.1.1) | 8,260,509 |
 | influxdb3 | PASS (`InfluxDB IOx (via ODBC) 02.00.0000`) | 8,741,131 |
 | dremio | PASS (`Dremio Server (via ODBC) 26.00.0005`) | 1,341,476 |
-| virtuoso | PASS (`OpenLink Virtuoso (via ODBC) 07.20.3243`), ingest 3,128 (array 3,065) — after the `virtodbc` quirk stopped forcing the narrow path on a four-byte build. The experiment that settled it, bridge at 2b81439 with a local knob: narrow path, conn unchanged → `statement literal 'héllo' matched nothing`; narrow + `CHARSET=UTF-8` → `hÃ©llo ð` (the UTF-8 bytes widened one per unit); wide path, conn unchanged → **PASS**; wide + `CHARSET=UTF-8` → literal matches nothing. `bigint_param_as_string` and `no_param_arrays` stay, both still needed. A narrow string literal in a `SELECT` (`SELECT 'héllo 🚀'`) comes back as Virtuoso's 8-bit VARCHAR bytes — server semantics, not a failure; NVARCHAR columns and bound parameters are fine | 252,282 |
+| virtuoso | PASS (`OpenLink Virtuoso (via ODBC) 07.20.3243`), ingest 3,128 (array 3,065) — after the `virtodbc` quirk stopped forcing the narrow path on a four-byte build. The experiment that settled it, bridge at d8f2b54 with a local knob: narrow path, conn unchanged → `statement literal 'héllo' matched nothing`; narrow + `CHARSET=UTF-8` → `hÃ©llo ð` (the UTF-8 bytes widened one per unit); wide path, conn unchanged → **PASS**; wide + `CHARSET=UTF-8` → literal matches nothing. `bigint_param_as_string` and `no_param_arrays` stay, both still needed. A narrow string literal in a `SELECT` (`SELECT 'héllo 🚀'`) comes back as Virtuoso's 8-bit VARCHAR bytes — server semantics, not a failure; NVARCHAR columns and bound parameters are fine | 252,282 |
 
 No pyodbc / odbc-api cells (unixODBC-linked clients). The language rows followed once the
 toolchains were reinstalled — `LANGUAGE_BENCHMARKS-macos.md`: 5.6–8.3M rows/s across five

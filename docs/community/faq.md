@@ -142,7 +142,7 @@ The Windows driver manager transcodes every *narrow* (`SQLCHAR`) string between
 the driver and the process's ANSI code page (1252 on a Western install), whereas
 unixODBC and iODBC pass narrow bytes through untouched. adbcBridge was first
 written on the pass-through assumption, so early Windows builds mangled non-ASCII
-text. Since build `d364312` (2026-08-24) the Windows path goes through the wide
+text. Since build `5b932c5` (2026-08-24) the Windows path goes through the wide
 (`W`) entry points and reads every character column as `SQL_C_WCHAR`, which fixes
 it. If you build from source, `python tests\test_windows_text.py` must print
 `all passed`. Details in

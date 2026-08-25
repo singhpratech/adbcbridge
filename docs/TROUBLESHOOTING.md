@@ -174,7 +174,7 @@ packages happen to be installed.
 
 ## Windows: non-ASCII text arrives mangled, or pyarrow raises `UnicodeDecodeError`
 
-Symptoms seen on Windows 11 with builds before `d364312` (2026-08-24):
+Symptoms seen on Windows 11 with builds before `5b932c5` (2026-08-24):
 
 - a literal in statement text stored double-encoded — `INSERT ... VALUES ('héllo')` put
   `hÃ©llo` (`68c383c2a96c6c6f`) in the table, `WHERE s = 'héllo'` matched nothing, a
@@ -193,10 +193,10 @@ written on that assumption. Bound parameters and `SQL_WCHAR` columns were always
 (they are UTF-16), which is what hid both halves for as long as it did.
 
 Fix, in the driver: on `_WIN32` statement text, catalog names, column and type names and
-diagnostics go through the `W` entry points (`src/odbc_text.c`, `44c4926`), and every
+diagnostics go through the `W` entry points (`src/odbc_text.c`, `38f426d`), and every
 character column — whatever the driver calls it — is read as `SQL_C_WCHAR` and converted,
 with the `wchar_as_utf8` quirk (whose premise is the narrow-path-is-UTF-8 assumption)
-forced off there (`9c07f78`). Verified byte-exact against PostgreSQL 16 on Windows 11 for
+forced off there (`76223c9`). Verified byte-exact against PostgreSQL 16 on Windows 11 for
 `héllo` and `日本語` through both `varchar` and `text`.
 
 How to check a build: `python tests\test_windows_text.py` (needs the SQLite ODBC driver)
@@ -215,7 +215,7 @@ truncated, that is where to look.
 
 Through a bridge built against unixODBC, a driver such as MySQL Connector/ODBC for
 macOS fails every call with an *empty* diagnostic — `[H000] [ (0) (SQLDriverConnect)` —
-and pyodbc fails the same way. Through a bridge built against iODBC (before `60b05e8`)
+and pyodbc fails the same way. Through a bridge built against iODBC (before `6843467`)
 it connects, then the first statement with a non-ASCII character fails server-side:
 `[08S01] (2013) Lost connection to MySQL server during query`, the server logging
 something like `Utf8Error { valid_up_to: 63 }`.
@@ -232,7 +232,7 @@ others — OpenSearch's macOS pkg links `/usr/lib/libiodbc`.) Relinking such a d
 unixODBC is **not** a valid recipe.
 
 The second symptom was the bridge's own bug: its UTF-8 ↔ `SQLWCHAR` codecs assumed
-UTF-16 and wrote surrogate pairs into four-byte slots. Since `60b05e8` every codec
+UTF-16 and wrote surrogate pairs into four-byte slots. Since `6843467` every codec
 honours `sizeof(SQLWCHAR)` — the tests are built a second time with a four-byte
 `SQLWCHAR` (`test_utf16_wchar32`, `test_multirow_wchar32`) to keep it that way.
 
@@ -256,7 +256,7 @@ The connector itself: Oracle's download page is JavaScript-only and its `/get/` 
 `curl`; the "No thanks, just start my download" link fetches
 `mysql-connector-odbc-26.7.1-macos15-arm64.tar.gz`. Its bound wide parameters are not read the
 way its columns are written, so on a four-byte build the bridge binds text for this connector
-through the narrow UTF-8 path (`5a16131`) — at no measurable cost: 2.0M rows/s fetch on
+through the narrow UTF-8 path (`5bb3e3c`) — at no measurable cost: 2.0M rows/s fetch on
 Databend either way.
 
 Then `Driver=<connector>/lib/libmyodbc26w.so;...` in the connection string, with
