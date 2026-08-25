@@ -701,15 +701,21 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // MariaDB's maximum TIME scale is 6.
     conn->reader_opts.fractional_time_type_format = "TIME(%d)";
     conn->reader_opts.fractional_time_max_digits = 6;
+  }
+  if (strstr((const char*)name, "maodbc") || strstr((const char*)name, "myodbc")) {
     // MariaDB ColumnStore is a storage engine inside an ordinary MariaDB server, so the
     // driver name and version() are a plain MariaDB's and say nothing about it; ask the
-    // server whether the engine is there instead.  Its DDL parser accepts only its own
-    // list of type names, and two of the names maodbc's SQLGetTypeInfo answers with are
-    // not on it: SQL_LONGVARCHAR is "LONG VARCHAR" and SQL_BIT is "BIT", both refused
-    // with "The syntax or the data type(s) is not supported by Columnstore" even though
-    // the types themselves (MEDIUMTEXT, TINYINT) exist there.  The standard spellings
-    // TEXT and BOOLEAN are accepted, so spell generated ingest DDL in those -- which
-    // plain MariaDB accepts just as well, so this costs an InnoDB table nothing.
+    // server whether the engine is there instead -- through whichever MySQL-wire
+    // connector is in use.  (This probe once sat inside the maodbc block above, so a
+    // ColumnStore reached through MySQL Connector/ODBC -- the only connector obtainable
+    // on Windows -- never ran it and had its DDL refused; found on Windows.)  ColumnStore's
+    // DDL parser accepts only its own list of type names, and two of the names the
+    // connectors' SQLGetTypeInfo answer with are not on it: SQL_LONGVARCHAR is "LONG
+    // VARCHAR" and SQL_BIT is "BIT", both refused with "The syntax or the data type(s) is
+    // not supported by Columnstore" even though the types themselves (MEDIUMTEXT, TINYINT)
+    // exist there.  The standard spellings TEXT and BOOLEAN are accepted, so spell
+    // generated ingest DDL in those -- which plain MariaDB and MySQL accept just as well,
+    // so this costs an InnoDB table nothing.
     char engines[64];
     OdbcServerScalarString(conn->hdbc,
                            "SELECT COUNT(*) FROM information_schema.engines"
