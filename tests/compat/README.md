@@ -2313,6 +2313,17 @@ rows/s (pyodbc 452k/s), ingest 14.9k rows/s and 54.6k rows/s with
 `adbc.odbc.array_binding=true` (pyodbc `fast_executemany` 28.8k/s) — all of that with
 `columnstore_cache_inserts = ON`; without it ingest is ~2 rows/s.
 
+Three container facts learned on Windows/Docker Desktop (the image behaves the same
+anywhere): a bind-mounted `.cnf` under `/etc/my.cnf.d/` is **ignored as world-writable**
+(`World-writable config file '/etc/my.cnf.d/zz-adbc.cnf' is ignored`), and the entrypoint
+**regenerates `/etc/my.cnf.d` on every start**, so a `docker cp` there is wiped too — the
+file belongs in `/mnt/skysql/columnstore-container-configuration/`, which `/etc/my.cnf`
+also includes and which survives restarts. And create the `adbc` database *after* the
+utf8mb4 setting is in effect (or `ALTER DATABASE adbc CHARACTER SET utf8mb4`), or astral
+inserts fail with `Incorrect string value: '\xF0\x9F\x9A\x80'`. Through MySQL
+Connector/ODBC 8.4 (Windows) the entry needs `NO_SSPS=1`, which its `{no_ssps}` placeholder
+adds there.
+
 ## libSQL server (sqld) — no PostgreSQL wire protocol, so no ODBC route
 
 libSQL is Turso's fork of SQLite, and `sqld` (the `ghcr.io/tursodatabase/libsql-server`

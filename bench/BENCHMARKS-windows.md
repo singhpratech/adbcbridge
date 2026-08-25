@@ -1,8 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks — Windows
 
-**Status: measured, one machine — nine databases so far (five native installs, then a
-Docker Desktop tier running one container at a time) and the five-language grid.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
+**Status: measured, one machine, campaign closed — 24 of 46 databases pass (five native
+installs, then a Docker Desktop tier one container at a time), 6 fail on one connector rule,
+1 has no driver, 3 servers cannot run in the VM, 12 vendor-driver entries were not attempted
+(each with its reason in `docs/COMPATIBILITY.md`); 130 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
 CI was reporting that to nobody. The first person to build on Windows found ten defects across the repository — driver,
 tests and benchmark harnesses — and all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
 `windows.h` first; `strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT`
@@ -52,8 +54,12 @@ second elevated `wsl --install --no-distribution` staged it, then a reboot. Dock
 image. The VM is capped in `.wslconfig` at 2560 MB / 2 CPUs / no swap so an over-size
 container fails visibly instead of thrashing the host; containers run one at a time at
 `--memory=1g`, each image deleted before the next pull (10–50 s to ready for the psqlodbc
-tier). The 36 container entries are being worked through in tiers; anything that does not
-fit is recorded as `server not runnable here: RAM` with the evidence, not skipped.
+tier). The container entries were worked through in tiers; what did not fit is recorded as
+`server not runnable here: RAM` with the evidence, and the twelve vendor-driver entries
+that were not attempted carry one line each in `docs/COMPATIBILITY.md` — driver obtainable
+or not, server runnable in a 2.4 GB VM or not, and why (an IBM or Oracle login, a 2–4 GB
+image, a UAC click per MSI, or time). The machine keeps Python, the ODBC drivers and the
+repository, so a re-verification is `pip install` and `cmake` away.
 
 ### Tier 3, batch 1 — psqlodbc "PostgreSQL Unicode(x64)" 18.00.0002, x64 Release at b5d2791
 
@@ -147,7 +153,7 @@ prune -af` between entries.
 | starrocks | **FAIL** at the astral check only — fifth member of the class; StarRocks 4.x at 1536m (976 MB used) | 402,109 | 213,907 | 2,603 (3,957) | — |
 
 | oceanbase | **server not runnable here: RAM** — `MODE=SLIM` at 1536m stalled 17 min at 1.442/1.5 GiB after `observer program health check ok`, never `boot success` (OOMKilled=false) | | | | |
-| azuresqledge | PASS (`SQL Server 16.00.5100`), msodbcsql 18, the Linux image in Docker Desktop — rows in the language file | | | | |
+| azuresqledge | PASS (`Microsoft SQL Server (via ODBC) 16.00.5100`), Azure SQL Edge Developer image at 1536m (514 MB used), msodbcsql 18 | 237,448 | 136,506 | 12,127 (21,976) | 20,548 |
 | columnstore | **FAIL before 7cb06ec** — parameters pass with `NO_SSPS=1`, then the generated DDL is refused: the ColumnStore engine probe sat inside the MariaDB-connector block and never ran through MySQL's connector. A bridge bug found by this column, fixed at `7cb06ec` (verified on Linux through maodbc), not re-measured on Windows | | | | |
 
 **A class, not five incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone, mongodbbi, starrocks. Everything else in

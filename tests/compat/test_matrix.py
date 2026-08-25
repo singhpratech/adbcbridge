@@ -235,7 +235,7 @@ DBS = {
         # BOOLEAN is TINYINT(1) -> int8, and the double-quoted identifiers adbc_ingest
         # emits need ANSI_QUOTES.
         env="COLUMNSTORE_ODBC_DRIVER",
-        conn="Driver={drv};Server=127.0.0.1;Port=13313;Database=adbc;User=adbc;Password=Adbc!Bridge2026;",
+        conn="Driver={drv};Server=127.0.0.1;Port=13313;Database=adbc;User=adbc;Password=Adbc!Bridge2026;{no_ssps}",
         # ENGINE=Columnstore on adbc_t, and default_storage_engine in `setup` for every
         # table the driver's generated ingest DDL creates: the server's default engine is
         # still InnoDB, so without both the workload would run against a plain MariaDB and
