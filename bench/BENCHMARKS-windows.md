@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks — Windows
 
-**Status: measured, one machine, campaign closed — 25 of 46 databases pass (five native
-installs, then a Docker Desktop tier one container at a time), 5 fail on one connector rule,
-1 has no driver, 3 servers cannot run in the VM, 12 vendor-driver entries were not attempted
-(each with its reason in `docs/COMPATIBILITY.md`); 132 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
+**Status: measured, one machine, campaign closed — 26 of 46 databases pass (five native
+installs, then a Docker Desktop tier one container at a time), 10 fail — five on one connector rule,
+two on a second driver's astral truncation, one on an ANSI driver build, and two that were the
+bridge's own (found here, fixed on main, not re-measured) — 1 has no driver, 3 servers cannot run
+in the VM, 6 vendor-driver entries were not attempted
+(each with its reason in `docs/COMPATIBILITY.md`); 142 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
 CI was reporting that to nobody. The first person to build on Windows found ten defects across the repository — driver,
 tests and benchmark harnesses — and all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
 `windows.h` first; `strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT`
@@ -155,6 +157,15 @@ prune -af` between entries.
 | oceanbase | **server not runnable here: RAM** — `MODE=SLIM` at 1536m stalled 17 min at 1.442/1.5 GiB after `observer program health check ok`, never `boot success` (OOMKilled=false) | | | | |
 | azuresqledge | PASS (`Microsoft SQL Server (via ODBC) 16.00.5100`), Azure SQL Edge Developer image at 1536m (514 MB used), msodbcsql 18 | 237,448 | 136,506 | 12,127 (21,976) | 20,548 |
 | columnstore | PASS (`MySQL (via ODBC) 11.1.1-MariaDB-log`) at `1bb2d88`, Connector/ODBC 8.4.0 + `NO_SSPS=1`, fresh container at 1536m, utf8mb4 from the start — **FAIL before `7cb06ec`**: generated DDL refused because the ColumnStore probe never ran through MySQL's connector; a bridge bug this column found, fixed, and re-measured green here. Not in the astral class: MariaDB exposes the charset variables | 294,795 | 190,464 | 13,206 (13,432) | 1,466 |
+
+| monetdb | PASS (`MonetDB (via ODBC) 11.55.0007`), MonetDB ODBC Installer 20260615, container at 1 GB (19 MB used) | 268,684 | 167,720 | 55,696 (55,757) | 236 |
+| virtuoso | **FAIL before e42ec91, bridge-side**: `virtodbc.dll` fails `SQLSetPos(SQL_POSITION)` although it advertises the SQL_GD_* extensions, so the reader's block-cursor repair died; single-row reads, ingest and pyodbc fine. Fixed (repair skipped for this driver on Windows), not re-measured | — | 75,746 | 1,194 | — |
+| ignite | **FAIL before e42ec91, bridge-side**: no wide SQL type in the driver, and Windows had the narrow route switched off, so `SQLBindParameter(SQL_WVARCHAR)` → `HYC00`; fetch fine. Fixed (`narrow_params`), not re-measured | 274,871 | — | — | — |
+| tdengine | **FAIL, driver**: taos-odbc's Windows build is ANSI and its iconv has no `CP1252 → UTF-8` table, so statement text handed over in the system code page cannot be converted | | | | |
+| flightsql | **FAIL, driver, astral only**: the Flight SQL ODBC Windows build returns U+1F680 as U+F680 (low 16 bits kept), pyodbc identical; everything else passes, fastest fetch of the campaign | 2,013,077 | — | — | — |
+| influxdb3 | **FAIL, driver**: the same low-16-bit truncation; everything else passes | 1,592,073 | — | — | — |
+
+**A second astral class on Windows**, driver-side like the first: the Arrow Flight SQL ODBC driver's Windows build keeps the low 16 bits of a non-BMP code point when it builds UTF-16 — 🚀 (U+1F680) comes back as U+F680 — on a literal and on stored data, through pyodbc and the bridge identically (sqlflite, InfluxDB 3).
 
 **A class, not five incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone, mongodbbi, starrocks. Everything else in
 their workloads passes, and their read rates are among the best on this machine.
