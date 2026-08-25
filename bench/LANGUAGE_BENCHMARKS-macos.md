@@ -9,7 +9,7 @@ Desktop; the ones marked emulated are amd64 images under Rosetta-class emulation
 was never idle (1-minute load 2.4–10.5, recorded per entry in `BENCHMARKS-macos.md`), so read
 rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's, whose
 `alexbrainman/odbc` binding faults on every server here except SQLite, Access and Informix
-(the same failure the Linux file records). The campaign is complete: 164 cells, every empty one explained below.
+(the same failure the Linux file records). The campaign is complete: 183 cells, every empty one explained below.
 
 | Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
 |---|---|---:|---:|---:|---:|
@@ -185,6 +185,26 @@ rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's
 | go | starrocks | 999 | 371,267 | — | — |
 | java | starrocks | 994 | 418,027 | — | — |
 | csharp | starrocks | 996 | 445,097 | — | — |
+| python | flightsql | — | 8,260,509 | — | — |
+| rust | flightsql | — | 8,029,603 | — | 8,630,517 |
+| go | flightsql | — | 8,069,343 | — | — |
+| java | flightsql | — | 5,637,191 | — | — |
+| csharp | flightsql | — | 8,291,874 | — | — |
+| python | influxdb3 | — | 8,741,131 | — | — |
+| rust | influxdb3 | — | 7,565,179 | — | 9,647,892 |
+| go | influxdb3 | — | 8,063,053 | — | — |
+| java | influxdb3 | — | 6,168,936 | — | — |
+| csharp | influxdb3 | — | 7,560,865 | — | — |
+| python | dremio | — | 1,341,476 | — | — |
+| rust | dremio | — | 1,341,555 | — | 2,219,183 |
+| go | dremio | — | 1,507,204 | — | — |
+| java | dremio | — | 1,456,169 | — | — |
+| csharp | dremio | — | 1,634,243 | — | — |
+| python | virtuoso | 3,065 | 252,282 | — | — |
+| rust | virtuoso | abort | abort | abort | abort |
+| go | virtuoso | 2,985 | 244,246 | — | — |
+| java | virtuoso | 2,935 | 239,594 | — | — |
+| csharp | virtuoso | 2,874 | 257,790 | — | — |
 
 ## Why a cell is empty, and what was different on macOS
 
@@ -203,5 +223,6 @@ rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's
 | **oracle** | `NLS_LANG=.AL32UTF8` has to be in the environment before `libsqora` loads; the compat harness's in-process setting is too late on macOS. |
 | **mssql**, **postgres** | Python only so far; the four harnesses come with a later batch. |
 | **access**, **tdengine**, **mongodbbi** | read-only entries: fetch of the fixture only. |
+| **flightsql**, **influxdb3**, **dremio**, **virtuoso** (batch 5) | Through a bridge built against iODBC — these drivers' macOS builds are iODBC-width, and under unixODBC the driver manager aborts the process on the first SQL error ([lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239)). The three Flight SQL entries are read-only, so ingest is empty by construction; their Rust odbc-api / arrow-odbc cells survived because a read-only workload never raises a diagnostic. Virtuoso's Rust row is `abort`: `bench_rs` runs its odbc-api comparison through unixODBC, the entry writes (a `DROP`/`CREATE` error on the way), and the driver-manager overflow takes the whole process — its ADBC cells go with it. 8 M rows/s on sqlflite and InfluxDB 3 is the fastest read anywhere in these files: Arrow batches straight off a Flight stream. |
 | **tidb**, **percona**, **dolt**, **matrixone**, **columnstore**, **oceanbase**, **mongodbbi** (tier 4) | Every MySQL-wire entry in tier 4 went through MariaDB Connector/ODBC 3.2.9 (arm64; MySQL's own connector for macOS arm64 exists — 26.7.1 — but is built for iODBC, see batch 4), and **every one of them fetches at 39–47k rows/s in all five languages and in pyodbc alike** — against 1.0–2.0M rows/s for the same servers on Linux through MySQL Connector/ODBC. Six servers, six clients, one number: the ceiling is the connector's fetch path on this platform, not the servers and not the bridge (ingest through the same connector runs 86–208k rows/s). |
 | **databend**, **greptimedb**, **doris**, **starrocks** | Two connectors, two results, both kept. Through MariaDB Connector/ODBC 3.2.9 all four FAIL inside the connector (the connect-time `DUAL` probe for the first two, the prepared/binary-literal path for the last two). Through MySQL's own Connector/ODBC 26.7.1 — Oracle's macOS arm64 binary, which is built for iODBC and so needs a bridge built against iODBC (`bench/BENCHMARKS-macos.md`, batch 4) — all four PASS in all five languages, the rows above. No pyodbc / odbc-api / arrow-odbc columns for them: those clients link unixODBC and cannot load an iODBC driver. And the MySQL-wire fetch ceiling below is the connector's: the same servers read at 1.3–4.5M rows/s through MySQL's connector. |

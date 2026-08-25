@@ -448,7 +448,8 @@ Through a bridge built against iODBC (f49e27f, 0 warnings), read-only entries, `
 | dremio | PASS (`Dremio Server (via ODBC) 26.00.0005`) | 1,341,476 |
 | virtuoso | PASS (`OpenLink Virtuoso (via ODBC) 07.20.3243`), ingest 3,128 (array 3,065) — after the `virtodbc` quirk stopped forcing the narrow path on a four-byte build. The experiment that settled it, bridge at 2b81439 with a local knob: narrow path, conn unchanged → `statement literal 'héllo' matched nothing`; narrow + `CHARSET=UTF-8` → `hÃ©llo ð` (the UTF-8 bytes widened one per unit); wide path, conn unchanged → **PASS**; wide + `CHARSET=UTF-8` → literal matches nothing. `bigint_param_as_string` and `no_param_arrays` stay, both still needed. A narrow string literal in a `SELECT` (`SELECT 'héllo 🚀'`) comes back as Virtuoso's 8-bit VARCHAR bytes — server semantics, not a failure; NVARCHAR columns and bound parameters are fine | 252,282 |
 
-No pyodbc / odbc-api cells (unixODBC-linked clients); no language-harness rows (the toolchains
-had been torn down). Side finding on the Flight SQL driver: `LogEnabled=true` with a real
+No pyodbc / odbc-api cells (unixODBC-linked clients). The language rows followed once the
+toolchains were reinstalled — `LANGUAGE_BENCHMARKS-macos.md`: 5.6–8.3M rows/s across five
+languages on sqlflite and InfluxDB 3, 1.3–1.6M on Dremio, Virtuoso 240–258k with ingest ~3k. Side finding on the Flight SQL driver: `LogEnabled=true` with a real
 `LogPath` makes `SQLAllocHandle(ENV)` fail with `IM004` — `spdlog::rotating_file_sink` throws
 inside the driver's logger init.
