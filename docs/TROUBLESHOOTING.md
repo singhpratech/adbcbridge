@@ -263,3 +263,28 @@ Then `Driver=<connector>/lib/libmyodbc26w.so;...` in the connection string, with
 `ADBC_ODBC_DRIVER` pointing at `build-iodbc/libadbc_driver_odbc.dylib`. One bridge build
 per driver manager: a unixODBC-built bridge for unixODBC drivers (psqlodbc, sqliteodbc,
 the MariaDB connector, ...), an iODBC-built one for iODBC drivers.
+
+## macOS: the process dies with SIGABRT on the first SQL error, no message
+
+### What you see
+
+Connect works, `SELECT` works, and the first statement that fails on the server — a `DROP` of a
+missing table, a typo — kills the process: SIGABRT, nothing on stderr, no crash report. unixODBC's
+own `isql` dies the same way. Seen with Virtuoso (Homebrew 7.2.17) and the Arrow Flight SQL ODBC
+driver 0.9.7 for Apple Silicon (which also fronts InfluxDB 3 and Dremio).
+
+### What is actually happening
+
+Those drivers are built to iODBC's `SQLWCHAR` (`wchar_t`, four bytes). unixODBC's driver manager
+(`SQLWCHAR` two bytes) reads their wide diagnostic on the first `SQL_ERROR` into a fixed 12-byte
+stack array — `SQLWCHAR sqlstate[6]` in `DriverManager/__info.c`, `extract_diag_error_w` — the
+driver writes 24, and the stack protector aborts. It is the driver manager, not the driver and
+not the bridge; the same call through iODBC returns the proper `42S02`. Reported upstream with a
+driver-independent reproduction (a fake driver compiled with `SQL_WCHART_CONVERT` does it on Linux
+too).
+
+### What works
+
+Build the bridge against iODBC and use those drivers through it (the recipe two sections up):
+Flight SQL, InfluxDB 3 and Dremio then pass the compat workload. Or keep unixODBC and never let a
+statement fail — which is not a workaround anyone should ship.

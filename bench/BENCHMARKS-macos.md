@@ -331,9 +331,10 @@ compat sqlite      PASS  (SQLite (via ODBC) 3.51.0)
 compat postgres    PASS  (PostgreSQL (via ODBC) 15.15.0)
 ```
 
-Final macOS tally: **37 pass · 4 fail · 4 no driver for this OS · 1 server not runnable here**
-(46). The four failures are drivers that abort the process on the first failing statement
-(Virtuoso, and the one Flight SQL ODBC binary behind Flight SQL, InfluxDB 3 and Dremio).
+Final macOS tally: **40 pass · 1 fail · 4 no driver for this OS · 1 server not runnable here**
+(46). The four "driver aborts" turned out to be unixODBC's driver manager, not the drivers (batch 5
+below): Flight SQL, InfluxDB 3 and Dremio pass through an iODBC-built bridge, and Virtuoso fails
+there only its Unicode-literal step.
 Databend, GreptimeDB, Doris and StarRocks fail through MariaDB Connector/ODBC and pass through
 MySQL's own connector via an iODBC-built bridge (batch 4 below); both results are kept.
 
@@ -407,3 +408,46 @@ rows/s through this connector — the same Mac read every MySQL-wire server at 3
 MariaDB Connector/ODBC, which settles where that ceiling lives. And the narrow UTF-8 binding
 costs nothing measurable: the pre-fix build that bound narrow by a local patch read 2,234,246
 and 1,295,615 rows/s on the same two servers.
+
+## Batch 5: the four "driver aborts" were unixODBC (main @ f49e27f)
+
+Bridge-free root cause, established with a 45-line C program and lldb (no `.ips` crash report
+is written for these aborts). Both macOS drivers — Virtuoso's `virtodbcu_r.so` (Homebrew 7.2.17,
+whose formula has no unixODBC dependency) and the Arrow Flight SQL ODBC 0.9.7 armv8 build — are
+built to iODBC's convention: `SQLWCHAR` is `wchar_t`, four bytes. Called directly through `dlopen`
+with a 0xAA-filled buffer after a failing statement, both write their `SQLGetDiagRecW` text as
+UCS-4 (`5b 00 00 00 4f 00 00 00 …` — "[Ope"; `5b 00 00 00 41 00 00 00 …` — "[Apa") and fill
+`BufferLength × 4` bytes. unixODBC 2.3.12's driver manager, whose `SQLWCHAR` is two bytes, reads
+that diagnostic on the first `SQL_ERROR` into a 12-byte stack array (`SQLWCHAR sqlstate[6]` in
+`DriverManager/__info.c`, `extract_diag_error_w`), and the stack protector aborts the process:
+
+```
+frame #0: libsystem_c.dylib`__stack_chk_fail
+frame #1: libodbc.2.dylib`extract_diag_error_w(...) at __info.c
+frame #2: libodbc.2.dylib`function_return_ex(level=3, ..., ret_code=-1, ...) at __info.c:5215
+frame #3: libodbc.2.dylib`SQLExecDirect(...) at SQLExecDirect.c:527
+```
+
+It fires on the first call that returns `SQL_ERROR` — `SQLExecDirect`, `SQLPrepare`,
+`SQLExecDirectW` alike, with or without a successful statement before it; successful statements
+are unaffected. The same program linked against iODBC 3.52.16 gets the proper diagnostics from
+both drivers (`[42S02] … SQ074: Line 1: No table no_such_table_xyz`; `[HY000] (100) [Apache
+Arrow][Flight SQL] … Catalog Error: Table with name no_such_table_xyz does not exist!`) and
+survives. The Linux reference host reproduces the class without either driver: a fake ODBC
+driver compiled with a 4-byte `SQLWCHAR` (`SQL_WCHART_CONVERT`) makes unixODBC 2.3.12 abort on
+its first error, while the same driver with 2-byte units survives (reported upstream, with that
+repro).
+
+Through a bridge built against iODBC (f49e27f, 0 warnings), read-only entries, `matrix_bench.py`:
+
+| entry | result | ADBC fetch |
+|---|---|---:|
+| flightsql | PASS (`sqlflite (via ODBC) 00.00.0000`, DuckDB 1.1.1) | 8,260,509 |
+| influxdb3 | PASS (`InfluxDB IOx (via ODBC) 02.00.0000`) | 8,741,131 |
+| dremio | PASS (`Dremio Server (via ODBC) 26.00.0005`) | 1,341,476 |
+| virtuoso | FAIL at the Unicode-literal step only: `héllo` in statement text matches nothing by default; with `CHARSET=UTF-8` it matches but reads back double-encoded (`hÃ©llo`); `wideAsUTF16=Y` changes nothing — a charset quirk of the driver's wide path, not yet keyed. Connect, DDL, DML, GetObjects and error mapping pass | — |
+
+No pyodbc / odbc-api cells (unixODBC-linked clients); no language-harness rows (the toolchains
+had been torn down). Side finding on the Flight SQL driver: `LogEnabled=true` with a real
+`LogPath` makes `SQLAllocHandle(ENV)` fail with `IM004` — `spdlog::rotating_file_sink` throws
+inside the driver's logger init.
