@@ -138,7 +138,9 @@ prune -af` between entries.
 | spanner | PASS (`PostgreSQL (via ODBC) 14.1.0`), emulator + PGAdapter, two 1 GB containers, compat passed twice on fresh emulators — **bench not runnable**: `matrix_bench.py` hung twice after compat (emulator: `cross-database references are not implemented`), and killing it left the emulator refusing every connection (`FATAL: UNAVAILABLE`); recorded, not retried | — | — | — | — |
 | cloudberry | PASS (`PostgreSQL (via ODBC) 14.4.0`), Cloudberry 2.1.0-incubating at `--memory=1536m --shm-size=1g`, 369 MB used, ready in ~40 s | 224,017 | 150,536 | 3,591 (4,171) | 276 |
 
-**A class, not three incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone. Everything else in
+| mongodbbi | **FAIL** at the astral check only — fourth member of the class; mongosqld v2.14.22 over mongo:7, read-only, 125 MB | 97,643 | — | — | — |
+
+**A class, not four incidents:** MySQL Connector/ODBC 8.4.0 (the only version published for Windows) reads result sets from a MySQL-wire server that lacks the character-set session variables as 3-byte `utf8`, so astral-plane characters come back as `???` on read while storage is byte-exact; the same driver reads 🚀 from MySQL, Percona, MariaDB, TiDB and Dolt, which expose the variables, and Linux passes on 9.4. Affected: databend, greptimedb, matrixone, mongodbbi. Everything else in
 their workloads passes, and their read rates are among the best on this machine.
 
 openGauss operator note: the `adbc` role must be created *inside* the container as `omm` via
