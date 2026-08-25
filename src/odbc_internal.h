@@ -372,6 +372,14 @@ struct OdbcReaderOptions {
   bool sqllen_32bit;
   // True once a user option pinned sqllen_32bit; suppresses autodetection.
   bool sqllen_32bit_forced;
+  // Driver quirk, read side only: the driver advances the *bound-column indicator*
+  // array by four bytes per row on a block cursor while striding data buffers correctly
+  // (OpenLink Virtuoso's virtodbc.dll 7.2 on Win64).  Row k+1 overwrites only the high
+  // half of row k's 8-byte SQLLEN, so the low four bytes of every row survive at offset
+  // 4k -- exactly what OdbcReadLen(sqllen_32bit=true) reads.  Unlike sqllen_32bit this is
+  // read-only: parameter indicators (OdbcIndicatorSet) stay 8-byte, which this driver
+  // reads correctly.
+  bool ind_stride_32bit;
   // Driver quirk: the driver's SQLWCHAR width differs from the driver manager's this
   // library was compiled against -- e.g. a driver built with wchar_t (4-byte) SQLWCHAR
   // loaded through unixODBC (Firebird OdbcFb). (A bridge compiled against iODBC uses

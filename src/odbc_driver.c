@@ -804,6 +804,12 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // reads fine, the first block-cursor repair dies).  Without the repair a long column
     // stays unbound and the rowset collapses to one row, which needs no positioning.
     conn->reader_opts.getdata_repair = false;
+    // And it writes the bound-column indicator array at a four-byte stride on a block
+    // cursor (measured on Win64: the second row's 8-byte SQLLEN overwrites the first's
+    // high half), which a mangled indicator once read as a truncation and drove into the
+    // failed SQLSetPos repair.  Reading indicators at the 32-bit stride recovers every
+    // row and NULL and keeps the block cursor.  Read-only: parameter indicators are fine.
+    conn->reader_opts.ind_stride_32bit = true;
 #endif
   }
   if (strstr((const char*)name, "monetdb")) {

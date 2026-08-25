@@ -1540,7 +1540,7 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
   bool is_null;
 
   if (c->bound) {
-    SQLLEN ind = OdbcIndicatorGet(c->indicators, (size_t)row, r->opts.sqllen_32bit);
+    SQLLEN ind = OdbcIndicatorGet(c->indicators, (size_t)row, r->opts.sqllen_32bit || r->opts.ind_stride_32bit);
     is_null = (ind == SQL_NULL_DATA);
     data = (const uint8_t*)c->buffer + (size_t)row * (size_t)c->elem_size;
     if (BoundValueTruncated(c, ind)) {
@@ -1782,7 +1782,7 @@ static AdbcStatusCode BulkAppendColumn(struct OdbcReader* r, SQLSMALLINT i, SQLU
   // The bulk loops index the indicator array as SQLLEN; a 32-bit-SQLLEN driver
   // (Db2 clidriver, MDB Tools) writes it at stride 4, so those columns take the
   // per-value path, which reads indicators through OdbcIndicatorGet().
-  if (r->opts.sqllen_32bit) return ADBC_STATUS_NOT_IMPLEMENTED;
+  if (r->opts.sqllen_32bit || r->opts.ind_stride_32bit) return ADBC_STATUS_NOT_IMPLEMENTED;
   const SQLLEN* ind = c->indicators;
   const uint8_t* base = (const uint8_t*)c->buffer;
   const size_t stride = (size_t)c->elem_size;
@@ -1935,7 +1935,7 @@ static bool RowsetTruncated(const struct OdbcReader* r, const struct OdbcRowsetS
       continue;
     }
     for (SQLULEN row = 0; row < fetched; row++) {
-      SQLLEN ind = OdbcIndicatorGet(slot->indicators[i], (size_t)row, r->opts.sqllen_32bit);
+      SQLLEN ind = OdbcIndicatorGet(slot->indicators[i], (size_t)row, r->opts.sqllen_32bit || r->opts.ind_stride_32bit);
       if (BoundValueTruncated(c, ind)) return true;
     }
   }
@@ -2351,7 +2351,7 @@ static AdbcStatusCode AdaptBindWidth(struct OdbcReader* r, SQLULEN fetched,
       continue;
     }
     for (SQLULEN row = 0; row < fetched; row++) {
-      SQLLEN ind = OdbcIndicatorGet(slot->indicators[i], (size_t)row, r->opts.sqllen_32bit);
+      SQLLEN ind = OdbcIndicatorGet(slot->indicators[i], (size_t)row, r->opts.sqllen_32bit || r->opts.ind_stride_32bit);
       if (!BoundValueTruncated(c, ind)) continue;
       // A driver that answers SQL_NO_TOTAL (or a negative length) is saying only that
       // the value did not fit; charge it the buffer, which is what it did write.
