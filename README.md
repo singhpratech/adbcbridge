@@ -614,6 +614,17 @@ unavailable on Windows for the same reason: it picks the ODBC driver to fall
 back to by enumerating `odbcinst.ini`, which is not implemented there either, so
 a native URI on the ODBC path is refused with an explanation instead.
 
+## Upstream: giving back
+
+Running 46 databases through one driver on three operating systems finds defects that belong
+to other projects. They are reported upstream with a reproduction that needs no adbcBridge
+in the stack — the first three are [lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239)
+(the driver manager aborts on the first SQL error from a 4-byte-`SQLWCHAR` driver; found on
+macOS, reproduced on Linux with a fake driver), [openlink/virtuoso-opensource#1469](https://github.com/openlink/virtuoso-opensource/issues/1469)
+and [dremio/warpdrive#16](https://github.com/dremio/warpdrive/issues/16) (undocumented driver
+widths). The full record, including a dozen findings documented but not yet filed, is
+[`docs/UPSTREAM.md`](docs/UPSTREAM.md).
+
 ## Language packages
 
 One driver library, five packages that find and load it. All five are built and tested
