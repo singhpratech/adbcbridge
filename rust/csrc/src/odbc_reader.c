@@ -1020,16 +1020,23 @@ static bool ParseTimestampUtcMicros(const char* s, size_t len, int64_t* out) {
   return true;
 }
 
-// Transcode a UTF-16 buffer (n units) into `o`, returning the number of bytes
-// written.  Surrogate pairs become 4-byte sequences (non-BMP characters such as
-// emoji); an unpaired surrogate becomes U+FFFD so the output is always valid
-// UTF-8.  `o` must have room for `Utf16Utf8MaxBytes(n)` bytes.
+// Transcode a buffer of n SQLWCHAR units into `o`, returning the number of bytes
+// written.  With a two-byte SQLWCHAR (unixODBC, Windows) the units are UTF-16:
+// surrogate pairs become 4-byte sequences (non-BMP characters such as emoji) and an
+// unpaired surrogate becomes U+FFFD.  With a four-byte SQLWCHAR (iODBC's wchar_t) each
+// unit is one code point, and a unit outside Unicode or in the surrogate range becomes
+// U+FFFD.  Either way the output is valid UTF-8.  `o` must have room for
+// `Utf16Utf8MaxBytes(n)` bytes.
 static size_t Utf16ToUtf8(const SQLWCHAR* w, size_t n, uint8_t* o) {
   size_t k = 0;
   for (size_t i = 0; i < n; i++) {
-    uint32_t cp = (uint16_t)w[i];
-    if (cp >= 0xD800 && cp <= 0xDBFF) {
-      uint32_t lo = (i + 1 < n) ? (uint16_t)w[i + 1] : 0;
+    uint32_t cp = sizeof(SQLWCHAR) < 4 ? (uint32_t)(uint16_t)w[i] : (uint32_t)w[i];
+    // A surrogate is never a valid code point on its own, so a pair is combined whatever
+    // the unit width: some drivers built for iODBC put UTF-16 units into wchar_t slots.
+    if (sizeof(SQLWCHAR) >= 4 && cp > 0x10FFFF) {
+      cp = 0xFFFD;
+    } else if (cp >= 0xD800 && cp <= 0xDBFF) {
+      uint32_t lo = (i + 1 < n) ? (sizeof(SQLWCHAR) < 4 ? (uint32_t)(uint16_t)w[i + 1] : (uint32_t)w[i + 1]) : 0;
       if (lo >= 0xDC00 && lo <= 0xDFFF) {
         cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
         i++;
@@ -1058,15 +1065,18 @@ static size_t Utf16ToUtf8(const SQLWCHAR* w, size_t n, uint8_t* o) {
   return k;
 }
 
-// Worst case UTF-8 expansion of n UTF-16 code units: a BMP unit (2 bytes) can
-// reach 3 bytes, a surrogate pair (4 bytes) stays 4, so never more than 3n.
-static inline int64_t Utf16Utf8MaxBytes(int64_t units) { return units * 3; }
+// Worst case UTF-8 expansion of n SQLWCHAR units: with UTF-16 a BMP unit (2 bytes) can
+// reach 3 bytes and a surrogate pair (4 bytes) stays 4, so never more than 3n; with
+// four-byte units one unit can be a 4-byte sequence.
+static inline int64_t Utf16Utf8MaxBytes(int64_t units) {
+  return units * (sizeof(SQLWCHAR) < 4 ? 3 : 4);
+}
 
 // Append a UTF-16 buffer (n units) to a utf8 string array, via `scratch`.
 static ArrowErrorCode AppendUtf16(struct ArrowArray* arr, const SQLWCHAR* w, size_t n,
                                   struct ArrowBuffer* scratch) {
   scratch->size_bytes = 0;
-  NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(scratch, (int64_t)n * 3 + 1));
+  NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(scratch, Utf16Utf8MaxBytes((int64_t)n) + 1));
   size_t k = Utf16ToUtf8(w, n, scratch->data);
   struct ArrowStringView sv = {(const char*)scratch->data, (int64_t)k};
   return ArrowArrayAppendString(arr, sv);

@@ -259,7 +259,7 @@ jobs:
           TAG="${{ needs.prepare.outputs.tag }}"
           if [ "${{ needs.prepare.outputs.dryrun }}" = "true" ]; then
             gh release view "$TAG" --json assets -q '.assets[].name'
-            gh release delete "$TAG" --yes --cleanup-tag || gh release delete "$TAG" --yes
+            gh release delete "$TAG" --yes   # a draft has no tag to clean up
             echo "dry run: draft release deleted"
           elif [ "${{ needs.linux.result }}" = "success" ] && [ "${{ needs.macos.result }}" = "success" ] && [ "${{ needs.windows.result }}" = "success" ] && [ "${{ needs.sdist.result }}" = "success" ] && [ "${{ needs.crate.result }}" = "success" ] && [ "${{ needs.nuget.result }}" = "success" ] && [ "${{ needs.maven.result }}" = "success" ]; then
             gh release edit "$TAG" --draft=false

@@ -70,9 +70,14 @@ static void CivilFromDays(int64_t z, int* y, unsigned* m, unsigned* d) {
   *y = (int)(yy + (*m <= 2));
 }
 
-// UTF-8 -> UTF-16 into `o`, which must hold at least Utf16Units(s, n) + 1 units.
-// NUL-terminates and returns the number of units written.
-int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
+// UTF-8 -> SQLWCHAR units into `o`, which must hold at least Utf16Units(s, n) + 1
+// units.  NUL-terminates and returns the number of units written.  A driver manager
+// whose SQLWCHAR is two bytes (unixODBC, Windows) takes UTF-16, surrogate pairs and
+// all; one whose SQLWCHAR is wchar_t (iODBC: four bytes) takes one code point per
+// unit, i.e. UTF-32 -- writing UTF-16 into four-byte slots is how a statement reaches
+// the server as garbage after the first non-ASCII character.
+int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n, bool utf16_pairs) {
+  const bool pairs = sizeof(SQLWCHAR) < 4 || utf16_pairs;
   int64_t k = 0;
   for (int64_t i = 0; i < n;) {
     unsigned char c = (unsigned char)s[i];
@@ -84,7 +89,7 @@ int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
     else if ((c & 0xF8) == 0xF0 && i + 3 < n) { cp = ((c & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) | ((s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F); len = 4; }
     else { cp = 0xFFFD; len = 1; }
     i += len;
-    if (cp >= 0x10000) {
+    if (cp >= 0x10000 && pairs) {
       cp -= 0x10000;
       o[k++] = (SQLWCHAR)(0xD800 + (cp >> 10));
       o[k++] = (SQLWCHAR)(0xDC00 + (cp & 0x3FF));
@@ -96,8 +101,9 @@ int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n) {
   return k;
 }
 
-// How many UTF-16 units OdbcUtf8ToUtf16Into would write for this UTF-8 string.
-static int64_t Utf16Units(const char* s, int64_t n) {
+// How many SQLWCHAR units OdbcUtf8ToUtf16Into would write for this UTF-8 string.
+static int64_t Utf16Units(const char* s, int64_t n, bool utf16_pairs) {
+  const bool pairs = sizeof(SQLWCHAR) < 4 || utf16_pairs;
   int64_t k = 0;
   for (int64_t i = 0; i < n;) {
     unsigned char c = (unsigned char)s[i];
@@ -109,16 +115,17 @@ static int64_t Utf16Units(const char* s, int64_t n) {
     else if ((c & 0xF8) == 0xF0 && i + 3 < n) { len = 4; pair = true; }
     else { len = 1; }
     i += len;
-    k += pair ? 2 : 1;
+    k += (pair && pairs) ? 2 : 1;
   }
   return k;
 }
 
 // UTF-8 -> UTF-16 (SQLWCHAR units) into buf; returns number of units.
-static ArrowErrorCode Utf8ToUtf16(struct ArrowBuffer* buf, const char* s, int64_t n, int64_t* units) {
+static ArrowErrorCode Utf8ToUtf16(struct ArrowBuffer* buf, const char* s, int64_t n, int64_t* units,
+                                  bool utf16_pairs) {
   buf->size_bytes = 0;
   NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(buf, (n + 1) * (int64_t)sizeof(SQLWCHAR)));
-  int64_t k = OdbcUtf8ToUtf16Into((SQLWCHAR*)buf->data, s, n);
+  int64_t k = OdbcUtf8ToUtf16Into((SQLWCHAR*)buf->data, s, n, utf16_pairs);
   buf->size_bytes = k * (int64_t)sizeof(SQLWCHAR);
   *units = k;
   return NANOARROW_OK;
@@ -344,7 +351,7 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
       }
       if (p->indicator != SQL_NULL_DATA) {
         struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(av, row);
-        CHECK_NA(INTERNAL, Utf8ToUtf16(&p->wbuf, s.data, s.size_bytes, &units), error);
+        CHECK_NA(INTERNAL, Utf8ToUtf16(&p->wbuf, s.data, s.size_bytes, &units, opts->wide_utf16_pairs), error);
       }
       p->c_type = SQL_C_WCHAR;
       p->sql_type = units > 4000 ? SQL_WLONGVARCHAR : SQL_WVARCHAR;
@@ -552,13 +559,16 @@ struct ArrayParam {
   // and ArrayParamFill resolves each index before staging the value.
   bool dictionary;
   struct ArrowSchemaView dict_sv;
+  // Encode non-BMP characters as surrogate pairs in four-byte units (see
+  // OdbcReaderOptions::wide_utf16_pairs); irrelevant with a two-byte SQLWCHAR.
+  bool utf16_pairs;
 };
 
 // Longest value in a variable-length column, measured in the unit it will be
 // bound in -- bytes for binary and for narrow strings, UTF-16 units for wide
 // ones -- or -1 if it exceeds the staging cap.
 static int64_t ArrayParamVarLenMax(const struct ArrowArrayView* av, bool binary, bool wide,
-                                   int64_t nrows) {
+                                   bool utf16_pairs, int64_t nrows) {
   int64_t max = 0;
   for (int64_t i = 0; i < nrows; i++) {
     if (ArrowArrayViewIsNull(av, i)) continue;
@@ -568,7 +578,7 @@ static int64_t ArrayParamVarLenMax(const struct ArrowArrayView* av, bool binary,
     } else {
       struct ArrowStringView v = ArrowArrayViewGetStringUnsafe(av, i);
       if (v.size_bytes > ARRAY_BIND_MAX_VARLEN) return -1;
-      len = wide ? Utf16Units(v.data, v.size_bytes) : v.size_bytes;
+      len = wide ? Utf16Units(v.data, v.size_bytes, utf16_pairs) : v.size_bytes;
     }
     if (len > max) {
       max = len;
@@ -766,7 +776,8 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
         return;
       }
       const bool wide = !binary && !opts->wchar_as_utf8;
-      int64_t max = ArrayParamVarLenMax(av, binary, wide, nrows);
+      p->utf16_pairs = opts->wide_utf16_pairs;
+      int64_t max = ArrayParamVarLenMax(av, binary, wide, opts->wide_utf16_pairs, nrows);
       if (max < 0) {  // too wide to stage: this batch goes row-at-a-time
         *supported = false;
         return;
@@ -950,7 +961,7 @@ static AdbcStatusCode ArrayParamFill(struct ArrayParam* p, const struct ArrowSch
       case NANOARROW_TYPE_STRING_VIEW: {
         struct ArrowStringView s = ArrowArrayViewGetStringUnsafe(values, row);
         if (p->c_type == SQL_C_WCHAR) {
-          int64_t units = OdbcUtf8ToUtf16Into((SQLWCHAR*)slot, s.data, s.size_bytes);
+          int64_t units = OdbcUtf8ToUtf16Into((SQLWCHAR*)slot, s.data, s.size_bytes, p->utf16_pairs);
           if (ind) {
             OdbcIndicatorSet(ind, (size_t)i, (SQLLEN)(units * (int64_t)sizeof(SQLWCHAR)), q);
           }

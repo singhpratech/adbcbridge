@@ -372,12 +372,21 @@ struct OdbcReaderOptions {
   bool sqllen_32bit;
   // True once a user option pinned sqllen_32bit; suppresses autodetection.
   bool sqllen_32bit_forced;
-  // Driver quirk: the driver's SQLWCHAR is wchar_t (4 bytes on Linux) while unixODBC
-  // passes UTF-16 (Firebird OdbcFb): a bound SQL_C_WCHAR parameter is truncated to
+  // Driver quirk: the driver's SQLWCHAR width differs from the driver manager's this
+  // library was compiled against -- e.g. a driver built with wchar_t (4-byte) SQLWCHAR
+  // loaded through unixODBC (Firebird OdbcFb). (A bridge compiled against iODBC uses
+  // 4-byte units throughout, so an iODBC-built vendor driver needs no quirk there.)
+  // Symptom: a bound SQL_C_WCHAR parameter is truncated to
   // byte_length/4 characters ("héllo 🚀" stores as "héll") and fetched wide columns come
   // back as UTF-32. Use the narrow SQL_C_CHAR path instead, which is UTF-8 when the
   // connection is opened with CHARSET=UTF8.
   bool wchar_as_utf8;
+  // Driver quirk, four-byte SQLWCHAR (iODBC) only: the driver puts UTF-16 code units
+  // into its wchar_t slots -- a non-BMP character travels as a surrogate pair of two
+  // units -- rather than one code point per unit (MySQL Connector/ODBC 26.7 for macOS).
+  // Bound wide parameters are then encoded that way; the reader accepts both forms
+  // regardless, since a surrogate is never a valid code point on its own.
+  bool wide_utf16_pairs;
   // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
   bool no_describe_param;
   // Driver quirk: the driver describes a column as SQL_TYPE_TIMESTAMP but has no
@@ -650,7 +659,11 @@ void OdbcQuoteChar(SQLHDBC hdbc, char* out);
 /// byte never produces more than one UTF-16 unit (a 4-byte sequence becomes a two-unit
 /// surrogate pair), so `n + 1` units is always enough room.  Malformed input becomes
 /// U+FFFD.  Used for the wide parameter path and for the wide connect retry.
-int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n);
+// `utf16_pairs`: with a four-byte SQLWCHAR, still write a non-BMP character as a UTF-16
+// surrogate pair (two units) instead of one code point -- what some drivers built for
+// iODBC expect (see OdbcReaderOptions::wide_utf16_pairs).  Ignored when SQLWCHAR is two
+// bytes, where pairs are the only encoding.
+int64_t OdbcUtf8ToUtf16Into(SQLWCHAR* o, const char* s, int64_t n, bool utf16_pairs);
 
 // Text-carrying ODBC calls in UTF-8 (src/odbc_text.c).  The narrow entry points on
 // unixODBC/iODBC, the W entry points with conversion on Windows, whose driver manager

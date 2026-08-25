@@ -100,7 +100,8 @@ SQLRETURN OdbcGetDataStrUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* buf, size_t
 
 #else  // _WIN32
 
-// UTF-8 -> UTF-16 units.  Self-contained rather than OdbcUtf8ToUtf16Into (odbc_bind.c),
+// UTF-8 -> SQLWCHAR units (UTF-16 when SQLWCHAR is two bytes, one code point per unit
+// when it is wchar_t, as on iODBC).  Self-contained rather than OdbcUtf8ToUtf16Into (odbc_bind.c),
 // because this file is also linked into the C unit tests, which do not carry
 // odbc_bind.c.  A malformed byte becomes U+FFFD and the scan moves on one byte, so
 // bad input can only shorten the output, never overrun it.
@@ -118,7 +119,7 @@ static size_t Utf8ToUtf16(SQLWCHAR* o, const char* s, size_t n) {
       c = ((b & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) | ((s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F);
       k = 4;
     } else { c = 0xFFFD; k = 1; }
-    if (c >= 0x10000) {
+    if (c >= 0x10000 && sizeof(SQLWCHAR) < 4) {
       c -= 0x10000;
       o[u++] = (SQLWCHAR)(0xD800 + (c >> 10));
       o[u++] = (SQLWCHAR)(0xDC00 + (c & 0x3FF));
@@ -139,7 +140,7 @@ static SQLWCHAR* ToW(const char* s, SQLSMALLINT len, SQLSMALLINT* out_len) {
     return NULL;
   }
   size_t n = len == SQL_NTS ? strlen(s) : (size_t)len;
-  // Every UTF-8 byte yields at most one UTF-16 unit.
+  // Every UTF-8 byte yields at most one SQLWCHAR unit.
   SQLWCHAR* w = malloc((n + 1) * sizeof(SQLWCHAR));
   if (!w) return NULL;
   size_t units = Utf8ToUtf16(w, s, n);
@@ -148,15 +149,20 @@ static SQLWCHAR* ToW(const char* s, SQLSMALLINT len, SQLSMALLINT* out_len) {
   return w;
 }
 
-// UTF-16 -> UTF-8 into a caller's buffer, NUL-terminated and truncated to fit.  Returns
-// the length the full text would have, the way ODBC's own out-lengths do.
+// SQLWCHAR units -> UTF-8 into a caller's buffer, NUL-terminated and truncated to fit.
+// Returns the length the full text would have, the way ODBC's own out-lengths do.
+// Two-byte units are UTF-16 (pairs combined); four-byte units are code points.
 static SQLSMALLINT FromW(const SQLWCHAR* w, size_t units, char* out, size_t cap) {
   size_t o = 0, full = 0;
   for (size_t i = 0; i < units; i++) {
-    uint32_t c = w[i];
-    if (c >= 0xD800 && c <= 0xDBFF && i + 1 < units && w[i + 1] >= 0xDC00 && w[i + 1] <= 0xDFFF) {
+    uint32_t c = sizeof(SQLWCHAR) < 4 ? (uint32_t)(uint16_t)w[i] : (uint32_t)w[i];
+    if (sizeof(SQLWCHAR) >= 4 && c > 0x10FFFF) {
+      c = 0xFFFD;
+    } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < units && (uint32_t)w[i + 1] >= 0xDC00 && (uint32_t)w[i + 1] <= 0xDFFF) {
       c = 0x10000 + ((c - 0xD800) << 10) + (w[i + 1] - 0xDC00);
       i++;
+    } else if (c >= 0xD800 && c <= 0xDFFF) {
+      c = 0xFFFD;
     }
     unsigned char b[4];
     size_t k;
