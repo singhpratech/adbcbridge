@@ -281,7 +281,8 @@ stack array — `SQLWCHAR sqlstate[6]` in `DriverManager/__info.c`, `extract_dia
 driver writes 24, and the stack protector aborts. It is the driver manager, not the driver and
 not the bridge; the same call through iODBC returns the proper `42S02`. Reported upstream with a
 driver-independent reproduction (a fake driver compiled with `SQL_WCHART_CONVERT` does it on Linux
-too).
+too, on 2.3.12 and 2.3.14): [lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239); the drivers' undocumented width:
+[openlink/virtuoso-opensource#1469](https://github.com/openlink/virtuoso-opensource/issues/1469), [dremio/warpdrive#16](https://github.com/dremio/warpdrive/issues/16).
 
 ### What works
 

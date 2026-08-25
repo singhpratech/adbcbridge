@@ -435,8 +435,9 @@ both drivers (`[42S02] … SQ074: Line 1: No table no_such_table_xyz`; `[HY000] 
 Arrow][Flight SQL] … Catalog Error: Table with name no_such_table_xyz does not exist!`) and
 survives. The Linux reference host reproduces the class without either driver: a fake ODBC
 driver compiled with a 4-byte `SQLWCHAR` (`SQL_WCHART_CONVERT`) makes unixODBC 2.3.12 abort on
-its first error, while the same driver with 2-byte units survives (reported upstream, with that
-repro).
+its first error, while the same driver with 2-byte units survives — on 2.3.12 and on 2.3.14 built from the release
+tarball. Reported: [lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239) (the overflow, with that repro),
+[openlink/virtuoso-opensource#1469](https://github.com/openlink/virtuoso-opensource/issues/1469) and [dremio/warpdrive#16](https://github.com/dremio/warpdrive/issues/16) (the undocumented width).
 
 Through a bridge built against iODBC (f49e27f, 0 warnings), read-only entries, `matrix_bench.py`:
 
