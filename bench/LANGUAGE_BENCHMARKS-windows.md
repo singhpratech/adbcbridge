@@ -10,8 +10,291 @@ language's own ODBC client (Java's is JDBC — sqlite-jdbc — not ODBC). ROWS=1
 FETCH_ROWS=100000, **REPS=1, single samples** on a thermally limited laptop with the
 server on the same box; `BENCHMARKS-windows.md` records 26% run-to-run variance here, so
 read rows for cross-language agreement, not absolute rate. Toolchains: Python 3.12.10,
-Go with WinLibs GCC 16.1.0 for cgo, Rust stable MSVC, .NET, Maven + JDK. The campaign is in
-progress; this file grows as servers come up. Python's ingest is `matrix_bench.py`'s array-binding column, as the Linux file records it.
+Go with WinLibs GCC 16.1.0 for cgo, Rust stable MSVC, .NET, Maven + JDK. That first
+machine's campaign is closed and kept below as history; the second machine's pass over all 46
+databases comes first. Python's ingest is `matrix_bench.py`'s array-binding column, as the Linux file records it.
+
+<!-- bigwin-lang-begin -->
+## Second machine — five languages × 46 databases, 2026-08-25
+
+The same workload on the **14-core / 32 GB machine of `BENCHMARKS-windows.md`'s second
+section** (Windows 11 Home 23H2, i9-13900HK, every server a Docker Desktop/WSL2 container
+under a 20 GB VM cap), at `a4d6ce5` plus the four Windows fixes in `src/` that campaign found.
+Toolchains, all per-user installs: Go 1.27.0 with WinLibs GCC 16.2.0 (UCRT) for cgo, Rust
+1.98.0 stable-msvc, .NET SDK 8.0.424, Temurin JDK 21.0.12 + Maven 3.9.16, Python 3.12.10.
+ROWS=10000, FETCH_ROWS=100000, **REPS=1, single samples**, the four compiled harnesses of a
+database running concurrently against it (they use tables of their own) and two databases at a
+time — so read rows for cross-language agreement, not absolute rate. Python's row is
+`matrix_bench.py`'s (ADBC ingest = its array-binding column, native = pyodbc), as the Linux
+file records it. 220 of 230 (language, database) rows measured; 216 ADBC-fetch cells with a number.
+
+| Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
+|---|---|---:|---:|---:|---:|
+| python | sqlite | 489,790 | 965,045 | 354,867 | 497,073 |
+| rust | sqlite | 361,180 | 770,080 | 639,157 | 765,893 |
+| go | sqlite | 377,210 | 1,044,196 | 188,656 | 524,880 |
+| java | sqlite | 250,198 | 854,180 | 494,188 | 1,266,705 |
+| csharp | sqlite | 398,599 | 762,782 | 214,437 | 572,409 |
+| python | duckdb | 109,474 | 635,958 | 1,120 | 382,443 |
+| rust | duckdb | — | — | — | — |
+| go | duckdb | 92,571 | 1,095,302 | — | — |
+| java | duckdb | 100,964 | 780,837 | — | — |
+| csharp | duckdb | 113,756 | 1,099,419 | 10,164 | 602,099 |
+| python | postgres | 304,057 | 371,764 | 1,541 | 192,102 |
+| rust | postgres | 324,008 | 473,271 | 46,244 | 630,409 |
+| go | postgres | 246,222 | 897,713 | — | — |
+| java | postgres | 363,750 | 612,143 | 87,370 | 1,481,438 |
+| csharp | postgres | 278,600 | 542,202 | 1,102 | 318,180 |
+| python | mariadb | 40,097 | 588,421 | 1,389 | 357,274 |
+| rust | mariadb | 68,318 | 775,845 | 1,879 | 864,779 |
+| go | mariadb | 16,949 | 937,920 | — | — |
+| java | mariadb | 79,070 | 623,299 | — | — |
+| csharp | mariadb | 78,341 | 573,686 | 1,144 | 317,515 |
+| python | columnstore | 4,879 | 497,803 | 1,523 | 376,152 |
+| rust | columnstore | 13,252 | 667,751 | 2,385 | 524,426 |
+| go | columnstore | 23,821 | 522,099 | — | — |
+| java | columnstore | 12,306 | 499,647 | — | — |
+| csharp | columnstore | 19,395 | 674,955 | 1,311 | 485,016 |
+| python | oracle | 19,271 | 30,874 | 292 | 29,842 |
+| rust | oracle | 15,430 | 30,121 | 298 | 41,018 |
+| go | oracle | 12,604 | 29,839 | — | — |
+| java | oracle | 14,453 | 30,160 | — | — |
+| csharp | oracle | 11,775 | 36,442 | 256 | — |
+| python | clickhouse | 1,202 | 423,413 | — | 319,357 |
+| rust | clickhouse | 1,407 | 524,969 | — | — |
+| go | clickhouse | 1,401 | 493,012 | — | — |
+| java | clickhouse | 1,390 | 222,150 | — | — |
+| csharp | clickhouse | 1,411 | 428,950 | — | — |
+| python | mssql | 47,838 | 867,720 | 90,589 | 528,646 |
+| rust | mssql | 78,869 | 1,056,277 | 79,904 | 1,313,793 |
+| go | mssql | 97,021 | 1,265,864 | — | — |
+| java | mssql | 88,411 | 1,058,785 | — | — |
+| csharp | mssql | 86,439 | 837,322 | 2,055 | 909,385 |
+| python | azuresqledge | 26,624 | 920,637 | 38,281 | 590,090 |
+| rust | azuresqledge | 53,867 | 714,759 | 21,512 | 700,370 |
+| go | azuresqledge | 32,899 | 585,778 | — | — |
+| java | azuresqledge | 57,498 | 770,049 | — | — |
+| csharp | azuresqledge | 44,375 | 939,421 | 1,597 | 527,420 |
+| python | mysql | 30,743 | 605,429 | 1,383 | 399,614 |
+| rust | mysql | 44,817 | 706,430 | 2,351 | 833,779 |
+| go | mysql | 13,920 | 909,225 | — | — |
+| java | mysql | 67,478 | 808,187 | — | — |
+| csharp | mysql | 58,228 | 763,030 | 2,296 | 562,876 |
+| python | tidb | 49,267 | 579,121 | 752 | 361,928 |
+| rust | tidb | 40,554 | 661,809 | 1,631 | 792,678 |
+| go | tidb | 62,074 | 884,201 | — | — |
+| java | tidb | 64,755 | 860,398 | — | — |
+| csharp | tidb | 60,474 | 535,642 | 1,535 | 472,894 |
+| python | dolt | 36,764 | 526,988 | 869 | 126,788 |
+| rust | dolt | 44,543 | 549,612 | 1,239 | 729,789 |
+| go | dolt | 55,136 | 855,532 | — | — |
+| java | dolt | 54,432 | 713,179 | — | — |
+| csharp | dolt | 53,841 | 793,869 | 1,206 | 594,695 |
+| python | databend | 4,677 | 560,952 | — | 437,956 |
+| rust | databend | 6,020 | 500,834 | — | 613,766 |
+| go | databend | 6,001 | 595,642 | — | — |
+| java | databend | 6,343 | 649,031 | — | — |
+| csharp | databend | 6,106 | 713,027 | — | 476,826 |
+| python | percona | 38,920 | 585,548 | 1,163 | 269,611 |
+| rust | percona | 36,764 | 852,092 | 1,970 | 749,839 |
+| go | percona | 14,935 | 902,789 | — | — |
+| java | percona | 17,307 | 888,526 | — | — |
+| csharp | percona | 43,043 | 722,007 | 1,923 | 514,159 |
+| python | matrixone | 42,025 | 752,149 | 576 | 475,380 |
+| rust | matrixone | 44,325 | 816,434 | 1,116 | 1,097,005 |
+| go | matrixone | 45,344 | 908,975 | — | — |
+| java | matrixone | 56,341 | 974,774 | — | — |
+| csharp | matrixone | 45,409 | 983,827 | 1,077 | 650,005 |
+| python | doris | 1,898 | 829,499 | — | 277,358 |
+| rust | doris | 1,917 | 1,254,371 | — | 1,206,257 |
+| go | doris | 1,914 | 1,327,788 | — | — |
+| java | doris | 1,850 | 1,286,235 | — | — |
+| csharp | doris | 1,928 | 1,069,711 | — | — |
+| python | oceanbase | 76,696 | 800,665 | 2,284 | 471,138 |
+| rust | oceanbase | 49,139 | 612,372 | 1,526 | 687,669 |
+| go | oceanbase | 41,179 | 460,154 | — | — |
+| java | oceanbase | 64,327 | 706,743 | — | — |
+| csharp | oceanbase | 34,898 | 630,090 | 1,503 | 381,644 |
+| python | greptimedb | 90,967 | 321,240 | — | 191,745 |
+| rust | greptimedb | 75,963 | 1,990,002 | — | 1,979,622 |
+| go | greptimedb | 78,202 | 2,147,688 | — | — |
+| java | greptimedb | 106,418 | 1,837,580 | — | — |
+| csharp | greptimedb | 89,505 | 2,159,762 | — | — |
+| python | starrocks | 3,790 | 714,882 | — | 516,061 |
+| rust | starrocks | 2,721 | 1,261,947 | — | 1,207,888 |
+| go | starrocks | 2,613 | 1,098,261 | — | — |
+| java | starrocks | 2,772 | 1,080,015 | — | — |
+| csharp | starrocks | 2,686 | 1,281,117 | — | — |
+| python | mongodbbi | — | 151,363 | — | — |
+| rust | mongodbbi | — | 136,683 | — | 139,463 |
+| go | mongodbbi | — | 138,503 | — | — |
+| java | mongodbbi | — | 170,580 | — | — |
+| csharp | mongodbbi | — | 139,447 | — | — |
+| python | db2 | 81,651 | 398,715 | 2,780 | 431,224 |
+| rust | db2 | 5,811 | 476,481 | 154,873 | 2,050,075 |
+| go | db2 | 23,594 | 441,731 | — | — |
+| java | db2 | 3,724 | 320,348 | — | — |
+| csharp | db2 | 6,762 | 569,518 | 2,328 | — |
+| python | informix | 91,977 | 591,439 | 2,308 | 284,124 |
+| rust | informix | 65,971 | 480,346 | 74,842 | 543,822 |
+| go | informix | 46,777 | 502,276 | — | — |
+| java | informix | 41,293 | 498,633 | — | — |
+| csharp | informix | 42,941 | 582,093 | 2,302 | — |
+| python | monetdb | 79,423 | 361,206 | 306 | 282,512 |
+| rust | monetdb | 118,529 | 834,415 | — | 869,382 |
+| go | monetdb | 121,349 | 167,827 | — | — |
+| java | monetdb | 106,946 | 763,147 | — | — |
+| csharp | monetdb | 120,426 | 601,657 | 1,923 | 400,283 |
+| python | vertica | 49,274 | 189,248 | 46,407 | 173,115 |
+| rust | vertica | 45,671 | 111,262 | 57,306 | 170,624 |
+| go | vertica | 42,831 | 123,435 | — | — |
+| java | vertica | 43,999 | 178,746 | — | — |
+| csharp | vertica | 37,100 | 239,229 | 2,535 | — |
+| python | cockroachdb | 31,555 | 271,045 | 759 | 233,829 |
+| rust | cockroachdb | 19,272 | 499,561 | 2,283 | 538,328 |
+| go | cockroachdb | 45,950 | 593,239 | — | — |
+| java | cockroachdb | 28,938 | 526,250 | — | — |
+| csharp | cockroachdb | 29,652 | 439,031 | 610 | 429,946 |
+| python | yugabyte | 15,649 | 264,353 | 681 | 221,607 |
+| rust | yugabyte | 22,786 | 507,975 | 2,882 | 640,652 |
+| go | yugabyte | 15,889 | 770,492 | — | — |
+| java | yugabyte | 23,296 | 660,887 | — | — |
+| csharp | yugabyte | — | 629,356 | — | 240,317 |
+| python | timescaledb | 268,389 | 360,484 | 1,558 | 224,157 |
+| rust | timescaledb | 356,373 | 575,062 | 11,464 | 491,686 |
+| go | timescaledb | 288,097 | 986,237 | — | — |
+| java | timescaledb | 235,565 | 639,884 | — | — |
+| csharp | timescaledb | 288,719 | 757,898 | 1,387 | 500,596 |
+| python | citus | 259,308 | 259,309 | 1,536 | 285,972 |
+| rust | citus | 340,186 | 862,000 | 52,718 | 735,010 |
+| go | citus | 436,740 | 987,338 | — | — |
+| java | citus | 340,424 | 849,574 | — | — |
+| csharp | citus | 411,860 | 417,658 | 1,275 | 212,557 |
+| python | cloudberry | 6,252 | 390,739 | 28 | 308,765 |
+| rust | cloudberry | 4,767 | 533,646 | 639 | 528,048 |
+| go | cloudberry | 4,900 | 462,343 | — | — |
+| java | cloudberry | 2,355 | 311,162 | — | — |
+| csharp | cloudberry | 4,905 | 416,838 | 377 | 236,676 |
+| python | materialize | 18,502 | 103,790 | 651 | 96,458 |
+| rust | materialize | 12,604 | 245,164 | — | 201,087 |
+| go | materialize | 10,778 | 160,183 | — | — |
+| java | materialize | 12,584 | 121,592 | — | — |
+| csharp | materialize | 12,293 | 221,441 | — | 229,015 |
+| python | opengauss | 76,996 | 257,499 | 1,521 | 219,314 |
+| rust | opengauss | 47,059 | 680,514 | 6,835 | 471,796 |
+| go | opengauss | 57,975 | 340,678 | — | — |
+| java | opengauss | 83,877 | 523,439 | — | — |
+| csharp | opengauss | 70,788 | 712,748 | 1,054 | 438,873 |
+| python | cratedb | 14,114 | 252,400 | 24 | 236,161 |
+| rust | cratedb | 16,075 | 401,018 | 100 | 373,773 |
+| go | cratedb | 10,692 | 421,092 | — | — |
+| java | cratedb | 26,683 | 245,742 | — | — |
+| csharp | cratedb | 14,072 | 306,095 | 74 | 308,569 |
+| python | questdb | 62,752 | 374,822 | 2,784 | 259,358 |
+| rust | questdb | 51,697 | 305,029 | — | 296,894 |
+| go | questdb | 38,415 | 640,658 | — | — |
+| java | questdb | 37,073 | 335,605 | — | — |
+| csharp | questdb | 39,109 | 429,291 | — | 202,942 |
+| python | risingwave | 20,913 | 242,606 | 387 | 245,511 |
+| rust | risingwave | 10,259 | 425,952 | 1,598 | 438,843 |
+| go | risingwave | 12,501 | 589,773 | — | — |
+| java | risingwave | 18,180 | 562,676 | — | — |
+| csharp | risingwave | 13,744 | 413,323 | 645 | 229,696 |
+| python | spanner | — | — | — | — |
+| rust | spanner | — | — | — | — |
+| go | spanner | — | — | — | — |
+| java | spanner | — | — | — | — |
+| csharp | spanner | — | — | — | — |
+| python | firebird | 23,638 | 80,444 | 1,326 | 68,197 |
+| rust | firebird | 26,599 | 77,615 | — | 78,590 |
+| go | firebird | 22,922 | 75,783 | — | — |
+| java | firebird | 26,528 | 73,531 | — | — |
+| csharp | firebird | 26,206 | 75,933 | 1,333 | 71,436 |
+| python | virtuoso | 2,811 | 196,184 | 2,801 | 174,845 |
+| rust | virtuoso | 2,076 | 128,847 | 104,725 | — |
+| go | virtuoso | 1,448 | — | — | — |
+| java | virtuoso | 2,186 | — | — | — |
+| csharp | virtuoso | 2,083 | — | 2,012 | — |
+| python | flightsql | — | 5,211,319 | — | — |
+| rust | flightsql | — | 4,894,236 | — | 126,564 |
+| go | flightsql | — | 4,403,133 | — | — |
+| java | flightsql | — | 3,244,246 | — | — |
+| csharp | flightsql | — | 3,949,073 | — | — |
+| python | arcadedb | — | 104,786 | — | — |
+| rust | arcadedb | — | 201,914 | — | 268,454 |
+| go | arcadedb | — | 238,977 | — | — |
+| java | arcadedb | — | 234,593 | — | — |
+| csharp | arcadedb | — | 273,689 | — | — |
+| python | influxdb3 | — | 6,137,567 | — | — |
+| rust | influxdb3 | — | 4,219,979 | — | 152,818 |
+| go | influxdb3 | — | 6,218,596 | — | — |
+| java | influxdb3 | — | 1,952,927 | — | — |
+| csharp | influxdb3 | — | 3,295,577 | — | — |
+| python | ignite | — | 775,660 | — | — |
+| rust | ignite | — | — | — | — |
+| go | ignite | — | 581,721 | — | — |
+| java | ignite | — | 497,746 | — | — |
+| csharp | ignite | — | 487,266 | — | — |
+| python | opensearch | — | 84,094 | — | — |
+| rust | opensearch | — | 53,788 | — | 86,108 |
+| go | opensearch | — | 53,908 | — | — |
+| java | opensearch | — | 71,444 | — | — |
+| csharp | opensearch | — | 50,963 | — | — |
+| python | ydb | 1,903 | 340,051 | 69 | 255,062 |
+| rust | ydb | — | — | — | — |
+| go | ydb | 1,837 | 438,534 | — | — |
+| java | ydb | — | — | — | — |
+| csharp | ydb | — | — | — | — |
+| python | dremio | — | 1,002,050 | — | — |
+| rust | dremio | — | 677,539 | — | 115,785 |
+| go | dremio | — | 1,509,664 | — | — |
+| java | dremio | — | 915,198 | — | — |
+| csharp | dremio | — | 671,502 | — | — |
+| python | tdengine | — | 298,618 | — | — |
+| rust | tdengine | — | — | — | — |
+| go | tdengine | — | 274,806 | — | — |
+| java | tdengine | — | 227,943 | — | — |
+| csharp | tdengine | — | 229,276 | — | — |
+| python | access | — | 3,352,705 | — | — |
+| rust | access | — | 2,138,732 | — | 1,805,923 |
+| go | access | — | 1,888,693 | — | — |
+| java | access | — | 629,842 | — | — |
+| csharp | access | — | 3,086,737 | — | — |
+
+Rust's arrow-odbc fetch, not in the table: sqlite 655,837, access 1,914,242, postgres 530,215, mysql 634,853, mssql 1,239,726, mariadb 801,968, timescaledb 751,403, citus 716,793, cockroachdb 506,515, yugabyte 381,556, questdb 310,101, percona 689,640, tidb 708,254, dolt 669,032, db2 456,590, cratedb 389,950, dremio 798,995, flightsql 2,632,320, influxdb3 2,370,483, firebird 68,846, monetdb 811,880, azuresqledge 615,510, opengauss 420,001, materialize 167,850, cloudberry 504,398, risingwave 453,536, databend 652,110, greptimedb 1,474,400, matrixone 805,610, starrocks 1,048,928, opensearch 91,237, oracle 38,720, columnstore 537,510, mongodbbi 145,241, arcadedb 254,325, oceanbase 555,545, doris 1,008,345, vertica 153,449.
+
+`—` is a step that did not finish or does not exist for that pair: Go's native columns are
+off everywhere but sqlite (`alexbrainman/odbc` faults inside the driver on Windows — DuckDB
+took the process down in `SQLExecute` here, the first machine saw it in `SQLGetDiagRec` — and
+a crash loses the ADBC numbers too, so the harness ran with `ADBC_BENCH_NO_NATIVE`); Java's
+native column exists only where the pom carries a JDBC driver (sqlite, postgres); a read-only
+entry (ArcadeDB, the Flight SQL trio, Ignite, TDengine, MongoDB BI, Access, OpenSearch) has no
+ingest by construction; ClickHouse's native columns were switched off (one HTTP request per
+row, >20 minutes on the first machine); Virtuoso's fetch is the `repair` case of the first
+machine (the driver's `SQLSetPos` fails, the value stays unbound). Four servers were measured
+one harness at a time rather than four at once — MonetDB (a concurrent `CREATE TABLE` fails
+its optimistic-concurrency check; it also needs `ADBC_BENCH_AUTOCOMMIT=1`, as the harness
+sources say), Firebird (DDL under four concurrent transactions), ArcadeDB (the 1 GB container
+is OOM-killed under four readers) and YDB. Three servers needed a hand after a container
+restart, recorded in `tests/compat/README.md`: ColumnStore (`provision` again), MongoDB BI
+(`mongosqld` is not part of the image and has to be started after every recreate), Vertica
+(the database is not started with the container; `vcluster start_db`). Rows with no result
+at all say why in `adbc-results\lang\<lang>-<db>.log` on the machine; the ones worth
+recording:
+
+- `csharp` / `spanner`: not run, see go / spanner
+- `csharp` / `ydb`: hung, see rust / ydb
+- `go` / `spanner`: not run: the emulator wedges under the 10,000-row workload (`docs/COMPATIBILITY.md`), as on the first machine
+- `java` / `spanner`: not run, see go / spanner
+- `java` / `ydb`: hung, see rust / ydb
+- `rust` / `duckdb`: `abort` — the DuckDB ODBC driver throws a C++ exception across the FFI boundary, which Rust cannot unwind (the first machine's finding, unchanged)
+- `rust` / `ignite`: `SQLExecDirect failed` on the read of the quoted `"adbc_big"`: Ignite folds unquoted names to upper case and the Rust harness quotes the read-only table, so the name does not match — harness spelling, not the bridge (the other three harnesses read it)
+- `rust` / `spanner`: not run, see go / spanner
+- `rust` / `tdengine`: taos_odbc asserts in `_env_set_odbc_version()` (`not implemented yet`) on the ODBC version odbc-api sets, before any query — driver-side
+- `rust` / `ydb`: hung at 0 % CPU after connecting, killed after 100 s (Java and C# the same; the compat run hit the same hang on this server once, cleared by recreating the container; Go and Python went through)
+<!-- bigwin-lang-end -->
+
+## First machine (i7-8550U, 7.7 GB) — historical campaign
 
 | Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
 |---|---|---:|---:|---:|---:|

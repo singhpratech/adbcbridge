@@ -1,12 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks — Windows
 
-**Status: measured, one machine, campaign closed — 26 of 46 databases pass (five native
-installs, then a Docker Desktop tier one container at a time), 10 fail — five on one connector rule,
-two on a second driver's astral truncation, one on an ANSI driver build, and two that were the
-bridge's own (found here, fixed on main, not re-measured) — 1 has no driver, 3 servers cannot run
-in the VM, 6 vendor-driver entries were not attempted
-(each with its reason in `docs/COMPATIBILITY.md`); 142 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
+**Status: measured on two machines — 45 of 46 databases pass on the second (14-core, 32 GB, every server in Docker Desktop) at `a4d6ce5` plus the four Windows fixes in `src/` that this campaign found, 1 fails on a vendor driver's ANSI-code-page conversion (ANSI-code-page conversion inside the driver: tdengine), none on the bridge; the first machine's campaign (7.7 GB laptop, 26 pass) is kept below as history; five languages × 46 databases on the second machine in `LANGUAGE_BENCHMARKS-windows.md`, 220 of 230 language rows measured, on top of the first machine's 142 language cells.** Until 2026-08-24 the Windows build had never succeeded on any commit, and
 CI was reporting that to nobody. The first person to build on Windows found ten defects across the repository — driver,
 tests and benchmark harnesses — and all are fixed on main: four MSVC-only build breaks (the Windows SDK's `sqltypes.h` needs
 `windows.h` first; `strndup` is not in the MSVC CRT; a same-type cast on `ADBC_ERROR_INIT`
@@ -24,6 +19,172 @@ parallel-ingest worker pool (`adbc.odbc.ingest_connections` is clamped to 1). So
 row measures a materially different code path from the Linux rows, and a partitioned read on
 a 4-core laptop is not a comparison at all. A Win32 port of both (SRWLOCK +
 CONDITION_VARIABLE + `_beginthreadex`) is the first Windows roadmap item.
+
+<!-- bigwin-begin -->
+## Second machine — all 46 entries re-measured, 2026-08-25, main @ a4d6ce5 plus four Windows fixes in `src/`
+
+**45 of 46 pass, 1 fail — the one failure a vendor driver's ANSI-code-page conversion, not the bridge's (ANSI-code-page conversion inside the driver: tdengine).**
+This pass supersedes the first machine's column below wherever the two differ; the
+difference is a driver version, a server that the 7.7 GB VM could not run, or one of the
+four bridge defects this campaign found and fixed (Firebird, Informix, the Arrow Flight SQL
+driver, Apache Ignite — see below; every row is measured with all four in the tree).
+
+| | |
+|---|---|
+| OS | Windows 11 Home 23H2 (build 22631), x64 |
+| CPU / RAM | Intel Core i9-13900HK, 14 cores / 20 threads; 32 GB |
+| Driver manager | Windows ODBC (odbc32.dll), ANSI code page 1252 |
+| Build | CMake 4.4.2, MSVC 19.44.35228, Windows SDK 10.0.26100; x64 Release, **7/7 ctest**, zero warnings; `tests/test_windows_text.py` 7 passed |
+| Python | 3.12.10 x64, adbc-driver-manager 1.12.0, pyarrow 25.0.1, pyodbc 5.3.0, tzdata |
+| Servers | every entry a Docker Desktop 4.88 (engine 29.7.2) container on WSL2, `.wslconfig` 20 GB / 12 CPUs / no swap; images and compose services from `tests/compat/docker-compose.yml` unchanged |
+| ODBC drivers (64-bit) | SQLite3 ODBC Driver (3.43.2); DuckDB Driver 1.5.5.0; PostgreSQL Unicode(x64) psqlodbc 18.00.0002 and PostgreSQL Unicode 16(x64) 16.00.0007 (YDB); **MySQL ODBC 26.7 Unicode Driver** (Connector/ODBC 26.7.1); ODBC Driver 18 for SQL Server 18.6.2.1; ClickHouse ODBC 1.5.5; MonetDB ODBC 11.55.7 (20260615); Oracle in instantclient_23_0; IBM Db2 clidriver 12.1.4; Vertica 25.1.0; OpenSearch SQL ODBC 1.5.0.0; Arrow Flight SQL ODBC 00.09.0007 (Dremio); Apache Ignite 2.18.0; TDengine 3.4.2.5; Virtuoso 7.2.17; Firebird ODBC 3.0.1; Microsoft Access Database Engine 2016 x64 |
+| Build features | no prefetch pipeline, no ingest fan-out (compiled out on `_WIN32`) |
+| Load | compat runs 10 at a time; benchmarks 8 at a time with ~30 containers up — single samples under contention, so treat every number as a floor; oracle and opensearch re-measured alone agreed within 3% and 25% respectively |
+
+Workload per entry: `tests/compat/test_matrix.py <entry>` (the compat workload) then
+`bench/matrix_bench.py --rows 10000 --fetch-rows 100000 <entry>` (ClickHouse with
+`--pyodbc-timeout 120`; Spanner compat only, see the first-machine note). Each benchmark ran
+from its own copy of `bench/` + `tests/compat/`, because `matrix_bench.py` keeps its cache next
+to itself and concurrent runs corrupt it.
+
+| entry | result | ADBC fetch | pyodbc fetch | ADBC ingest (array) | pyodbc ingest |
+|---|---|---:|---:|---:|---:|
+| sqlite | PASS (`SQLite (via ODBC) 3.43.2`) | 965,045 | 497,073 | 467,965 (489,790) | 354,867 |
+| duckdb | PASS (`DuckDB (via ODBC) 1.5.5`) | 635,958 | 382,443 | 105,127 (109,474) | 1,120 |
+| postgres | PASS (`PostgreSQL (via ODBC) 16.15.0`) | 371,764 | 192,102 | 264,062 (304,057) | 1,541 |
+| mariadb | PASS (`MySQL (via ODBC) 11.8.9-MariaDB-ubu2404`) | 588,421 | 357,274 | 44,678 (40,097) | 1,389 |
+| columnstore | PASS (`MySQL (via ODBC) 11.1.1-MariaDB-log`) | 497,803 | 376,152 | 4,578 (4,879) | 1,523 |
+| oracle | PASS — Instant Client 23, `NLS_LANG=.AL32UTF8`; alone: fetch 30,874 / ingest 18,876 (`Oracle (via ODBC) 23.26.0200`) | 30,874 | 29,842 | 18,876 (19,271) | 292 |
+| clickhouse | PASS — pyodbc ingest at one HTTP request per row, capped at 120 s (`ClickHouse (via ODBC) 26.7.5.10`) | 423,413 | 319,357 | 1,201 (1,202) | — |
+| mssql | PASS (`Microsoft SQL Server (via ODBC) 16.00.4265`) | 867,720 | 528,646 | 30,429 (47,838) | 90,589 |
+| azuresqledge | PASS (`Microsoft SQL Server (via ODBC) 16.00.5100`) | 920,637 | 590,090 | 13,965 (26,624) | 38,281 |
+| mysql | PASS (`MySQL (via ODBC) 8.4.11`) | 605,429 | 399,614 | 38,869 (30,743) | 1,383 |
+| tidb | PASS (`MySQL (via ODBC) 8.0.11-TiDB-v7.5.1`) | 579,121 | 361,928 | 50,019 (49,267) | 752 |
+| dolt | PASS (`MySQL (via ODBC) 8.0.33`) | 526,988 | 126,788 | 27,345 (36,764) | 869 |
+| databend | PASS — pyodbc ingest form refused by the server (`MySQL (via ODBC) 8.0.90-v1.2.881-ca29960f5c(rust-1.94.0-nightly-2026-04-17T07:20:31.684496168Z)`) | 560,952 | 437,956 | 3,770 (4,677) | — |
+| percona | PASS (`MySQL (via ODBC) 8.4.11-11`) | 585,548 | 269,611 | 39,624 (38,920) | 1,163 |
+| matrixone | PASS (`MySQL (via ODBC) 8.0.30-MatrixOne-v4.2.0`) | 752,149 | 475,380 | 43,257 (42,025) | 576 |
+| doris | PASS — 26.7.1 fixes the astral class; FE+BE in one container, ~6 min to `Alive`; pyodbc ingest form refused by the server | 829,499 | 277,358 | 1,677 (1,898) | — |
+| oceanbase | PASS — `NO_SSPS=1` added via `OCEANBASE_CONN`; the connector's stderr `Character set '45' is not a compiled character set` is harmless (utf8mb4_general_ci id 45 missing from the 26.7 client's charsets Index) (`MySQL (via ODBC) 5.7.25`) | 800,665 | 471,138 | 80,659 (76,696) | 2,284 |
+| greptimedb | PASS — pyodbc ingest form refused by the server (`MySQL (via ODBC) 8.4.2`) | 321,240 | 191,745 | 55,848 (90,967) | — |
+| starrocks | PASS — each INSERT is a load transaction; pyodbc's batch INSERT form is refused (`MySQL (via ODBC) 8.0.33`) | 714,882 | 516,061 | 3,430 (3,790) | — |
+| mongodbbi | PASS (`MySQL (via ODBC) 5.7.12 mongosqld v2.14.22`) | 151,363 | — | — (—) | — |
+| db2 | PASS — `Authentication=SERVER` in the connection string, see below (`DB2/LINUXX8664 (via ODBC) 12.01.0500`) | 398,715 | 431,224 | 57,557 (81,651) | 2,780 |
+| informix | PASS — after the narrow-parameter fix below, with `DB2CODEPAGE=1208` set (`IDS/UNIX64 (via ODBC) 12.10.0000`) | 591,439 | 284,124 | 2,711 (91,977) | 2,308 |
+| monetdb | PASS (`MonetDB (via ODBC) 11.55.0007`) | 361,206 | 282,512 | 76,589 (79,423) | 306 |
+| vertica | PASS — single-row ingest is driver round-trip-bound; array binding is the real number (`Vertica Database (via ODBC) 25.03.0000`) | 189,248 | 173,115 | 2,011 (49,274) | 46,407 |
+| cockroachdb | PASS (`PostgreSQL (via ODBC) 18.0.0`) | 271,045 | 233,829 | 31,478 (31,555) | 759 |
+| yugabyte | PASS (`PostgreSQL (via ODBC) 15.12.0`) | 264,353 | 221,607 | 13,386 (15,649) | 681 |
+| timescaledb | PASS (`PostgreSQL (via ODBC) 16.15.0`) | 360,484 | 224,157 | 213,915 (268,389) | 1,558 |
+| citus | PASS (`PostgreSQL (via ODBC) 18.4.0`) | 259,309 | 285,972 | 275,236 (259,308) | 1,536 |
+| cloudberry | PASS (`PostgreSQL (via ODBC) 14.4.0`) | 390,739 | 308,765 | 4,901 (6,252) | 28 |
+| materialize | PASS (`PostgreSQL (via ODBC) 9.5.0`) | 103,790 | 96,458 | 17,041 (18,502) | 651 |
+| opengauss | PASS (`PostgreSQL (via ODBC) 9.2.4`) | 257,499 | 219,314 | 58,393 (76,996) | 1,521 |
+| cratedb | PASS (`PostgreSQL (via ODBC) 14.0.0`) | 252,400 | 236,161 | 11,314 (14,114) | 24 |
+| questdb | PASS (`PostgreSQL (via ODBC) 11.3.0`) | 374,822 | 259,358 | 45,104 (62,752) | 2,784 |
+| risingwave | PASS (`PostgreSQL (via ODBC) 13.1400.0`) | 242,606 | 245,511 | 19,758 (20,913) | 387 |
+| spanner | PASS — compat only — bench not run against the emulator | — | — | — (—) | — |
+| firebird | PASS — after the SQL_DRIVER_NAME fix below; array column = the UNION ALL bulk form, not parameter arrays (`Firebird (via ODBC) 06.03.1812 LI-V Firebird 5.0`) | 80,444 | 68,197 | 24,453 (23,638) | 1,326 |
+| virtuoso | PASS — Virtuoso Open Source 7.2 Windows client driver (`OpenLink Virtuoso (via ODBC) 07.20.3243`) | 196,184 | 174,845 | 2,682 (2,811) | 2,801 |
+| flightsql | PASS — after the text-as-binary fix below (1.8× the wide read); sqlflite 1.5.5 (`sqlflite (via ODBC) 00.00.0000.duckdb v1.1.1`) | 5,211,319 | — | — (—) | — |
+| arcadedb | PASS | 104,786 | — | — (—) | — |
+| influxdb3 | PASS — after the text-as-binary fix below; influxdb:3-core (`InfluxDB IOx (via ODBC) 02.00.0000`) | 6,137,567 | — | — (—) | — |
+| ignite | PASS — after the narrow-text fix below; ANSI-only driver (`Apache Ignite (via ODBC) 02.04.0000`) | 775,660 | — | — (—) | — |
+| opensearch | PASS — read-only; 67,410 rows/s under 8-way load, 84,094 alone (`OpenSearch (via ODBC) 3.8.0`) | 84,094 | — | — (—) | — |
+| ydb | PASS (`PostgreSQL (via ODBC) 14.0.5`) | 340,051 | 255,062 | 1,995 (1,903) | 69 |
+| dremio | PASS — after the text-as-binary fix below; Dremio 26.0.0005 (`Dremio Server (via ODBC) 26.00.0005-202509091642240013-f5051a07`) | 1,002,050 | — | — (—) | — |
+| tdengine | **FAIL** — driver-side: taos_odbc converts through the ANSI code page (`UTF-32LE → CP1252` fails on 🚀); over websocket, the 3.4.2.5 client cannot speak native to the 3.3.6 server | 298,618 | — | — (—) | — |
+| access | PASS — ACE 2016 x64 on the checked-in .mdb fixture; read-only entry, so fetch only, of a fixture-sized table (`ACCESS (via ODBC) 04.00.0000`) | 3,352,705 | — | — (—) | — |
+
+Rows/s; `—` = not applicable (read-only entry) or the step failed/timed out (noted in the
+result cell or in `docs/COMPATIBILITY.md`).
+
+### What changed against the first machine
+
+**MySQL Connector/ODBC 26.7.1 retires the astral `???` class.** dev.mysql.com's
+Connector/ODBC page offers `mysql-connector-odbc-26.7.1-winx64.msi` (the "Innovation" track
+that replaced 9.x — the first campaign's note that nothing newer than 8.4.0 is published for
+Windows is obsolete). Installed, it replaces 8.4.0 and registers `MySQL ODBC 26.7 Unicode
+Driver`; with it databend, greptimedb, matrixone, mongodbbi, starrocks and doris pass the full
+workload, astral check included, with their stock connection strings (`NO_SSPS=1` still in
+them via `{no_ssps}`). The 8.4.0 failure was pinned down first, on this machine, as read-side
+and inside the connector: the server stores `héllo 🚀` byte-exact (`HEX(s)` =
+`68C3A96C6C6F20F09F9A80`), and `SQLGetData` returns `3f 3f 3f` for the emoji under
+SQL_C_CHAR and SQL_C_WCHAR alike, with or without `CHARSET=utf8mb4` — so no bridge-side
+narrow/wide routing could have repaired it; only the driver upgrade does.
+
+**Four bridge defects, found and fixed here.** All four are Windows-only and all four are
+the same shape: a quirk that is right on Linux keyed on something that differs on Windows.
+
+* *Firebird.* The driver answers `SQL_DRIVER_NAME` as `OdbcFb` on Linux and as `FirebirdODBC`
+  on Windows (its DLL's name), and the quirk block keyed on the former — the one that switches
+  parameter arrays off because the driver accepts `SQL_ATTR_PARAMSET_SIZE` and executes a
+  single set — never fired. The first run stopped at the bridge's own guard (`accepted a
+  parameter array of 2 sets but reported neither SQL_ATTR_PARAMS_PROCESSED_PTR nor
+  SQL_ATTR_PARAM_STATUS_PTR`), which is the guard doing its job; matching both names passes the
+  whole workload, UNION-ALL bulk form included.
+* *Informix.* The IDS quirk sends the astral parameter narrow through `wchar_as_utf8`, which
+  the Windows block at the end of the quirk table resets for every driver — so the parameter
+  still went SQL_C_WCHAR and the INSERT failed `-415 Data conversion error`. `narrow_params`,
+  the mechanism Ignite already used, keeps it on SQL_C_CHAR everywhere; with `DB2CODEPAGE=1208`
+  in the environment (so the CLI driver reads those bytes as UTF-8 rather than cp1252) the
+  workload passes. Verified first with pyodbc: SQL_C_CHAR + UTF-8 round-trips `héllo 🚀`
+  byte-exact, wide UTF-16 gets -415.
+* *Arrow Flight SQL ODBC (flightsql, influxdb3, dremio).* The driver's Windows build returns
+  U+1F680 as U+F680 — the low 16 bits — through SQL_C_WCHAR and `?` through SQL_C_CHAR (the
+  ANSI code page), pyodbc identical, which the first campaign recorded as unfixable. Its
+  SQL_C_BINARY conversion of a text column hands the server's UTF-8 through byte-exact
+  (probed with pyodbc against sqlflite and Dremio), so the reader now takes that route for this
+  driver on Windows (`text_as_binary`). It is also 1.8× faster than the wide read on sqlflite —
+  no UTF-16 conversion on either side.
+* *Apache Ignite.* An ANSI-only driver (no `W` entry points) whose narrow path is UTF-8. The
+  Windows driver manager maps every W call onto it through the ANSI code page — wide fetches
+  came back `hÃ©llo ðŸš€`, a statement literal `'héllo'` matched nothing — while a narrow
+  SQL_C_CHAR buffer and a narrow `SQLExecDirect` are handed over untouched (probed). The fix
+  keeps the `wchar_as_utf8` fetch quirk alive on Windows for this one driver and adds
+  `narrow_sql`, a per-connection route that sends caller statement text through the narrow
+  entry points; the bridge's own ASCII probes stay wide. 2.5× the fetch rate of the wide path.
+
+**OceanBase needs `NO_SSPS=1` too.** Its entry is the one MySQL-wire connection string
+without `{no_ssps}`; on Windows every bound parameter then fails with `No data supplied for
+parameters in prepared statement` (pyodbc identical). Measured with an `OCEANBASE_CONN`
+override that appends it; the fix is one token in the entry.
+
+**Db2 / Informix through IBM's 12.1.4 "ODBC and CLI" zip.** `db2cli install -setup` registers
+`db2clio.dll`, which that package does not ship — the driver is `clidriver\bin\db2cli64.dll`
+(a forwarder into `db2app64.dll`); and the 78-character name it registers
+(`IBM DB2 ODBC DRIVER - <path>`) gets `IM002` from the Windows driver manager even once the
+DLL path is right, while a short alias registered by hand works. Then every connection from
+python failed `SQL1042C` while `db2cli.exe validate` succeeded from the same driver: the
+default `SERVER_ENCRYPT` authentication needs the gsk8/ICC crypto libraries, which only
+`db2cli.exe`'s own side-by-side manifests can load; `Authentication=SERVER` in the connection
+string skips that step and both entries connect (`DB2_CONN`/`INFORMIX_CONN` overrides here;
+the same keyword belongs in the entries). Informix additionally needs `DB2CODEPAGE=1208` (the
+fix above). All of it is in `tests/compat/README.md`'s Windows notes for the two entries.
+
+**TDengine over websocket.** The Windows client package is 3.4.2.5 and cannot speak the native
+protocol to the 3.3.6.13 server the compose file runs (TCP connects, the server drops the
+connection with `read invalid packet`; not an IPv6 matter), so the entry was measured through
+taosadapter's websocket listener — `URL={ws://root:taosdata@127.0.0.1:16041}`, port 6041
+published by a compose override. That reaches the server and reads every column but the NCHAR
+one, where taos_odbc converts through `GetACP()` and nothing in the connection string changes
+it; the one remaining failure of the column.
+
+**Two harness defects surfaced by parallel runs** (Linux never runs entries concurrently):
+`bench/matrix_bench.py` reads and writes `MATRIX_BENCHMARKS.md` and `.matrix_bench.json`
+without `encoding="utf-8"` (a run without `PYTHONUTF8=1` writes cp1252 and the next run fails
+on `×`), and the JSON cache is not safe for concurrent writers.
+
+**Server-side notes for Windows hosts.** Vertica: run the `vcluster create_db` step from
+PowerShell, not Git Bash (MSYS path conversion rewrites `/opt/vertica/bin/vcluster`), and
+PowerShell 5.1 drops an empty `--password ""` argument, so the next token becomes the
+password. ColumnStore: the bind-mounted `zz-adbc.cnf` is world-writable under Docker Desktop
+and ignored; copy it into `/mnt/skysql/columnstore-container-configuration/`. Dremio: the
+first compat run right after boot hit a `$scratch` metadata race (`Object 'adbc_t' not found`
+immediately after CTAS); rerun clean.
+<!-- bigwin-end -->
+
+## First machine (i7-8550U, 7.7 GB) — historical campaign
 
 ## Verified at the shipped state — main @ b5d2791
 

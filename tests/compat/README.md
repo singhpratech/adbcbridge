@@ -99,6 +99,33 @@ the database, connection or statement) — useful for any other ODBC driver buil
 conn = dbapi.connect(driver=..., db_kwargs={"uri": ..., "adbc.odbc.sqllen_32bit": "false"})
 ```
 
+### Windows notes
+
+IBM's free Windows package is the "ODBC and CLI" zip (`ntx64_odbc_cli.zip`, clidriver
+12.1.4). Three things differ from the Linux route above, all found on the second Windows
+campaign (`bench/BENCHMARKS-windows.md`):
+
+- **Register the driver by hand under a short name.** `db2cli install -setup` writes a
+  78-character driver name (`IBM DB2 ODBC DRIVER - <install path>`) that the Windows driver
+  manager answers `IM002` for, and points it at `db2clio.dll`, which this package does not
+  ship. The driver is `clidriver\bin\db2cli64.dll` (a forwarder into `db2app64.dll`); an
+  `HKLM\SOFTWARE\ODBC\ODBCINST.INI` entry named `IBM DB2 ODBC DRIVER` with that path works.
+  `clidriver\bin` must be on `PATH`.
+- **`Authentication=SERVER` in the connection string.** With the default `SERVER_ENCRYPT`
+  every connection from python (or any process that is not `db2cli.exe`) fails `SQL1042C`
+  — `db2diag.log` shows sqlerrp `SQLEXSLC`, rc 205, the client-side security-plugin step,
+  whose gsk8/ICC libraries only `db2cli.exe`'s own side-by-side manifests can load.
+  `db2cli validate`/`execsql` therefore succeed from the same driver while everything else
+  fails, which is what made it look like a host-process problem. `DB2CODEPAGE`, the
+  working directory and a minimal environment change nothing.
+- The `DB2_CONN` override keeps `{drv}`: the harness `.format()`s it, so a literal
+  `{IBM DB2 ODBC DRIVER}` is a `KeyError`.
+
+```powershell
+$env:DB2_ODBC_DRIVER = "IBM DB2 ODBC DRIVER"
+$env:DB2_CONN = "Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;Authentication=SERVER;"
+```
+
 ## MySQL 8
 
 Server (or use the `mysql` service in `docker-compose.yml`):
@@ -740,6 +767,16 @@ Notes on this driver/server pair, all visible in the matrix entry:
   never re-derives it, so every 64-bit integer after the first NULL in that column was
   written as NULL without a diagnostic. NULLs of that type now go as `SQL_C_SBIGINT`
   (`NullParamCType` in `src/odbc_bind.c`).
+
+### Windows notes
+
+The Windows package installs `FirebirdODBC.dll` into `system32` and registers it as
+`Firebird ODBC Driver` (not `Firebird/InterBase(r) driver`, the name the older packages
+used); `fbclient.dll` from the Firebird 5 client zip has to be on `PATH` or
+`SQLDriverConnect` fails with no diagnostic. The same driver answers `SQL_DRIVER_NAME`
+`OdbcFb` on Linux and `FirebirdODBC` on Windows — the quirk block matches both since the
+second Windows campaign; before that the Windows build bound parameter arrays the driver
+silently executes one set of, and stopped at the bridge's own guard.
 
 ## TimescaleDB (PostgreSQL 16 + timescaledb)
 
@@ -1907,6 +1944,16 @@ round-trips. Should a Flight SQL server ever cause a column to be described as
 `SQL_WVARCHAR`, the existing `wchar_as_utf8` option (Firebird's OdbcFb and Virtuoso both
 need it) is the fix, added to the same `arrow flight` block in `OdbcDetectQuirks`.
 
+### Windows notes
+
+The driver's Windows build (`arrow-flight-sql-odbc` LATEST-win64, 00.09.0007, `Arrow
+Flight SQL ODBC Driver`) returns a non-BMP character through SQL_C_WCHAR as its low 16 bits
+(U+1F680 reads as U+F680) and through SQL_C_CHAR as the ANSI code page's `?`, while its
+SQL_C_BINARY conversion of a text column hands the server's UTF-8 through byte-exact. Since
+the second Windows campaign adbcbridge reads text columns from this driver as binary on
+Windows (`text_as_binary`), which passes the astral check for `flightsql`, `influxdb3` and
+`dremio` alike and is faster than the wide read.
+
 ## H2 (PostgreSQL mode) — does not work with psqlodbc
 
 H2 has no ODBC driver of its own. Its server mode can speak the PostgreSQL v3 wire
@@ -2324,6 +2371,14 @@ inserts fail with `Incorrect string value: '\xF0\x9F\x9A\x80'`. Through MySQL
 Connector/ODBC 8.4 (Windows) the entry needs `NO_SSPS=1`, which its `{no_ssps}` placeholder
 adds there.
 
+### After a container stop/start (Windows campaign)
+
+The backend processes are down again after `docker start` — the first DDL fails exactly as
+on a fresh container — so run `provision` once more. On a node that was provisioned before
+it ends with `Validating ColumnStore Engine ... fail`, but the cluster restart it performs
+is what mattered: the engine answers DDL and loads afterwards (measured: the language
+harnesses passed right after that "failed" provision).
+
 ## libSQL server (sqld) — no PostgreSQL wire protocol, so no ODBC route
 
 libSQL is Turso's fork of SQLite, and `sqld` (the `ghcr.io/tursodatabase/libsql-server`
@@ -2621,6 +2676,22 @@ For binary the entry declares `BYTE`, Informix's byte-string type (there is no
 does not configure). The clidriver describes it with IBM's own `SQL_BLOB` type code
 `-98`, which the reader now treats as a binary column — left unrecognised it fell through
 to the text default, where the driver hands the bytes back hex-encoded (`"0102"`).
+
+### Windows notes
+
+Same clidriver alias and `Authentication=SERVER` as the [Db2 Windows notes](#windows-notes),
+on the DRDA port (19089, `informix`/`in4mix`), and one more thing: **set
+`DB2CODEPAGE=1208` in the environment.** The IDS quirk sends the string parameter narrow
+(`narrow_params`, since the second Windows campaign — before it the astral parameter went
+SQL_C_WCHAR and the INSERT failed `-415 Data conversion error` on Windows), and the CLI
+driver reads a narrow parameter in the process's ANSI code page unless told it is UTF-8;
+without the variable `héllo 🚀` is stored double-encoded and reads back `hÃƒÂ©llo`.
+
+```powershell
+$env:INFORMIX_ODBC_DRIVER = "IBM DB2 ODBC DRIVER"
+$env:INFORMIX_CONN = "Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=19089;Protocol=TCPIP;Uid=informix;Pwd=in4mix;Authentication=SERVER;"
+$env:DB2CODEPAGE = "1208"
+```
 
 ## GreptimeDB 1.1
 
@@ -3555,6 +3626,16 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down ignite
 docker rm -f adbcbridge-ignite
 ```
 
+### Windows notes
+
+`ignite.odbc.dll` (the 2.18.0 installer, registered as `Apache Ignite`) is an ANSI-only
+driver — no `W` entry points — whose narrow path is UTF-8. The Windows driver manager maps
+every W call onto such a driver through the ANSI code page, so through pyodbc a wide fetch
+reads `hÃ©llo ðŸš€` and a statement literal `'héllo'` matches nothing. adbcbridge keeps its
+narrow fetch route (`wchar_as_utf8`) alive on Windows for this driver and sends caller
+statement text through the narrow entry points (`narrow_sql`), both since the second
+Windows campaign; with them the entry passes on Windows.
+
 ## OpenSearch 3.8 (SQL plugin)
 
 OpenSearch is a search engine, not a SQL database, but every distribution bundles the
@@ -4357,6 +4438,19 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down ydb
 docker rm -f adbcbridge-ydb
 ```
 
+### Windows notes
+
+psqlodbc 16 (`PostgreSQL Unicode 16(x64)`, from the 16.00.0007 msi) is the driver here as
+on the other platforms; psqlodbc 18 cannot connect. The `adbcuser` role and its grant have
+to be recreated after every `docker compose up` that recreates the container — the image
+keeps nothing — and a container whose `/health` answers `OVERLOADED` right after boot makes
+the first statement hang indefinitely rather than fail; wait for `healthy`, or recreate.
+
+```sh
+docker exec compat-ydb-1 /ydb -e grpc://localhost:2136 -d /local yql -s \
+  "CREATE USER adbcuser PASSWORD 'Ydb!Bridge2026'; GRANT ALL ON \`/local\` TO adbcuser;"
+```
+
 ## Vertica 25.3
 
 Vertica is a columnar analytics warehouse (OpenText Analytics Database since the
@@ -4552,6 +4646,26 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down vertica
 
 The database lives in the container's own filesystem (`/home/dbadmin/data`), so removing
 the container removes it; `setup_vertica.sh` starts over from scratch on the next one.
+
+### After a container stop/start (Windows campaign)
+
+The database does not come back with the container: `docker start` leaves the node agent
+and the server down, and the container usually gets a **different IP** on the compose
+network, which the catalog still names — `vcluster start_db` then fails with
+`host <new ip> does not exist in the database`. Start the agent, re-IP, start:
+
+```sh
+docker exec -u dbadmin compat-vertica-1 /opt/vertica/bin/manage_node_agent.sh start node_management_agent
+# old = the address the catalog holds (setup_vertica.sh printed it), new = the container's current one
+docker exec -u dbadmin compat-vertica-1 bash -c 'printf "[{\"from_address\":\"172.18.0.8\",\"to_address\":\"172.18.0.11\"}]" > /tmp/reip.json;
+  /opt/vertica/bin/vcluster re_ip --db-name VMart --hosts 172.18.0.11 --catalog-path /home/dbadmin/data --re-ip-file /tmp/reip.json;
+  /opt/vertica/bin/vcluster start_db --db-name VMart --hosts 172.18.0.11 --catalog-path /home/dbadmin/data --password "" --timeout 120'
+```
+
+`start_db`'s own poll fails the same way `create_db`'s does (the HTTPS service has no
+certificate) after the node is already up; `vsql -c 'SELECT version()'` is the check that
+counts. `re_ip` takes no `--password`, and `start_db`'s wait flag is `--timeout`, not
+`create_db`'s `--startup-timeout`.
 
 ## OceanBase CE 4.4.2 (MySQL 5.7.25 wire)
 
@@ -5089,6 +5203,22 @@ which is the only identifier quote TDengine's parser has.
 docker rm -f adbcbridge-tdengine
 ```
 
+### Windows notes
+
+The Windows client package (`TDengine-client-3.4.2.5-Windows-x64.exe`, which also
+installs `taos_odbc\x64\bin\taos_odbc.dll` as the `TDengine` driver) cannot speak the native
+protocol to the 3.3.6 server the compose file runs: TCP connects and the server drops the
+connection (`RPC ERROR ... read invalid packet` in `taosd`'s log). It connects over
+websocket through taosadapter instead — publish port 6041 with a compose override and use
+`Driver={drv};URL={{ws://root:taosdata@127.0.0.1:16041}};TIMESTAMP_AS_IS=1;` as
+`TDENGINE_CONN` (braces doubled: the harness `.format()`s the string). That reads every
+column but the NCHAR one: taos_odbc takes the client character set from `GetACP()` and
+ignores `CHARSET_FOR_COL_BIND`/`CHARSET_ENCODER_FOR_COL_BIND`, so with a 1252 system code
+page `héllo 🚀` fails `[iconv] Character set conversion for UTF-32LE to CP1252 failed`
+through SQL_C_CHAR and SQL_C_WCHAR alike (pyodbc identical) and is already stored
+double-encoded on the way in. Only a UTF-8 system code page changes that; the entry is
+recorded as a driver-side FAIL on Windows.
+
 ## Google Cloud Spanner (emulator + PGAdapter 0.55.2)
 
 Cloud Spanner has no ODBC driver and no PostgreSQL wire protocol of its own. What it has
@@ -5520,6 +5650,24 @@ Two more facts about the mapping, both of them the connector's and neither costi
 * **A BSON date is milliseconds.** `ts` keeps 123 of the workload's 123456 microseconds
   (within the default `ts_us` tolerance), and `d` — there being no DATE type — is a
   midnight timestamp, which the workload also already allows.
+
+### After a container recreate (Windows campaign)
+
+`mongosqld` is not part of the image and is not in the container's entrypoint, so it has to
+be started again (the `docker exec -d ... mongosqld` line above) after every container
+start; and a `docker compose up -d mongodbbi` run *without* `MONGODB_BI_DIR` in the
+environment recreates the container with nothing mounted at `/opt/mongobi` — the
+collections survive (they are on the data volume), the binary does not. Stage the tarball
+plus the two OpenSSL 1.1 libraries into a directory once and always pass it:
+
+```sh
+MONGODB_BI_DIR=/path/to/bi docker compose -f tests/compat/docker-compose.yml --profile extra up -d mongodbbi
+docker exec -d adbcbridge-mongodbbi /opt/mongobi/mongosqld --addr 0.0.0.0:3307 \
+  --mongo-uri mongodb://127.0.0.1:27017 --schema /etc/mongodbbi.drdl --logPath /tmp/mongosqld.log --logAppend
+```
+
+On Windows the staging (`tar`, `dpkg-deb -x`) is easiest inside the image itself:
+`docker run --rm --entrypoint bash -v <dir>:/m mongo:7 -c 'cd /m && tar xzf ... && dpkg-deb -x ... ssl && cp ... bi/'`.
 
 ### Clean up
 
