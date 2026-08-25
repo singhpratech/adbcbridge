@@ -331,10 +331,10 @@ compat sqlite      PASS  (SQLite (via ODBC) 3.51.0)
 compat postgres    PASS  (PostgreSQL (via ODBC) 15.15.0)
 ```
 
-Final macOS tally: **40 pass · 1 fail · 4 no driver for this OS · 1 server not runnable here**
+Final macOS tally: **41 pass · 0 fail · 4 no driver for this OS · 1 server not runnable here**
 (46). The four "driver aborts" turned out to be unixODBC's driver manager, not the drivers (batch 5
-below): Flight SQL, InfluxDB 3 and Dremio pass through an iODBC-built bridge, and Virtuoso fails
-there only its Unicode-literal step.
+below): Flight SQL, InfluxDB 3, Dremio and — after one quirk stopped forcing its narrow path on a
+four-byte build — Virtuoso all pass through an iODBC-built bridge.
 Databend, GreptimeDB, Doris and StarRocks fail through MariaDB Connector/ODBC and pass through
 MySQL's own connector via an iODBC-built bridge (batch 4 below); both results are kept.
 
@@ -446,7 +446,7 @@ Through a bridge built against iODBC (f49e27f, 0 warnings), read-only entries, `
 | flightsql | PASS (`sqlflite (via ODBC) 00.00.0000`, DuckDB 1.1.1) | 8,260,509 |
 | influxdb3 | PASS (`InfluxDB IOx (via ODBC) 02.00.0000`) | 8,741,131 |
 | dremio | PASS (`Dremio Server (via ODBC) 26.00.0005`) | 1,341,476 |
-| virtuoso | FAIL at the Unicode-literal step only: `héllo` in statement text matches nothing by default; with `CHARSET=UTF-8` it matches but reads back double-encoded (`hÃ©llo`); `wideAsUTF16=Y` changes nothing — a charset quirk of the driver's wide path, not yet keyed. Connect, DDL, DML, GetObjects and error mapping pass | — |
+| virtuoso | PASS (`OpenLink Virtuoso (via ODBC) 07.20.3243`), ingest 3,128 (array 3,065) — after the `virtodbc` quirk stopped forcing the narrow path on a four-byte build. The experiment that settled it, bridge at 2b81439 with a local knob: narrow path, conn unchanged → `statement literal 'héllo' matched nothing`; narrow + `CHARSET=UTF-8` → `hÃ©llo ð` (the UTF-8 bytes widened one per unit); wide path, conn unchanged → **PASS**; wide + `CHARSET=UTF-8` → literal matches nothing. `bigint_param_as_string` and `no_param_arrays` stay, both still needed. A narrow string literal in a `SELECT` (`SELECT 'héllo 🚀'`) comes back as Virtuoso's 8-bit VARCHAR bytes — server semantics, not a failure; NVARCHAR columns and bound parameters are fine | 252,282 |
 
 No pyodbc / odbc-api cells (unixODBC-linked clients); no language-harness rows (the toolchains
 had been torn down). Side finding on the Flight SQL driver: `LogEnabled=true` with a real

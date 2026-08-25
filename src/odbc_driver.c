@@ -771,8 +771,14 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // parameter is read as if it were narrow, so "héllo 🚀" stores as its first byte pair
     // ("0\0"). Its narrow path is UTF-8 already -- Virtuoso's own charsets are all
     // single-byte, and an unqualified connection passes narrow bytes through -- so stay
-    // on it.
-    conn->reader_opts.wchar_as_utf8 = true;
+    // on it.  That holds for the 2-byte-SQLWCHAR builds (unixODBC, Linux).  Built against
+    // iODBC (4-byte SQLWCHAR, the width the macOS driver is compiled to) the picture is
+    // the reverse, measured on macOS 26 with Homebrew 7.2.17: the narrow path's charset
+    // is single-byte there (a 'héllo' statement literal never matches the NVARCHAR data,
+    // and CHARSET=UTF-8 makes reads come back one byte per unit), while the wide path
+    // is correct end to end -- parameters, text columns, LIKE literals, emoji.  So the
+    // narrow route is taken only on a 2-byte build.
+    if (sizeof(SQLWCHAR) < 4) conn->reader_opts.wchar_as_utf8 = true;
     // SQL_C_SBIGINT parameters are read as 0 without a diagnostic (the driver's
     // conversion table has no 64-bit integer); numeric text converts exactly.
     conn->reader_opts.bigint_param_as_string = true;
