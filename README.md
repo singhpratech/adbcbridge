@@ -5,6 +5,9 @@ One plain-C11 shared library that turns every ODBC driver on your machine into a
 Arrow-native ADBC driver — columnar record batches out, bulk ingest in — from Python,
 Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
 
+Site and docs: <https://adbcbridge.org> · Launch write-up with the numbers:
+<https://theaivibe.org/blog/adbcbridge-apache-arrow-adbc-driver-for-any-odbc-database>
+
 ```
 Python / R / Go / Rust / Java / C#
         │  ADBC driver manager
