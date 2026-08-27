@@ -110,7 +110,7 @@ See [Native delegation](../how-it-works/delegation.md).
 Python, R, Go, Rust, C++, C# and Java — anything that speaks the ADBC driver
 manager. There are convenience packages for five of them — a Python wheel, a Rust
 crate, a NuGet package, a Maven jar and a Go module — attached to the GitHub
-Release; registry publication (PyPI first) is in progress. See
+Release, and the first three also on PyPI, crates.io and nuget.org. See
 [Which package do I install for my language?](#which-package-do-i-install-for-my-language)
 
 ---
@@ -182,7 +182,8 @@ One driver library, five wrapper packages that locate and load it:
 
 All five are built, tested and attached to every
 [GitHub Release](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0);
-registry publication (PyPI first) is in progress. Each resolves the library the
+the wheel, crate and nupkg are also on PyPI, crates.io and nuget.org (Maven Central
+is still to come). Each resolves the library the
 same way and raises an error when it cannot; Rust, C#, Java and Go list every
 place they looked. See
 [Language packages](../../README.md#language-packages).
@@ -377,15 +378,15 @@ Apache-2.0. Every non-vendored source file carries an
 ### What does the 0.1.x version mean?
 
 Early. The read/write path, the 46-database matrix and the five language packages
-are done; a conformance suite and registry publication are in progress. `v0.1.0`
-was tagged 2026-08-25 with four platform libraries, four wheels plus an sdist, a
-crate, a NuGet package and a jar. Treat the API as stabilising, not stable. See
+are done and 0.1.0 is on PyPI, crates.io and nuget.org; a conformance suite and Maven
+Central are in progress. `v0.1.0` was tagged 2026-08-25 with four platform libraries,
+four wheels plus an sdist, a crate, a NuGet package and a jar. Treat the API as stabilising, not stable. See
 the [roadmap](../ROADMAP.md).
 
 ### What is on the roadmap?
 
 For the ODBC bridge: a driver-bootstrap installer that fetches the open-licence
-drivers, registry publication (PyPI first), the ADBC Driver Foundry validation
+drivers, Maven Central publication, the ADBC Driver Foundry validation
 suite, and Windows parity for prefetch and parallel ingest. Beyond ODBC: a
 **JDBC bridge** (load a JVM in-process and drive any JDBC driver) and, later, an
 **OLE DB bridge** for Windows. Full detail and status in

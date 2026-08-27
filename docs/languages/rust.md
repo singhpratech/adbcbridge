@@ -86,7 +86,7 @@ manager (useful for iODBC or a non-standard prefix):
 
 ## Adding the dependency
 
-**From crates.io** (once published):
+**From crates.io**:
 
 ```toml
 [dependencies]
@@ -94,7 +94,7 @@ adbcbridge = "0.1"
 adbc_core = "0.24"
 ```
 
-**From git**, before the crate is on crates.io:
+**From git** (a pinned tag, if you prefer the repository over the registry):
 
 ```toml
 [dependencies]
@@ -457,7 +457,7 @@ bounded identically.
   ADBC Driver Foundry validation suite runs against the driver from
   `tests/validation/` (latest results in `tests/validation/RESULTS.md`; driver
   defects it found are still being worked through); prebuilt driver tarballs
-  ship on GitHub Releases, but the crate is not yet on crates.io.
+  ship on GitHub Releases and the crate is on crates.io.
 - **Windows: no prefetch, no parallel ingest.** The prefetch pipeline
   (`adbc.odbc.prefetch`) and the ingest fan-out (`adbc.odbc.ingest_connections`)
   both use POSIX threads and are compiled out on Windows. On Windows those

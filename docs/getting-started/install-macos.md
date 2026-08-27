@@ -120,7 +120,7 @@ release build passes `_PYTHON_HOST_PLATFORM=macosx-14.0-arm64`, which the wheel
 tag normalises to).
 
 ```sh
-pip install adbcbridge          # once published to PyPI
+pip install adbcbridge          # from PyPI
 # or a downloaded release wheel:
 pip install adbcbridge-0.1.0-py3-none-macosx_14_0_arm64.whl
 pip install adbc-driver-manager pyarrow
