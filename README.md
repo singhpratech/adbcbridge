@@ -90,7 +90,7 @@ bulk ingest, metadata, errors and known limitations.
 ### Python
 
 ```sh
-pip install adbcbridge-0.1.0-py3-none-<platform>.whl   # wheel from the release page; PyPI next
+pip install adbcbridge                                  # PyPI; the same wheels are on the release page
 ```
 ```python
 import adbcbridge
@@ -105,7 +105,7 @@ its way. Full page: [`docs/languages/python.md`](docs/languages/python.md).
 
 ```toml
 [dependencies]
-adbcbridge = { git = "https://github.com/singhpratech/adbcbridge", tag = "v0.1.0" }   # crates.io next
+adbcbridge = "0.1.0"                                    # crates.io; the default `bundled` feature compiles the driver
 ```
 ```rust
 let mut driver = adbcbridge::load()?;               // compiles the driver from bundled sources
@@ -119,7 +119,7 @@ Full page: [`docs/languages/rust.md`](docs/languages/rust.md).
 ### C#
 
 ```sh
-dotnet add package AdbcBridge --version 0.1.0 --source <folder holding the release .nupkg>   # nuget.org next
+dotnet add package AdbcBridge --version 0.1.0          # nuget.org; the .nupkg is on the release page too
 ```
 ```csharp
 using AdbcConnection connection = Driver.Connect("Driver=SQLite3;Database=first.db;");
@@ -237,9 +237,10 @@ crate, the nupkg and the jar — are built and attached to every
 [release](https://github.com/singhpratech/adbcbridge/releases) together with the bare
 libraries (the release workflow tests the crate; the bindings' own suites live under
 `tests/`); the Go module is fetched with `go get` from the tagged source (`go/v0.1.0`,
-the sub-module tag). None of them is
-on PyPI, crates.io, NuGet or Maven Central yet — install from the release assets;
-registry publication, PyPI first, is the next step.
+the sub-module tag). The wheel is on [PyPI](https://pypi.org/project/adbcbridge/),
+the crate on [crates.io](https://crates.io/crates/adbcbridge) and the nupkg on
+[nuget.org](https://www.nuget.org/packages/AdbcBridge) (all 0.1.0); the jar is not on Maven
+Central yet — install it from the release assets.
 
 | Language | Package | What it gives you | Where |
 |---|---|---|---|
@@ -260,9 +261,9 @@ place they looked.
 
 Early (0.1.0). Working: everything under *What it does*, on Linux, macOS (arm64) and
 Windows (x64 and Win32 built and tested in CI on every push; the Windows build lacks
-prefetch and parallel ingest). Next: the ADBC Driver Foundry validation suite, registry
-publication (PyPI first), a driver bootstrap for the open-licence ODBC drivers, the Win32
-thread shim; then a JDBC bridge on the same model —
+prefetch and parallel ingest); 0.1.0 on PyPI, crates.io and nuget.org. Next: the ADBC Driver
+Foundry validation suite, Maven Central, a driver bootstrap for the open-licence ODBC
+drivers, the Win32 thread shim; then a JDBC bridge on the same model —
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Upstream: giving back

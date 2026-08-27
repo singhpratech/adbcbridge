@@ -85,10 +85,19 @@ automatically.
 
 ## Install
 
-### From a GitHub Release now (local NuGet source)
+### From nuget.org
 
-The `.nupkg` is attached to each release. Download it, register the folder that
-holds it as a package source, then add the package:
+```sh
+dotnet add package AdbcBridge --version 0.1.0
+```
+
+The package carries the native library for `linux-x64`, `linux-arm64`, `osx-arm64`
+and `win-x64`, so nothing else needs installing beyond an ODBC driver for your database.
+
+### From a GitHub Release (local NuGet source)
+
+The same `.nupkg` is attached to each release. On a machine without registry access,
+download it, register the folder that holds it as a package source, then add the package:
 
 ```sh
 # 1. Download AdbcBridge.0.1.0.nupkg from the Release into ./localnuget/
@@ -106,15 +115,6 @@ The release `.nupkg` is available on the project's GitHub Releases page at
 <https://github.com/singhpratech/adbcbridge/releases>. The package's own
 readme, [`csharp/README.md`](../../csharp/README.md), is the short form of this
 page and ships inside the `.nupkg`.
-
-### From nuget.org once published
-
-```sh
-dotnet add package AdbcBridge
-```
-
-Registry publication follows the first releases; until then, use the local
-source above.
 
 ### With only the upstream package
 
@@ -604,7 +604,7 @@ result.
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- From nuget.org once published; until then, add a local source:
+    <!-- From nuget.org; for a release .nupkg instead, add a local source:
          dotnet nuget add source "$PWD/localnuget" --name adbcbridge-local -->
     <PackageReference Include="AdbcBridge" Version="0.1.0" />
   </ItemGroup>

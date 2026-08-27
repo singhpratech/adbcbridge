@@ -24,8 +24,8 @@ ODBC is the first bridge; the name leaves room for the others.
 | ADBC Driver Foundry validation suite: driver defects D1–D14 | in progress |
 | Foundry listing (adbc-drivers.org) | next |
 | Release workflow: Linux x86_64/aarch64 (manylinux_2_28), macOS arm64 and Windows x64 libraries + Python wheels built on tag, attached to the GitHub Release (`.github/workflows/release.yml`) | done — [v0.1.0](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0) on 2026-08-25: 4 libraries, 4 wheels + sdist, crate, nupkg, jar |
-| PyPI via trusted publishing (`.github/workflows/publish-pypi.yml`, dispatched by hand with the tag once the Release workflow has published it) | next |
-| Language packages: Python wheel (`python/`), Rust crate (`rust/`), NuGet (`csharp/`), Maven (`java/`), Go module (`go/`) — built and attached to every release (the crate tested there, the others by their own suites under `tests/`); registry publication (PyPI first) is the go-public step | in progress |
+| PyPI via trusted publishing (`.github/workflows/publish-pypi.yml`, dispatched by hand with the tag once the Release workflow has published it); NuGet the same way (`publish-nuget.yml`); crates.io from a checkout of the tag | done (0.1.0 on PyPI, crates.io and nuget.org, 2026-08-26) |
+| Language packages: Python wheel (`python/`), Rust crate (`rust/`), NuGet (`csharp/`), Maven (`java/`), Go module (`go/`) — built and attached to every release (the crate tested there, the others by their own suites under `tests/`); PyPI, crates.io and nuget.org carry 0.1.0; Maven Central is the remaining registry | in progress |
 | Databases that need vendor downloads behind a login: Teradata, SAP HANA, Snowflake, Databricks/Spark (Simba), Hive | help wanted |
 
 ## 2. JDBC bridge (`libadbc_driver_jdbc`) — next

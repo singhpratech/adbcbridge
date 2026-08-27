@@ -103,7 +103,7 @@ The Python wheel carries the compiled library inside it, so `pip install` gives
 you both the binding and the driver in one step:
 
 ```sh
-pip install adbcbridge          # once published to PyPI
+pip install adbcbridge          # from PyPI
 # or, from a downloaded release wheel (the aarch64 wheel is named likewise):
 pip install adbcbridge-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 pip install adbc-driver-manager pyarrow

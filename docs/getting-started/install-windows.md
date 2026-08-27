@@ -65,7 +65,7 @@ The Windows release asset is `adbcbridge-<tag>-win-x64.tar.gz`, containing
 The Windows wheel bundles the DLL. Install it, plus the ADBC client:
 
 ```
-pip install adbcbridge          # once published to PyPI
+pip install adbcbridge          # from PyPI
 # or, from a downloaded release wheel:
 pip install adbcbridge-0.1.0-py3-none-win_amd64.whl
 pip install adbc-driver-manager pyarrow
