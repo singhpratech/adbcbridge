@@ -60,6 +60,13 @@ ul{padding-left:20px}li{margin:4px 0;max-width:80ch}
 footer{color:var(--muted);font-size:.8rem;margin-top:40px;border-top:1px solid var(--line);padding-top:12px}
 @media (prefers-reduced-motion:no-preference){th:hover{color:var(--accent)}}
 </style>
+<nav class="topbar" style="max-width:1180px;margin:0 auto;padding:14px 24px 0;display:flex;align-items:center;gap:18px;font-size:.92rem">
+  <a class="brand" href="/" title="adbcBridge home" style="font-family:'IBM Plex Serif',Georgia,serif;font-weight:600;font-size:1.15rem;color:var(--ink);text-decoration:none">adbcBridge <small style="font-weight:500;color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase">Bench</small></a>
+  <span style="flex:1"></span>
+  <a href="/" style="color:var(--muted);text-decoration:none">Home</a>
+  <a href="/docs/" style="color:var(--muted);text-decoration:none">Docs</a>
+  <a href="https://github.com/singhpratech/adbcbridge" style="color:var(--muted);text-decoration:none">GitHub</a>
+</nav>
 <main>
 <h1>adbcBridge — what it reaches, and how fast</h1>
 <p class="sub">A plain-C ADBC driver that turns any ODBC driver into an Arrow-native one. The Linux figures on this page were measured on one Linux box (Linux Mint 22.3, Core i9-13900HK, 31 GiB) on 2026-08-23 and 24 with servers in local Docker, build <code>main@db03415</code>; the macOS and Windows campaigns that followed are summarised in the per-platform line below and detailed in their own files.</p>
