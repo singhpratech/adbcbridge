@@ -1,9 +1,19 @@
 # adbcBridge
 
+[![CI](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/adbcbridge)](https://pypi.org/project/adbcbridge/)
+[![crates.io](https://img.shields.io/crates/v/adbcbridge)](https://crates.io/crates/adbcbridge)
+[![NuGet](https://img.shields.io/nuget/v/AdbcBridge)](https://www.nuget.org/packages/AdbcBridge)
+[![Go Reference](https://pkg.go.dev/badge/github.com/singhpratech/adbcbridge/go.svg)](https://pkg.go.dev/github.com/singhpratech/adbcbridge/go)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 **An [ADBC](https://arrow.apache.org/adbc/) driver for any ODBC data source.**
 One plain-C11 shared library that turns every ODBC driver on your machine into an
 Arrow-native ADBC driver — columnar record batches out, bulk ingest in — from Python,
 Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
+
+Site and docs: <https://adbcbridge.org> · Launch write-up with the numbers:
+<https://theaivibe.org/blog/adbcbridge-apache-arrow-adbc-driver-for-any-odbc-database>
 
 ```
 Python / R / Go / Rust / Java / C#
