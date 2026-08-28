@@ -431,8 +431,8 @@ DBS = {
         # The generated ingest DDL asks for the portable ISO type names (see
         # `ansi_ddl_type_names` in src/odbc_driver.c) and Doris accepts all of them --
         # BIGINT, TEXT, DATE, BOOLEAN, DECIMAL(p,s) -- except the one for a double: it has
-        # DOUBLE but neither "DOUBLE PRECISION" nor "REAL" ("extraneous input
-        # 'PRECISION'").  Sending that column as a decimal, a type it does name the same
+        # DOUBLE (and takes REAL as an alias of it) but not "DOUBLE PRECISION"
+        # ("extraneous input 'PRECISION'").  Sending that column as a decimal, a type it does name the same
         # way, keeps the whole ingest -- create, append, replace -- under test.  adbc_t's
         # own `f DOUBLE` column is unaffected.  Same fix as `greptimedb`.
         ingest_types={pa.float64(): pa.decimal128(12, 3)},
@@ -648,7 +648,8 @@ DBS = {
         # so no tolerance flag is needed here.  See README.md.
         ident=str.upper,
         # Db2's SQL_LONGVARCHAR is LONG VARCHAR, which it will not sort, group or
-        # de-duplicate on and writes ~700x slower than a VARCHAR; ingest DDL asks for the
+        # de-duplicate on and writes tens of times slower than a VARCHAR (no bulk-insert
+        # path: ~7k rows/s whatever the batch size, 2026-08-28); ingest DDL asks for the
         # widest VARCHAR instead.  See ddl_string_as_max_varchar in src/odbc_internal.h.
         text_sortable=True),
     "informix": dict(
@@ -733,9 +734,11 @@ DBS = {
         # is PostgreSQL 18 + citus 14), so psqlodbc drives it and the plain PostgreSQL
         # workload applies unchanged.  `setup` turns the single container into a one-node
         # Citus cluster: citus_set_coordinator_host() registers the coordinator in
-        # pg_dist_node, and shouldhaveshards makes it hold shards itself -- without that
-        # create_distributed_table() fails with "replication_factor (1) exceeds number of
-        # worker nodes (0)".  All three statements are idempotent, which matters because
+        # pg_dist_node, and shouldhaveshards makes it hold shards itself.  A fresh node
+        # needs neither (create_distributed_table() registers the coordinator itself,
+        # 2026-08-28), but a coordinator registered without shouldhaveshards makes
+        # create_distributed_table() fail with "replication_factor (1) exceeds number of
+        # worker nodes (0)", so both are set.  All three statements are idempotent, which matters because
         # bench/matrix_bench.py replays `setup` on every connection it opens.
         env="CITUS_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15436;Database=adbc;Uid=adbc;Pwd=adbc;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
@@ -1894,7 +1897,7 @@ def check_text_sortable(cur, cfg, ing_name, n):
     ingest DDL asks for, an Arrow string column having no declared width -- can name a
     type the server then refuses to sort, group or de-duplicate on.  Db2's is LONG
     VARCHAR, and ORDER BY, GROUP BY and DISTINCT on one are all SQL0134N, "improper use
-    of a string column"; the column is also written about 700x slower than an ordinary
+    of a string column"; the column is also written tens of times slower than an ordinary
     VARCHAR (see ddl_string_as_max_varchar in src/odbc_internal.h).  So an ingested table
     that cannot be sorted on its own text column is a defect worth a test.
 
