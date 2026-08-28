@@ -3,8 +3,10 @@
 
 Driving 46 databases through one driver across three operating systems turns up defects
 that belong to other projects. This file is the record: what was found, where it was
-reported, and what is documented here but not yet filed. Each entry stands on evidence
-that anyone can reproduce without adbcBridge in the stack.
+reported, and what is documented here but not yet filed. Each reported entry stands on
+evidence that anyone can reproduce without adbcBridge in the stack; the not-yet-reported
+table records what the compatibility run observed, and each item is verified the same way
+before it is filed.
 
 ## Reported
 
@@ -13,6 +15,9 @@ that anyone can reproduce without adbcBridge in the stack.
 | 2026-08-25 | unixODBC | [lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239) | The driver manager overwrites its own stack and heap, and the process aborts, on the first `SQL_ERROR` from a driver whose `SQLWCHAR` is 4 bytes (`extract_diag_error_w`, `SQLWCHAR sqlstate[6]`). Reproduces on 2.3.12 and 2.3.14. Filed with a driver-independent reproduction: a 40-line fake driver compiled with `SQL_WCHART_CONVERT` triggers it on Linux, its 2-byte twin does not; plus lldb frames from two real macOS drivers and a fix suggestion. Same crash as the earlier #227 (Informix), which had been closed without a reproduction. | open — the maintainer committed a mismatch check the same day (`a2acae7`: doubled buffers, sentinel test, message before abort); a follow-up with a test table and a patch (report the mismatch as a diagnostic instead of aborting; prime the sentinel on the ODBC 2 path) is in discussion |
 | 2026-08-25 | OpenLink Virtuoso | [openlink/virtuoso-opensource#1469](https://github.com/openlink/virtuoso-opensource/issues/1469) | The macOS driver (Homebrew 7.2.17) is built to iODBC's 4-byte `SQLWCHAR` and nothing says so; through unixODBC every application dies on its first SQL error. Asks for a unixODBC-width build or a documented iODBC-only statement; includes the UTF-8 statement-literal question. | open |
 | 2026-08-25 | Dremio / Arrow Flight SQL ODBC | [dremio/warpdrive#16](https://github.com/dremio/warpdrive/issues/16) | The Apple Silicon build 0.9.7 is iODBC-width, undocumented, and aborts under unixODBC on any SQL error (three servers); `LogEnabled=true` makes `SQLAllocHandle(ENV)` fail with `IM004` (an uncaught exception in the logger); the pkg ships `arrow-odbc.ini.orig` but no `arrow-odbc.ini`; the docs contradict themselves on Apple Silicon support. | open |
+| 2026-08-28 | Firebird ODBC (OdbcFb) | [FirebirdSQL/firebird-odbc-driver#299](https://github.com/FirebirdSQL/firebird-odbc-driver/issues/299) | Column-wise parameter arrays step fixed-length C types (`SQL_C_SLONG`, `SQL_C_SBIGINT`, `SQL_C_DOUBLE`, dates, timestamps) at the `BufferLength` stride, which the specification says is ignored for those types; every row receives row 1's values and the NULL indicator lands in the wrong row, with `SQL_SUCCESS` throughout. `SQL_C_CHAR` arrays are correct. Filed with three plain-ODBC C programs; reproduces on 3.0.1 and 3.5.0-rc1; row-wise binding works around it. | open |
+| 2026-08-28 | Firebird ODBC (OdbcFb) | [FirebirdSQL/firebird-odbc-driver#300](https://github.com/FirebirdSQL/firebird-odbc-driver/issues/300) | Once a NULL has been bound to a `SQL_BIGINT` parameter with a character C type (`SQL_C_DEFAULT` or `SQL_C_CHAR`), every later `SQL_C_SBIGINT` rebind of that parameter writes NULL; `INTEGER` with the same pattern is fine. Reproduces on 3.0.1 and 3.5.0-rc1. | open |
+| 2026-08-28 | Firebird ODBC (OdbcFb) | [FirebirdSQL/firebird-odbc-driver#301](https://github.com/FirebirdSQL/firebird-odbc-driver/issues/301) | `SQLPrepare` and `SQLExecDirect` discard `SQL_ATTR_ROWS_FETCHED_PTR` and `SQL_ATTR_ROW_STATUS_PTR` set before them, so a block cursor never learns how many rows a fetch returned; set after them they work. Reproduces on 3.0.1 and 3.5.0-rc1. | open |
 
 ## Documented here, not yet reported
 
