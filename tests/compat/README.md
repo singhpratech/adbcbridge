@@ -306,7 +306,7 @@ Two settings in the entry's connection string are load-bearing.
 Prepare is not support in Databend. (1105) (SQLPrepare)
 ```
 
-so every parameterised statement fails at `SQLPrepare`. With `NO_SSPS=1` the connector
+so any `SQLPrepare` -- even `SELECT 1` with no parameter -- fails there. With `NO_SSPS=1` the connector
 stops using the server-side prepare protocol and substitutes bound parameters into the
 SQL text itself, sending each statement as a plain query.
 
@@ -357,8 +357,8 @@ parameter set either way.
 
 **MySQL type names in ingest DDL** (`ansi_ddl_type_names`). `SQLGetTypeInfo` answers
 with MySQL's type system whatever the server is -- `bit` for `SQL_BIT`, `long varchar` for
-`SQL_LONGVARCHAR`, `long varbinary`, `datetime` -- and Databend rejects most of those
-names:
+`SQL_LONGVARCHAR`, `long varbinary`, `datetime` -- and Databend rejects three of those
+names (`bit`, `long varchar`, `long varbinary`; `bigint`, `double`, `varchar(n)`, `varbinary(n)`, `date`, `datetime`, `decimal(p,s)` are accepted):
 
 ```
 CREATE TABLE `adbc_ing` (`a` bigint, `b` long varchar, `c` double, `d` date, `e` bit)
@@ -4036,7 +4036,7 @@ Percona and MatrixOne (all transactional, so outside this branch entirely) pay f
 | `ddl … DISTRIBUTED BY RANDOM BUCKETS AUTO` | the same server requirement as above, for the one table this file writes itself. |
 | `bool_type="int8"` | `BOOLEAN` goes over the MySQL wire as `TINYINT(1)` → `SQL_TINYINT`, exactly as MySQL's own does. |
 | ``quote="`"`` | Doris **accepts** `ANSI_QUOTES` in `sql_mode` and then ignores it: with the mode set, `SELECT "a" FROM t` still returns the constant `'a'` for every row rather than the column, silently. Its identifiers are backtick-quoted, and since no `ANSI_QUOTES` is set Connector/ODBC reports the backtick as `SQL_IDENTIFIER_QUOTE_CHAR`, so `adbc_ingest` quotes correctly on its own — it is this file's SQL that has to be told. Same shape as `greptimedb`. |
-| `ingest_types={pa.float64(): pa.decimal128(12, 3)}` | Doris has `DOUBLE` but neither `DOUBLE PRECISION` nor `REAL` (`extraneous input 'PRECISION'`), and `DOUBLE PRECISION` is what the portable ingest DDL asks for. Sending that column as a decimal — a type Doris names the same way — keeps create/append/replace ingest under test. `adbc_t`'s own `f DOUBLE` column is unaffected. Same fix as `greptimedb`. |
+| `ingest_types={pa.float64(): pa.decimal128(12, 3)}` | Doris has `DOUBLE` (and takes `REAL` as an alias of it) but not `DOUBLE PRECISION` (`extraneous input 'PRECISION'`), and `DOUBLE PRECISION` is what the portable ingest DDL asks for. Sending that column as a decimal — a type Doris names the same way — keeps create/append/replace ingest under test. `adbc_t`'s own `f DOUBLE` column is unaffected. Same fix as `greptimedb`. |
 | `big_rows=2000` | ingest runs at ~2.2k rows/s (below), so 5000 rows would spend a couple of seconds for nothing; 2000 still crosses the reader's 1024-row batch boundary, which is what the step is for. |
 
 Everything else runs on the generic path: the emoji round-trip, `DATE`, `DATETIME(6)`
