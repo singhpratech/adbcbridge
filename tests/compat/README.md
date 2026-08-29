@@ -1415,8 +1415,15 @@ ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
 
 ### Notes
 
-No driver quirk was needed: psqlodbc drives RisingWave the way it drives PostgreSQL, and
-every part of the workload — typed parameters, NULLs, `BYTEA`, emoji, microsecond
+No `adbc.odbc.*` quirk was needed, but the connection string carries psqlodbc's
+`UseServerSidePrepare=0`: over the extended protocol psqlodbc names every server-side
+statement `_PLAN0x<statement-handle address>`, and RisingWave keeps that name after the
+client closes the statement, so the next `SQLPrepare` under a reused name fails
+``XX000 Failed to prepare the statement: Duplicated statement name`` — the ordinary
+allocate/prepare/execute/free loop hits it on its second query, with or without
+parameters (handles kept open concurrently get distinct names and all succeed, and
+`SQLExecDirect` never collides). The simple protocol has no statement names. With that
+set, every part of the workload — typed parameters, NULLs, `BYTEA`, emoji, microsecond
 timestamps, parameter arrays on bulk ingest, batched reads, `GetObjects`,
 `GetTableSchema`, error text — works unchanged. Two things about the *server* shape the
 entry:
@@ -1425,14 +1432,16 @@ entry:
   so a `SELECT` issued immediately after an `INSERT` or an `adbc_ingest` legitimately
   returns nothing — with the `refresh` key removed the entry fails at the first read,
   with zero rows, every time. The entry sets `refresh="FLUSH"` and `test_matrix.py` runs
-  it after each write; `FLUSH` is RisingWave's own read-your-writes statement and waits
-  for that barrier. It takes no table name, so the `"{}"` the other entries use for one
+  it after each write; `FLUSH` is RisingWave's own read-your-writes statement and forces
+  a barrier straight away (tens of milliseconds) instead of waiting for the scheduled one
+  (1 s by default; a COMMIT does not bring it forward). It takes no table name, so the `"{}"` the other entries use for one
   simply goes unused. (`SET RW_IMPLICIT_FLUSH = true` is the session-level equivalent.)
 * **No type modifiers.** RisingWave's parser accepts no precision, length or scale on a
   column type: `VARCHAR(50)` and `TIMESTAMP(6)` fail to parse (``expected ',' or ')'
   after column definition, found: (``) and `NUMERIC(10,3)` parses but is rejected
-  (``unsupported data type: NUMERIC(10,3)``). The entry's DDL therefore declares `s` as
-  `VARCHAR` and `n` as `NUMERIC`. This costs the *entry* nothing else: psqlodbc's own
+  (``unsupported data type: NUMERIC(10,3)``). The one modifier it does take, and honour,
+  is `FLOAT(p)`: 1–24 gives `real`, 25–53 `double precision`. The entry's DDL therefore
+  declares `s` as `VARCHAR` and `n` as `NUMERIC`. This costs the *entry* nothing else: psqlodbc's own
   type names, which the generated ingest DDL uses (`int8`, `float8`, `bool`, `varchar`,
   `numeric`, `date`, `bytea`, `timestamp`), are all accepted unqualified, so unlike
   QuestDB this entry needs no `ansi_ddl_type_names` and no `ingest_types`.
@@ -2209,11 +2218,15 @@ implements no `SAVEPOINT`, and the whole batch fails with
 ERROR: Expected a keyword at the beginning of a statement, found identifier "savepoint" (42601)
 ```
 
-psqlodbc splits a parameter array into a second batch once the statement text it inlines
-the values into grows past its internal limit, so where that happens depends on how wide
-the rows are: the matrix workload's 5000 narrow rows still go as one batch and pass
-without the setting, while `bench/matrix_bench.py`'s wider rows split at about 4000 and do
-not. The `questdb` entry sets `Protocol=7.4-0` for exactly the same reason.
+psqlodbc inlines the parameter values into the statement text and sends the inlined
+statements 100 per wire round-trip, however wide they are (psqlodbc 16, read off its own
+`CommLog`); the `SAVEPOINT` goes in front of the second such batch, on a connection with
+autocommit off (with autocommit on psqlodbc opens no transaction and emits none). Whether
+an ingest reaches a second batch therefore depends on how many rows each generated
+`INSERT` carries -- 2000 parameters divided by the column count -- and on the row count,
+not on the text width: a small ingest fits in one batch and passes without the setting,
+`bench/matrix_bench.py`'s larger one does not. The `questdb` entry sets `Protocol=7.4-0`
+for exactly the same reason.
 
 **`NUMERIC` reads back as a string.** Materialize has a single arbitrary-precision
 `numeric`: `NUMERIC(10,3)` keeps the scale but not the precision, and psqlodbc describes
@@ -4728,7 +4741,7 @@ ends in
 ALTER SYSTEM LOAD MODULE DATA module = timezone tenant = 'test' infile = 'etc/'
 ```
 
-which loads the 118,610 rows of `etc/timezone_V1.log` into `mysql.time_zone_transition`.
+which loads `etc/timezone_V1.log` into `mysql.time_zone_transition` (117,043 rows on the SLIM image).
 Measured, that ran at ~4 rows/s — hours of work against the 1000-second
 `ob_query_timeout` `obd` sets for it, so the tenant create times out, `deploy_failed`
 runs and the container exits. `SLIM` never runs it: the prebuilt store already holds the

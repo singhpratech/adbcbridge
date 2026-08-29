@@ -487,8 +487,8 @@ services:
   # (squashfs images of the data and clog directories) and starts it, instead of having
   # `obd` deploy a cluster and create a tenant from scratch.  The default MODE=MINI takes
   # the second path and does not finish here: creating the tenant ends in
-  # `ALTER SYSTEM LOAD MODULE DATA module = timezone`, which loads 118,610 rows into
-  # mysql.time_zone_transition at a few rows a second on this box -- hours, against the
+  # `ALTER SYSTEM LOAD MODULE DATA module = timezone`, which loads etc/timezone_V1.log
+  # into mysql.time_zone_transition at a few rows a second on this box -- hours, against the
   # 1000 s ob_query_timeout obd sets, so the tenant create times out and the boot fails.
   # SLIM skips it: the prebuilt store already has the tenant and its timezone tables.
   # Booting takes about a minute and peaks at ~4.0 GiB, inside mem_limit 6g.
