@@ -154,7 +154,7 @@ export MYSQL_ODBC_DRIVER=/tmp/dbs/mysql/mysql-connector-odbc-9.4.0-linux-glibc2.
 LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
 ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
 python tests/compat/test_matrix.py mysql
-# mysql     PASS  (MySQL 8.4.11)
+# mysql     PASS  (MySQL (via ODBC) 8.4.11)
 ```
 
 `LD_PRELOAD=…/libstdc++.so.6` is a host/glibc workaround, not a driver bug: `import
@@ -175,7 +175,7 @@ MYSQL_ODBC_DRIVER=/path/to/odbc/libmaodbc.so \
 MYSQL_CONN='Driver={drv};Server=127.0.0.1;Port=13307;Database=adbc;User=adbc;Password=adbc;PLUGIN_DIR=/path/to/libmariadb3/plugin;' \
 ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
 python tests/compat/test_matrix.py mysql
-# mysql     PASS  (MySQL 08.04.000011)
+# mysql     PASS  (MySQL (via ODBC) 08.04.000011)
 ```
 
 Entry notes: MySQL needs `ANSI_QUOTES` in `sql_mode` for the double-quoted identifiers
@@ -1735,8 +1735,11 @@ error on this driver rather than a name.
 ## OpenLink Virtuoso 7.2
 
 Virtuoso is ODBC-native: port 1111 carries its own binary wire protocol and `virtodbc.so`
-speaks it directly, so there is no separate client library and no `Database=` keyword —
-`HOST` is `host:port` and the `dba` user lands in `DB.DBA`.
+speaks it directly, so there is no separate client library and no database to open —
+`HOST` is `host:port` (omit the port and the driver dials 1111), and `Database=` names
+the default catalog, `DB` unless given, so the `dba` user lands in `DB.DBA`. A catalog
+that does not exist is not diagnosed at connect time (unqualified names simply stop
+resolving), so the matrix leaves the keyword off.
 
 Server:
 
@@ -1783,40 +1786,97 @@ timestamp" the driver describes as a binary column. There is no `BOOLEAN`: Virtu
 the emoji, `DECIMAL(10,3)`, `VARBINARY`, NULL parameters, affected-row counts and the
 5000-row batched read all round-trip.
 
-`BIGINT` reads back as `decimal128(19, 0)` — Virtuoso describes it as `SQL_DECIMAL` with
-precision 19 — which is what the bulk-ingest table's `a` column comes back as.
+The bulk-ingest table's `a` column comes back as `decimal128(19, 0)`: `SQLGetTypeInfo` has
+no `SQL_BIGINT` row at all, so the generated ingest DDL spells the int64 column
+`decimal(19,0)`, and the driver then describes it as `SQL_DECIMAL`, precision 19, scale 0.
+Values round-trip exactly through it, `9223372036854775807` included.
+
+A column actually declared `BIGINT` is a different matter. `SQLDescribeCol` reports it
+`SQL_BIGINT`, so adbcBridge reads it as `int64` — but `virtodbc.so` has no 64-bit integer
+in its conversion table on the read side any more than on the parameter side:
+`SQLGetData` and `SQLBindCol` with `SQL_C_SBIGINT` return `SQL_SUCCESS` with an indicator
+of 0 and leave the buffer untouched, no diagnostic, so such a column reads back as zeros.
+`SQL_C_CHAR` and `SQL_C_DOUBLE` deliver the value (`SQL_C_SLONG` truncates silently:
+`9223372036854775807` arrives as `-1`). This entry never meets one — its `ddl` declares
+no `BIGINT` column and bulk ingest creates `decimal` — and it is the read-side twin of the
+gap `bigint_param_as_string` already covers for parameters.
 
 ### Driver quirk 1: no `SQL_C_WCHAR`
 
-`virtodbc.so` is a pure ANSI driver (it exports no `…W` entry points at all). It accepts
-an `SQL_C_WCHAR` parameter and then reads the buffer as if it were narrow, so
-`"héllo 🚀"` stores as its first byte pair, `"0\0"`, with no diagnostic. Its narrow path
+`virtodbc.so` is a pure ANSI driver (it exports no `…W` entry points at all), and it
+implements `SQL_C_WCHAR` as 4-byte `wchar_t` rather than the 2-byte `SQLWCHAR` unixODBC's
+headers define, on both the parameter and the fetch side. A UTF-16 buffer is therefore
+consumed four bytes at a time: `hello` (indicator 10) stores as `??`, a one-character
+string stores as the empty string, and `"héllo 🚀"` stores as the single character `0` —
+every one of them `SQL_SUCCESS` with no diagnostic. Hand the same driver a `wchar_t`
+array and the text round-trips exactly, emoji included, with `SQLGetData(SQL_C_WCHAR)`
+returning UCS-4 (28 bytes for those seven characters); through a 2-byte `SQLWCHAR` the
+same read widens each UTF-8 *byte* to a 4-byte unit (`68 00 00 00 c3 00 00 00 …`). A
+second, unrelated defect sits next to it: `SQL_C_CHAR` bound against `SQL_WCHAR`/
+`SQL_WVARCHAR` with `SQL_NTS` stores the correct text followed by 100–150 characters of
+adjacent process memory, different on every run and again with no diagnostic; an explicit
+byte length in place of `SQL_NTS` stores the value correctly. Its narrow path
 is exact for UTF-8: Virtuoso's own charsets (`DB.DBA.SYS_CHARSETS`) are all single-byte
 and an unqualified connection passes narrow bytes straight through, so UTF-8 text —
 astral-plane emoji included — round-trips byte for byte through both `NVARCHAR` and
 `VARCHAR`. adbcBridge detects the driver from `SQL_DRIVER_NAME` (`virtodbc.so`) and sets
 the existing `wchar_as_utf8` reader option, the same one Firebird's OdbcFb needs.
 
-Do **not** add `Charset=UTF-8` to the connection string. `UTF-8` is not one of Virtuoso's
-charsets, so the server falls back to its single-byte default and the same UTF-8 bytes
-then arrive as mojibake (`hÃ©llo ð…`); `Charset=UTF8` makes the driver abort the process
-with `GPF: Dkbox.c:638 Double free`.
+Do **not** put a `Charset=` value in the connection string at all. The exact literal
+`UTF-8` is the only value the driver survives: `UTF8`, lowercase `utf-8`, `UTF-16`, and
+every charset Virtuoso *does* list in `DB.DBA.SYS_CHARSETS` — `ISO-8859-1`,
+`WINDOWS-1252`, `KOI8-R` — all abort the process inside `SQLDriverConnect` with
+`GPF: Dkbox.c:638 Double free`, client-side (the same abort happens against a port with
+nothing listening). The one value that connects is not safe either: over a
+`Charset=UTF-8` connection wide `NVARCHAR` columns read back doubly encoded — each
+stored byte recoded as a single-byte character, so `héllo 🚀` comes back as
+`hÃ©llo ð…` — while `SQLGetData` returns `SQL_SUCCESS` and reports the *original* byte
+length in `StrLen_or_Ind`, so an application that honours the indicator gets the mojibake
+cut mid-sequence with no diagnostic. Only the read path and only wide columns are
+affected; rows written over such a connection read back byte for byte over one without
+it.
 
 ### Driver quirk 2: `SQL_C_SBIGINT` parameters store 0
 
-A 64-bit integer parameter is stored as `0`, silently — the driver's conversion table has
-no `SQL_C_SBIGINT`. The entry needs nothing for this: adbcBridge sets the existing
-`bigint_param_as_string` option (Oracle's Instant Client ODBC needs the same one), which
-sends the value as numeric text; the conversion is exact.
+A `SQL_C_SBIGINT` parameter is stored as `0`, silently and whatever the value — `42` as
+much as `1234567890123` — and whether it is declared `SQL_BIGINT`, `SQL_NUMERIC` or
+`SQL_DECIMAL`; the driver's conversion table has no `SQL_C_SBIGINT`. The entry needs
+nothing for this: adbcBridge sets the existing `bigint_param_as_string` option (Oracle's
+Instant Client ODBC needs the same one), which sends the value as `SQL_C_CHAR` text
+declared `SQL_NUMERIC`, and that conversion is exact — `INT64_MIN` and `INT64_MAX`
+included, prepared or direct, on every row of a repeated execute.
 
-### Driver quirk 3: `SQL_C_TYPE_DATE` parameter arrays repeat row 0
+`SQL_NUMERIC` is what makes it exact, not the text: the same digits declared `SQL_BIGINT`,
+`SQL_VARCHAR` or `SQL_CHAR` also store `0`, again for `42` as much as for a 13-digit value,
+and again with `rc=0` and no diagnostic (`SQL_DECIMAL` works as `SQL_NUMERIC` does, and a
+literal `INSERT ... VALUES ('1234567890123')` stores the value in full, so the loss is the
+driver's and not Virtuoso's string coercion). A related one on the parameter side:
+`SQL_C_SLONG` is read as 8 bytes — a C `long` on LP64 — whatever `BufferLength` says, so
+an `int32` bound out of a packed array picks up the word after it (`SR346: Integer out of
+range for column i` when that word is non-zero), and on the read side a `BufferLength` of
+0 makes it write 8 bytes into a 4-byte target. adbcBridge binds each `int32` parameter
+from its own zero-initialised 64-byte slot rather than from a packed array, which is why
+the workload never sees it.
 
-`virtodbc.so` accepts `SQL_ATTR_PARAMSET_SIZE`, executes every set and reports the right
-affected-row count, but binds a `SQL_C_TYPE_DATE` parameter from the *first* set only:
-every row of the array is inserted with row 0's date. Other types (`SQL_C_CHAR`,
-`SQL_C_DOUBLE`, `SQL_C_SLONG`) walk the array correctly, so the damage is invisible
-unless a date column is part of the batch. adbcBridge sets `no_param_arrays`, executing
-one row at a time as it does for DuckDB, clickhouse-odbc, OdbcFb and MonetDBODBClib.
+### Driver quirk 3: datetime parameter arrays are strided by `ColumnSize`
+
+`virtodbc.so` accepts `SQL_ATTR_PARAMSET_SIZE`, executes every set, reports the right
+affected-row count and sets every element of the parameter status array to
+`SQL_PARAM_SUCCESS` — but for the datetime C structs (`SQL_C_TYPE_DATE`,
+`SQL_C_TYPE_TIME`, `SQL_C_TYPE_TIMESTAMP`) it steps a column-wise array by the
+`ColumnSize` argument of `SQLBindParameter` rather than by the size of the C type, which
+is what the specification prescribes. adbcBridge binds a `DATE32` column with
+`ColumnSize` 0, so the stride is zero and every row of the array is inserted with row 0's
+date, silently. Any other mismatch reads at the wrong offset and past the end of the
+buffer instead: the same four dates bound with `ColumnSize` 10 over a packed array come
+back as `2024-01-01`, `0197-08-05` and two more values that change from run to run, and a
+timestamp array bound the way adbcBridge binds one (`ColumnSize` 23, 16-byte elements)
+ends in `-17837-65534-65535`. Laying the elements out `ColumnSize` bytes apart, or binding
+row-wise (`SQL_ATTR_PARAM_BIND_TYPE` set to the row struct's size), is correct in every
+case. `SQL_C_CHAR`, `SQL_C_DOUBLE` and `SQL_C_SLONG` arrays walk correctly, so the damage
+is invisible unless a date, time or timestamp column is part of the batch. adbcBridge sets
+`no_param_arrays`, executing one row at a time as it does for DuckDB, clickhouse-odbc,
+OdbcFb and MonetDBODBClib.
 
 ### Why not the Unicode driver, `virtodbcu.so`
 
@@ -1842,9 +1902,20 @@ SQLExecDirect(stmt, (SQLCHAR*)"DROP TABLE no_such_table_probe", SQL_NTS);  /* SI
 The same probe against `virtodbc.so` returns `SQL_ERROR` and the diagnostic
 (`42S02 … SR268: No table in drop table.`) as it should, and pyodbc — which calls the
 `…W` entry points directly, so unixODBC does not translate — drives `virtodbcu.so`
-without trouble. So the fault is in that driver's Unicode diagnostic path meeting
-unixODBC's translation layer, there is no connection handle or `reader_opts` flag that
-could avoid it, and the ANSI driver has no such problem and loses nothing: use it.
+without trouble, though it mis-decodes astral characters on the way (`SELECT 'héllo 🚀'`
+returns `'héllo \x1f680'`, the surrogate pair collapsed). So the fault is in that
+driver's Unicode diagnostic path meeting unixODBC's translation layer — above the driver,
+where no connection-string or `reader_opts` setting reaches, and none was found that
+does: `WideAsUTF16=Y`, `WideAsUTF16=N` and the flag omitted all abort identically, under
+both `SQL_OV_ODBC2` and `SQL_OV_ODBC3`, through `SQLPrepare`/`SQLExecute` as well as
+`SQLExecDirect`. The ANSI build has no such problem and gives up nothing an ANSI
+application could have used, because through unixODBC's ANSI entry points the Unicode
+build's wide read is broken in exactly the same way: on both builds
+`SQLGetData(SQL_C_WCHAR)` widens each UTF-8 byte to a 4-byte unit (`68 00 00 00 c3 00 00
+00 …`, `ind=44` for 11 bytes of text), which is what `wchar_as_utf8` steers around.
+`virtodbcu.so` does return real UTF-16 — but only through the `…W` entry points, and on
+that path its narrow reads collapse to a single-byte charset and the emoji becomes `?`.
+Use the ANSI driver.
 
 Note that both builds report `SQL_DRIVER_NAME` as `virtodbc.so`, so the quirks above are
 keyed on a name that matches either.
@@ -2659,9 +2730,9 @@ key, and `information_schema.columns` — hence `SQLColumns`, hence `GetObjects`
 entry declares `i INT PRIMARY KEY`, the same fix the `cockroachdb` entry uses for the
 synthesised `rowid` there.
 
-**A parameter bound into a `BIT` column takes the server down.** This is not a driver
-problem: it reproduces with plain pyodbc, and the failure is a *server abort*, not an
-error return.
+**A parameter array with NULLs bound into a `BIT` column takes the server down.** This is
+not a driver problem: it reproduces with plain pyodbc and with plain ODBC, and the
+failure is a *server abort*, not an error return.
 
 ```
 malloc(): unaligned fastbin chunk detected
@@ -2670,10 +2741,17 @@ SIGABRT: abort
 ```
 
 Against `CREATE TABLE t (v bit)`, an inserted literal (`VALUES (1)`, `VALUES (NULL)`)
-is stored and read back correctly, but over the binary protocol a bound integer `1` fails
-with `data out of range: data type bit(1), value 1 (1690)`, a bound `NULL` is silently
-stored as *false*, and a mixed batch of the three corrupts the server's heap and kills the
-process — every connection drops with `Lost connection to MySQL server during query`.
+is stored and read back correctly, but over the binary protocol a bound `1` fails with
+`data out of range: data type bit(1), value 1 (1690)` whenever the parameter's SQL type is
+anything but `SQL_BIT` (`SQL_TINYINT`, `SQL_INTEGER`, `SQL_VARCHAR` and `SQL_DOUBLE` were
+each tried, prepared and direct; an `SQL_BIT` parameter is accepted one row at a time), a
+bound `NULL` is silently stored as *false* under server-side prepared statements (the
+Linux default — with `NO_SSPS=1` the same insert stores a real NULL), and a parameter
+array mixing values and NULLs corrupts the server's heap and kills the process — six sets
+with two NULLs is enough, single parameters and NULL-free arrays are fine, and the same
+NULL-mixed array into `TINYINT`, `INT` or `VARCHAR` is fine — after which every
+connection drops with `Lost connection to MySQL server during query`. The compose
+service has no restart policy, so the container stays `Exited (2)` until started again.
 Connector/ODBC's `SQLGetTypeInfo` names `BIT` for a boolean, so the ingest DDL asks for
 exactly that column type. The entry therefore sends the boolean column as `int8` →
 `TINYINT`, which MatrixOne handles correctly, with the same `ingest_types` mechanism the
@@ -2687,10 +2765,14 @@ That keeps create/append/replace ingest under test. MatrixOne's own `BOOL` colum
 unaffected — `adbc_t`'s `bo BOOLEAN` round-trips fine; it is `BIT` specifically that is
 broken.
 
-**It describes a TEXT column as five characters** (`SQLDescribeCol` reports
-`SQL_WLONGVARCHAR`, column size 5, octet length 0) no matter how long its values are —
-while a `VARCHAR(50)` result column comes back the other way round, with the type maximum
-4,294,967,295. The over-large half was already handled (`long_bind_bytes`); the too-small
+**It describes a TEXT column as one third of its widest value's byte length**
+(`SQLDescribeCol` reports `SQL_WLONGVARCHAR`, octet length 0, and a column size of 5 for
+the benchmark's 16-byte `row-%012d` strings, 0 for an empty result set and 0 for anything
+reached through `SQLPrepare`) — so binding at the width it reports truncates every row of
+a table of same-length values — while a `VARCHAR(50)` result column comes back the other
+way round, with the type maximum 4,294,967,295. (`SQLColumns` is no help: it reports
+`DATA_TYPE` 0 for every column, `COLUMN_SIZE` NULL for `INT`/`DATETIME`/`BOOL` and 0 for
+`TEXT`, with only `VARCHAR`/`VARBINARY` given real numbers.) The over-large half was already handled (`long_bind_bytes`); the too-small
 half was not, and it is much more expensive: bound at five characters, *every* row of a
 `long varchar` column comes back truncated and has to be re-read with `SQLGetData`, which
 read 100,000 rows at **3.2k rows/s** — slower than not binding at all. So
@@ -2707,12 +2789,21 @@ narrower, since it only ever raises a width.
 ```
 ADBC_MATRIX_SUFFIX=_matrixone .venv/bin/python bench/matrix_bench.py \
   --rows 10000 --fetch-rows 100000 matrixone
-# fetch=2,045,021/s (pyodbc 900,455/s)  ingest=4,115/s array=4,356/s pyodbc=4,213/s
+# fetch=1,919,466/s (pyodbc 888,285/s)  ingest=97,521/s array=67,034/s pyodbc=4,639/s
 ```
 
-Ingest is slow in absolute terms and identical for all three clients (~4.2k rows/s), so it
-is the server, not the binding path: MatrixOne commits a transaction per `INSERT` into its
-log service, and parameter arrays do not become a multi-row `INSERT` on this wire.
+The three ingest figures are three different wires. pyodbc's `executemany` and the
+bridge's array binding both go through Connector/ODBC's parameter arrays, and those do
+not become a multi-row `INSERT` here: MatrixOne's own `system.statement_info` records a
+1000-set array execute as 1000 separate `execute … INSERT INTO … VALUES (?,?)`
+statements, each committed as its own transaction into the log service, which is why
+pyodbc sits at a few thousand rows/s (plain-ODBC repro on a shared host: 220 rows/s one
+prepared row at a time, 639 with a 1000-set array, 2,539 with 5,000 one-row `INSERT`s
+inside a single transaction). The bridge's default ingest emits one `INSERT` carrying
+hundreds of rows per statement, and that is the ceiling the server actually has — a
+literal 1000-row `INSERT` writes at ~93k rows/s through plain ODBC on the same
+connection, ~100x the one-row rate. (An earlier revision of this block, taken before the
+multi-row `INSERT` path existed, showed all three clients at ~4.2k rows/s.)
 
 ### Clean up
 
@@ -3640,8 +3731,11 @@ ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so ADBC_ODBC_DELEGATE=never \
 ```
 
 The connection string is `ADDRESS=host:port` (`SERVER=`/`PORT=` also work) plus
-`SCHEMA=PUBLIC`. `02.04.0000` is the *protocol* version the driver reports as
-`SQL_DBMS_VER`, not the server's — Ignite's ODBC driver has no other version to give.
+`SCHEMA=PUBLIC`. `02.04.0000` is a constant the driver hardcodes and returns for both
+`SQL_DRIVER_VER` and `SQL_DBMS_VER`, unchanged by any connection option: it is neither the
+server's version (2.17.0, which `SELECT VERSION FROM SYS.NODES` returns over the same
+connection) nor the protocol version in use (2.13.0 — the driver puts it in the handshake,
+and `PROTOCOL_VERSION=2.4.0` is in fact refused as unsupported).
 
 ### Driver quirk 1: no wide SQL type
 
@@ -3663,15 +3757,22 @@ UTF-8 and the driver copies the bytes through), so the driver sets the existing
 
 Ignite's driver implements column-wise parameter arrays and reports both
 `SQL_ATTR_PARAMS_PROCESSED_PTR` and the parameter-status array, and a two-column,
-three-row array inserts three correct rows. Add a NULL anywhere below the first row and
-the *connection* dies:
+three-row array inserts three correct rows. Add a NULL anywhere below the first row and it
+is dropped rather than sent: a character column stores an *empty string* (`rc=0`,
+`SQL_ATTR_PARAMS_PROCESSED_PTR` 3, every status `SQL_PARAM_SUCCESS`, `b IS NULL` false), a
+fixed-width column stores whatever bytes sit in that row's value slot, and a
+`BINARY`/`VARBINARY` column segfaults the client inside `SQLExecute`:
 
 ```
-SQLExecute -> HY000, then the next statement:
-08001  Failed to establish connection with any provided hosts.
+__memcpy_avx_unaligned_erms
+ignite::odbc::query::BatchQuery::MakeRequestExecuteBatch
+ignite::odbc::query::BatchQuery::Execute
+ignite::odbc::Statement::ExecuteSqlQuery
+ignite::SQLExecute
 ```
 
-with the server logging `java.lang.OutOfMemoryError: Java heap space` and halting the JVM.
+The server is untouched in all three cases. (Row-wise binding is refused outright:
+`SQL_ATTR_PARAM_BIND_TYPE` → `HYC00 Only binding by column is currently supported`.)
 `odbc/src/app/parameter.cpp` is why:
 
 ```cpp
@@ -3687,16 +3788,24 @@ void Parameter::Write(BinaryWriterImpl& writer, int offset, SqlUlen idx) const
 `GetInputSize()` reads `*GetResLen()`, and `GetResLen()` applies the buffer's *own*
 element offset — which is still 0. So the NULL test always inspects the indicator of row
 0 and every row of the chunk inherits row 0's NULL-ness. A NULL in a later row is
-therefore sent as whatever the value buffer holds at that row, and for a character or
-binary column that means a length the server cannot parse: it reads a bogus array size
-and tries to allocate it. Hence `no_param_arrays` for this driver, the same flag DuckDB,
+therefore written as a value: the `SQL_CHAR` branch's `GetString()` reads that row's own
+indicator, -1, and `SqlStringToString` returns the empty string for any negative length
+that is not `SQL_NTS`, while the `SQL_BINARY` branch hands the same -1 to
+`writer.WriteInt8Array` as its length and `memcpy` runs off the end. Hence
+`no_param_arrays` for this driver, the same flag DuckDB,
 clickhouse-odbc, OdbcFb and MonetDBODBClib carry. One execute per row is correct because
 there the element offset is 0 for real.
 
 Standalone repro of the working two-column case, and of the row-0 indicator bug, without
 adbcBridge: bind `SQL_ATTR_PARAMSET_SIZE=3` on `INSERT INTO t (a, b) VALUES (?, ?)` with
-`ind[] = {SQL_NTS, SQL_NULL_DATA, SQL_NTS}` — all three rows arrive non-NULL, and with
-`ind[0] = SQL_NULL_DATA` all three arrive NULL.
+`ind[] = {SQL_NTS, SQL_NULL_DATA, SQL_NTS}` — all three rows arrive non-NULL (row 2 as an
+empty string), with `ind[0] = SQL_NULL_DATA` all three arrive NULL, and the same
+indicators on a `BIGINT, BINARY` table segfault in `SQLExecute`. Two things to know when
+reading that back: `SQLGetData` on a zero-length, non-NULL character value answers
+`SQL_NO_DATA` with the indicator set to `SQL_NULL_DATA`, so an empty string is
+indistinguishable from NULL on that path (a real NULL answers `SQL_SUCCESS` with the same
+indicator; `b IS NULL` tells them apart); and `SQLRowCount` after a successful three-row
+array answers 1, not 3, though `SQL_PARAM_ARRAY_ROW_COUNTS` claims `SQL_PARC_BATCH`.
 
 ### Why the entry sets `ingest_create=False`
 
@@ -3708,13 +3817,16 @@ CREATE TABLE nopk (a BIGINT, b VARCHAR)
 ```
 
 `adbc_ingest`'s generated `CREATE TABLE` has no notion of a key, and no column of an
-ingest payload can generally be one — the matrix's own is `a = [1, 2, NULL]`, and Ignite
-allows neither a NULL key nor the duplicate keys the `append` step would then insert
-(`23000 Failed to INSERT some keys because they are already in cache`). Nor can the key
-be a column the server fills in itself, the way GreptimeDB's `ddl_extra_column` is: a
-`DEFAULT` must be a constant (`Non-constant DEFAULT expressions are not supported` for
-`RANDOM_UUID()`), and an `INSERT` that omits the key column fails with `Failed to prepare
-update plan` whatever its default. So `mode="create"` cannot work here, and this is a
+ingest payload can generally be one — the matrix's own is `a = [1, 2, NULL, 4]`, and
+Ignite allows neither a NULL key (`23000 Null value is not allowed for column 'A'`) nor
+the duplicate keys the `append` step would then insert (`23000 Failed to INSERT some keys
+because they are already in cache`). Nor can the key be a column the server fills in
+itself, the way GreptimeDB's `ddl_extra_column` is: a `DEFAULT` must be a constant
+(`Non-constant DEFAULT expressions are not supported` for `RANDOM_UUID()`), `IDENTITY`,
+`AUTO_INCREMENT` and `SERIAL` are all refused (`HYC00 AUTO_INCREMENT columns are not
+supported`), and an `INSERT` that omits the key column fails with `Failed to prepare
+update plan` whatever its default. (A table of nothing but its key is refused too:
+`Table must have at least one non PRIMARY KEY column`.) So `mode="create"` cannot work here, and this is a
 property of Ignite rather than of its driver — no quirk can fix it.
 
 The entry therefore sets `ingest_create=False`, which makes the workload read the big
@@ -3731,8 +3843,8 @@ all-NULL row, the reads, the parameterised `SELECT`, the 100,000-row batched rea
 |---|---|
 | `ident=str.upper` | Ignite folds an unquoted identifier to upper case. |
 | `quote=""` | its driver answers `SQL_IDENTIFIER_QUOTE_CHAR` with an empty string, so `adbc_ingest` quotes nothing and the names it emits are folded; this file's own SQL has to leave them unquoted too, or a quoted `"a"` would be a different column from the `A` ingest just created. |
-| `ddl ... i INT PRIMARY KEY` | see above — there is no table without one. `b BINARY` is Ignite's byte-string type; `VARCHAR` takes an optional length that it ignores. |
-| `setup=[... SYSTEM_RANGE ...]` | `adbc_big` is filled server-side by `INSERT INTO adbc_big (a, b) SELECT X, 'r' \|\| X FROM SYSTEM_RANGE(0, 99999)` — `SYSTEM_RANGE` is the H2 table function Ignite's SQL engine inherits. 100,000 rows in about three seconds, which is what `setup` costs on every connection opened. |
+| `ddl ... i INT PRIMARY KEY` | see above — there is no table without one. `b BINARY` is Ignite's byte-string type: bytes round-trip exactly, embedded `0x00` and `0xFF` included. A `VARCHAR(n)` length is enforced, counted in characters rather than bytes — 50 accented characters (100 UTF-8 bytes) fit `VARCHAR(50)`, 51 are refused with `Value for a column 'S' is too long. Maximum length: 50, actual length: 51`, on every path (literal, bound parameter, `UPDATE`, `INSERT … SELECT`, `MERGE`, array execute). One thing to bind carefully: the driver truncates a character parameter to the `ColumnSize` given to `SQLBindParameter`, client-side and with no warning, so pass the real width. |
+| `setup=[... SYSTEM_RANGE ...]` | `adbc_big` is filled server-side by `INSERT INTO adbc_big (a, b) SELECT X, 'r' \|\| X FROM SYSTEM_RANGE(0, 99999)` — `SYSTEM_RANGE` is the H2 table function Ignite's SQL engine inherits; it fills the table server-side in about half a second, which is nearly all of what `setup` costs on every connection opened (the `DROP` and `CREATE` add about 35 ms). |
 
 Nothing else needed a tolerance: `DECIMAL(10,3)` is described with its declared precision
 and scale, `TIMESTAMP` keeps all six fractional digits through a bound parameter,
@@ -3740,15 +3852,29 @@ and scale, `TIMESTAMP` keeps all six fractional digits through a bound parameter
 columns in order.
 
 One thing to know about the driver's own metadata, which costs the entry nothing but
-explains the shape of a read: it describes every `VARCHAR` and `BINARY` column as
-2,147,483,647 units wide (Ignite's SQL types carry no length), and it can recover neither
-kind of truncated value — `SQL_GETDATA_EXTENSIONS` is `SQL_GD_ANY_COLUMN | SQL_GD_ANY_ORDER
-| SQL_GD_BLOCK` with **no** `SQL_GD_BOUND`, and `FetchScroll()` refuses every orientation
+explains the shape of a read: `SQLDescribeCol` relays the server's per-column precision,
+so a `VARCHAR` or `BINARY` column declared without a length comes back 2,147,483,647
+units wide while a declared length is reported as declared (this entry's `s VARCHAR(50)`
+describes as 50, `BINARY(10)` as 10), and `SQLColumns` takes a different route to the
+same columns — its `COLUMN_SIZE` and `BUFFER_LENGTH` come from the SQL type alone, so
+every `VARCHAR`, `VARBINARY` and `DECIMAL` column answers `SQL_NO_TOTAL` there, and
+`DECIMAL_DIGITS` is NULL even for the `DECIMAL(10,3)` that `SQLDescribeCol` scales
+correctly. `SQL_GETDATA_EXTENSIONS` is `SQL_GD_ANY_COLUMN | SQL_GD_ANY_ORDER |
+SQL_GD_BOUND` with **no** `SQL_GD_BLOCK`, and `FetchScroll()` refuses every orientation
 but `SQL_FETCH_NEXT` ("Only SQL_FETCH_NEXT FetchOrientation type is supported"). Both
-reports are honest — there is no `SQLSetPos` behind them — so such a column stays unbound
-and the result set is read a row at a time with `SQLGetData` rather than through a block
-cursor. It is fast regardless (930k rows/s below): the driver has already paged the whole
-answer into client memory, so a per-row `SQLGetData` is a local copy.
+reports are honest, and there is no `SQLSetPos` behind them to fall back on:
+`SQL_POS_OPERATIONS` is 0 and `SQLSetPos` is a stub that answers `SQL_SUCCESS` to every
+argument (row 9,999 of a four-row rowset included) and positions nothing. A following
+`SQLGetData` does recover the remainder of a truncated bound value, but only for
+character and binary columns (a truncated numeric answers `SQL_NO_DATA`; a `DATE` or
+`TIMESTAMP` re-returns its whole value and never advances) and, on a block cursor, only
+for the rowset's last row — a value cut in an earlier row is cut silently, `SQLFetch`
+returning `SQL_SUCCESS` with no `01004` and only the indicator carrying the real length.
+So such a column stays unbound and the result set is read a row at a time with
+`SQLGetData` rather than through a block cursor. It is fast regardless (930k rows/s
+below): the driver pages the answer in 1,024 rows per round trip by default (the
+`PAGE_SIZE` connection keyword), and reading each row out of the page in hand with
+`SQLGetData` costs about a tenth more than the same read through `SQLBindCol`.
 
 ### Benchmark
 
@@ -3990,10 +4116,10 @@ adbcBridge can work around, so it is a patch to the source you build.
 | `read_only=True` | no DDL and no DML: the SQL plugin is query-only, and the driver has no `SQLBindParameter` — two independent reasons. The indices come from `fixtures/load_opensearch.py`. |
 | `params=False` | `SQLBindParameter` answers `OpenSearch does not support parameters`; the parameterised query runs with a literal. |
 | ``quote="`"`` | OpenSearch SQL quotes identifiers with the backtick. A `"..."` is not an identifier at all: `SELECT "a" FROM "adbc_big"` fails with ``no such index ["adbc_big"]``. Same fact as the `greptimedb` entry. |
-| `ts_text=True` | `date` is OpenSearch's one temporal field type; the SQL plugin types it `DATE` when the format is date-only and `TIMESTAMP` when it carries a time. The driver's `type_to_oid_map` (`opensearch_parse_result.cpp`) maps `date` — to `SQL_TYPE_TIMESTAMP` — but has no entry for `timestamp` at all, a type name the plugin grew after the driver's last release, and anything unmapped falls back to VARCHAR. So `d` arrives as a timestamp and `ts` as the text `2024-02-29 13:45:10.123`; the workload parses it and checks the value as usual. |
+| `ts_text=True` | `date` is OpenSearch's one temporal field type; the SQL plugin types it `DATE` when the format is date-only and `TIMESTAMP` when it carries a time. The driver's `type_to_oid_map` (`opensearch_parse_result.cpp`) maps `date` — to `SQL_TYPE_TIMESTAMP` — but has no entry for `timestamp` at all, a type name the plugin grew after the driver's last release, and anything unmapped falls back to `SQL_WVARCHAR` (type name `unsupported`). So `d` arrives as a timestamp and `ts` as the text `2024-02-29 13:45:10.123`; the workload parses it and checks the value as usual. The driver's *other* type tables — the ones behind `SQLColumns` and `SQLGetTypeInfo` — do map `timestamp` to `SQL_TYPE_TIMESTAMP` (and `double` to `SQL_DOUBLE` where `SQLDescribeCol` says `SQL_FLOAT`), so the two metadata paths disagree about the same column. Do not ask the driver to convert that text itself: any character column read as `SQL_C_TYPE_TIMESTAMP` or `SQL_C_TYPE_DATE` comes back as *today's* date at midnight under `SQL_SUCCESS`, whatever the string holds — `ts`, `s` and `n` alike — where ODBC specifies `22018` for an unparseable value. |
 | `binary_text="\\x0102"` | no binary type at all, so the two bytes are stored as text, exactly as for CrateDB and InfluxDB 3. |
 | `decimal_type="string"` | no `DECIMAL` either; `n` is a `keyword` field read back as its exact digits. |
-| `column_order=False` | `SQLColumns` reports an index's fields in mapping order, which is neither the workload's order nor alphabetical, so the catalog columns are compared as a set. |
+| `column_order=False` | `SQLColumns` asks the SQL plugin `DESCRIBE TABLES LIKE '<index>'` and passes its order through — for `adbc_t` that is `b, s, d, f, i, bo, n, ts`. The plugin lists an index's fields in its own hash order, which is neither alphabetical nor the order the mapping declares them in (that one is the workload's), so the catalog columns are compared as a set. |
 
 Everything else in the workload runs unchanged: `int64`, `double`, `string` (including
 `"héllo 🚀"` — the astral-plane emoji survives the round trip), `bool`, `DATE`, the
@@ -4295,10 +4421,23 @@ PostgreSQL, and no `PRIMARY KEY` is needed (unlike CockroachDB, a table without 
 no synthesised extra column, so `SQLColumns` reports the eight declared columns).
 
 `GetInfo` reports `PostgreSQL 14.0.4` because Cloudberry advertises a PostgreSQL server
-version over the wire; `SELECT version()` is the only way to tell it apart, and
-`SQL_DRIVER_NAME` is `psqlodbcw.so` for both. That is exactly why **no quirk keyed on
-the driver name would be correct here** — it would also fire on real PostgreSQL,
-CockroachDB and every other entry sharing this driver.
+version over the wire, and `SQL_DRIVER_NAME` is `psqlodbcw.so` for both — the ODBC
+identity strings are the ones that cannot tell the two apart. `SELECT version()` can, and
+it is what the bridge keys on: it answers `PostgreSQL 14.4 (Apache Cloudberry
+2.1.0-incubating build dev) ...`, so the fork test reads the server's own banner rather
+than the driver name. It is not the *only* tell — `SHOW gp_server_version` answers
+`2.1.0-incubating build dev`, there are 117 `gp_*` GUCs and 41 `gp_*` relations in
+`pg_catalog`, `gp_segment_configuration` and `gp_distribution_policy` are queryable,
+`pg_am` carries `ao_row`, `ao_column` and `pax` alongside PostgreSQL's own access
+methods, and a `CREATE TABLE` that leaves the server to pick a distribution key comes
+back `SQL_SUCCESS_WITH_INFO` with `NOTICE: Table doesn't have 'DISTRIBUTED BY' clause --
+Using column named 'i' as the Apache Cloudberry data distribution key for this table`
+(this entry's own `ddl` triggers it on every run; a table with a `PRIMARY KEY` gets that
+column silently, and `client_min_messages = warning` suppresses it). That is exactly why
+**no quirk keyed on the driver name would be correct here** — it would also fire on real
+PostgreSQL, CockroachDB and every other entry sharing this driver. One number to be
+careful with: `SHOW server_version_num` answers `140000` where stock 14.4 answers
+`140004`, so a client comparing it against a 14.x threshold sees 14.0.
 
 Because of that, the standard workload alone would be indistinguishable from `postgres`.
 It does already run on the MPP engine — the 5000 rows the ingest step writes really do
@@ -4989,9 +5128,22 @@ therefore the same Arrow Flight SQL ODBC driver the
 [`flightsql`](#arrow-flight-sql-sqlflite-155--duckdb-111) and
 [`influxdb3`](#influxdb-3-core-arrow-flight-sql) entries use — read the `flightsql`
 section first: it is Dremio's own driver, and everything documented there (no
-`SQLBindParameter`, `SQLColumns` segfaults on the first `SQLFetch`, decimals described
-with precision 19) is the driver's and therefore true here too. What this entry adds is
-the driver run against the engine it was written for.
+`SQLBindParameter`, decimals described with precision 19) is the driver's and therefore
+true here too — with one exception. The `SQLColumns` crash does not reproduce against
+Dremio 26: `SQLColumns` returns `SQL_SUCCESS`, describes 18 columns and fetches its rows
+to `SQL_NO_DATA` — unbound, bound, through `SQLColumnsW`, in an ODBC 2 environment, with
+a block-fetch row array, and for every table the server has. The same library file drives
+all three Flight SQL entries, so the crash is the server's half of the pair rather than
+the driver's alone; the quirk is keyed on `SQL_DRIVER_NAME`, so Dremio takes the describe
+fallback anyway, which is the right default while two of the three servers do crash it.
+Two more driver facts from the same probes: `SQLGetFunctions` claims `SQLBindParameter`
+and `SQLNumParams` are supported even though the former always answers `HYC00` (only
+`SQLDescribeParam` tells the truth, reporting 0), and `SQL_ATTR_AUTOCOMMIT = OFF` is
+refused with `HYC00 Optional feature not implemented`, so there is no transaction control
+through this driver at all. What this entry adds is the driver run against the engine it
+was written for. On Linux x86_64 that driver build is 2-byte `SQLWCHAR`, exports the
+`…W` entry points and returns its diagnostics intact under unixODBC 2.3.12 — the
+iODBC-width abort documented for macOS is that build's alone.
 
 Server:
 
@@ -5089,16 +5241,24 @@ entry is `read_only=True`. `SQLExecDirect` of literal SQL works fine, so `setup`
 both tables itself and the read side of the workload then runs unchanged. `setup` is
 replayed on every connection (`bench/matrix_bench.py` opens several), and Dremio has no
 `CREATE OR REPLACE TABLE`, so each statement is `CREATE TABLE IF NOT EXISTS ... AS SELECT`
-— a no-op costing about half a second once the table exists, and one statement per table
-rather than a `CREATE` plus a literal `INSERT`.
+— a no-op costing about 15 ms once the table exists (50–110 ms for the first replay on a
+fresh connection), and one statement per table rather than a `CREATE` plus a literal
+`INSERT`. Dremio's DDL answers with result sets rather than counts: `CREATE TABLE IF NOT
+EXISTS` yields a one-row `VARCHAR`, `DROP TABLE` a one-row `SQL_BIT`, and `SQLRowCount`
+is -1 throughout.
 
 Two Dremio spellings the literals need:
 
 * **`_UTF8` in front of a string literal with an astral-plane character.** Dremio's
   parser encodes an unprefixed literal in ISO-8859-1, so `SELECT '🚀'` fails with
   `Error during planning the query` before the query runs at all, while
-  `SELECT _UTF8'héllo 🚀'` returns the emoji intact. (`é` alone is inside ISO-8859-1 and
-  needs no prefix — only the surrogate-pair characters do.)
+  `SELECT _UTF8'héllo 🚀'` returns the emoji intact. (The cut is ISO-8859-1, not the
+  surrogate pairs: `é`, and every other character up to U+00FF, needs no prefix and
+  round-trips byte-exact, while a plain `'Ā'` (U+0100) or `'漢'` fails planning exactly
+  like the emoji — spelled `N'漢'` the server even says why: *Failed to encode '漢' in
+  character set 'ISO-8859-1'*. The prefix is only needed where the literal becomes a
+  value — projected, CTAS'd or inserted; `LENGTH('漢')` and `WHERE s = '漢'` are fine
+  without it.)
 * **`BINARY_STRING('\x01\x02')`** for a `VARBINARY` literal. `X'0102'` is rejected
   outright ("Unable to convert the value of `X'0102':BINARY(2)` ... to a Dremio constant
   expression"), and `CAST(... AS VARBINARY)` only reinterprets a string's own bytes —

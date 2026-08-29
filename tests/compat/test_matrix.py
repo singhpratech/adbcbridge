@@ -381,11 +381,13 @@ DBS = {
         ddl="CREATE TABLE adbc_t (i INT PRIMARY KEY, f DOUBLE, s VARCHAR(50), b VARBINARY(10),"
             " d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
         bool_type="int8",
-        # MatrixOne's BIT column cannot take a parameter over the MySQL binary protocol
-        # at all: binding an integer 1 fails with "data out of range: data type bit(1),
-        # value 1", binding NULL silently stores false, and a mixed batch of the three
-        # aborts the whole server ("malloc(): unaligned fastbin chunk detected" -- it
-        # corrupts its own heap and the process dies).  That is what the ingest DDL asks
+        # MatrixOne's BIT column cannot safely take a parameter over the MySQL binary
+        # protocol: a 1 bound with any SQL type but SQL_BIT fails with "data out of
+        # range: data type bit(1), value 1", a bound NULL is silently stored as false
+        # under server-side prepared statements, and a parameter array mixing values and
+        # NULLs (six sets with two NULLs is enough) aborts the whole server ("malloc():
+        # unaligned fastbin chunk detected" -- it corrupts its own heap and the process
+        # dies; single parameters and NULL-free arrays are fine).  That is what the ingest DDL asks
         # for by default, since Connector/ODBC's SQLGetTypeInfo names BIT for a boolean.
         # Sending the column as int8 -> TINYINT, which MatrixOne handles correctly,
         # keeps the whole ingest (create/append/replace) under test.  Its own BOOLEAN
@@ -1252,7 +1254,7 @@ DBS = {
         quote="",
         # ingest_create: that same PRIMARY KEY requirement is what the generated ingest DDL
         # cannot satisfy -- it has no notion of a key, and no column of the ingest payload
-        # is one (`a` is [1, 2, NULL], and Ignite allows neither a NULL key nor the
+        # is one (`a` is [1, 2, NULL, 4], and Ignite allows neither a NULL key nor the
         # duplicates the append step would insert).  So adbc_ingest cannot *create* a table
         # here at all; appending into a table that declares its own key works, which is what
         # the `extra` steps below do -- and what an Ignite user has to do.
@@ -1260,8 +1262,8 @@ DBS = {
         # adbc_big, the table check_big() reads and the one bench/matrix_bench.py times a
         # fetch of -- so, as for the read_only entries, it is sized for the benchmark rather
         # than for the assertion.  SYSTEM_RANGE is the H2 table function Ignite's SQL engine
-        # inherits; it fills the table server-side in about three seconds, which is what
-        # `setup` costs on every connection opened.
+        # inherits; it fills the table server-side in about half a second, which is nearly
+        # all of what `setup` costs on every connection opened.
         setup=["DROP TABLE IF EXISTS adbc_big",
                "CREATE TABLE adbc_big (a BIGINT PRIMARY KEY, b VARCHAR)",
                "INSERT INTO adbc_big (a, b) SELECT X, 'r' || X FROM SYSTEM_RANGE(0, 99999)"],
@@ -1304,16 +1306,18 @@ DBS = {
         # TIMESTAMP for one carrying a time.
         ddl="CREATE TABLE adbc_t (i BIGINT, f DOUBLE, s VARCHAR, b VARCHAR, d DATE,"
             " ts TIMESTAMP, n VARCHAR, bo BOOLEAN)",
-        # The driver's type table maps the SQL plugin's `date` but not its `timestamp`
-        # (a type name the plugin grew after the driver was last released), so `ts` is
-        # described as a VARCHAR and arrives as "2024-02-29 13:45:10.123".
+        # The driver's result-set type table maps the SQL plugin's `date` but not its
+        # `timestamp` (a type name the plugin grew after the driver was last released), so
+        # `ts` is described as SQL_WVARCHAR and arrives as "2024-02-29 13:45:10.123"
+        # (its SQLColumns/SQLGetTypeInfo tables do map `timestamp`; the two disagree).
         ts_text=True,
         # No binary type: the two bytes are stored as text, as for `cratedb`.
         binary_text="\\x0102",
         # No DECIMAL either; `n` is a keyword field read back as its exact digits.
         decimal_type="string",
-        # SQLColumns reports an index's fields in mapping order, which is neither the
-        # workload's nor alphabetical, so the catalog columns are compared as a set.
+        # SQLColumns passes through the SQL plugin's DESCRIBE order (b, s, d, f, i, bo, n,
+        # ts for adbc_t) -- the plugin's own hash order, neither the workload's nor
+        # alphabetical -- so the catalog columns are compared as a set.
         column_order=False,
         # adbc_big is 100,000 documents, which is also what bench/matrix_bench.py times
         # a fetch of on a read_only entry.  plugins.query.size_limit has to allow it --

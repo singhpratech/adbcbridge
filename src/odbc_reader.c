@@ -447,8 +447,10 @@ static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions*
     // 500,000-row read of (int4, text, varchar, numeric, bool, timestamp, bytea) out of
     // PostgreSQL goes from 0.633 s to 0.530 s that way, and (int4, bytea) from 0.182 s
     // to 0.139 s.  A type that does have a declared
-    // length and still comes back as size 0 (MatrixOne reports octet length 0 for
-    // int/numeric/timestamp) is a driver saying nothing useful at all, and stays unbound.
+    // length and still comes back as size 0 is a driver saying nothing useful at all,
+    // and stays unbound.  (MatrixOne's zero widths are all on the no-length types: TEXT
+    // and BLOB describe with column size 0 and octet length 0; its INT, DECIMAL and
+    // DATETIME columns describe with usable sizes.)
     if (!no_declared_length || !repairable) {
       c->bound = false;
       return;
@@ -458,7 +460,8 @@ static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions*
     return;
   }
   // A guess can be too small as well as too large: MatrixOne describes a TEXT column as
-  // five characters (and octet length 0) however long its values are, so binding what it
+  // one third of its widest value's byte length (5 for 16-byte strings, 0 for an empty
+  // result set; octet length 0 either way), so binding what it
   // says would truncate -- and re-read -- every single row, which is slower than not
   // binding at all (a 100,000-row read runs at 3k rows/s that way, 900k bound wide).
   // Since the width of such a column is a guess either way, bind it at the same
