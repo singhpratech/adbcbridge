@@ -283,7 +283,7 @@ cmake --build build --config Release
     <div class="pkg"><div class="pkg-head"><b>taos-odbc (TDengine)</b><span class="state ci">filed</span></div><p>Timestamp columns cannot be bound (<code>SQLGetData</code> converts them, <code>SQLBindCol</code> does not), timestamp parameters and most <code>BOOL</code> parameter types are refused, and a <code>DECIMAL</code> column fails the whole <code>SELECT</code> — each with the driver's own diagnostic and a program.</p><code class="call"><a href="https://github.com/taosdata/taos-connector-odbc/issues/63">taosdata/taos-connector-odbc#63</a></code></div>
     <div class="pkg"><div class="pkg-head"><b>Apache Doris</b><span class="state ci">filed</span></div><p>Server-side prepare refuses a string parameter sent with MySQL type <code>BLOB</code> — what MySQL Connector/ODBC sends for every <code>SQL_C_WCHAR</code> parameter — so Unicode ODBC clients cannot insert through prepared statements: a <code>NullPointerException</code> on 2.1.0, a clean refusal on 4.1.3.</p><code class="call"><a href="https://github.com/apache/doris/issues/67301">apache/doris#67301</a></code></div>
   </div>
-  <p class="cap">Seventeen more findings — connector versions, driver bindings, container images — are documented with their first error and conditions in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>, ready to file.</p>
+  <p class="cap">Twenty-two more findings — connector versions, driver bindings, server behaviours, container images — are documented with their first error and conditions in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>, ready to file.</p>
 </section>
 
 <section id="languages">
