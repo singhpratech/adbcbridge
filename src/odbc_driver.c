@@ -784,20 +784,22 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // read from the wrong row: Parameter::Write() tests `buffer.GetInputSize()` on the
     // whole bound array -- element offset 0 -- and only then copies the buffer and points
     // it at the row being written.  So every row of a chunk takes row 0's NULL-ness: a
-    // NULL in any later row is sent as whatever bytes sit in that row's data slot, which
-    // for a character or binary column is a length the server cannot parse -- it drops the
-    // connection mid-batch ("Failed to establish connection with any provided hosts" on
-    // the next statement).  One execute per row instead; there the indicator is element 0.
+    // NULL in any later row is written as a value -- a character column stores an empty
+    // string (GetString() reads that row's -1 indicator and returns ""), and a binary
+    // column hands the -1 to WriteInt8Array as a length and segfaults inside SQLExecute.
+    // The server never sees it.  One execute per row instead; there the indicator is
+    // element 0.  (Row-wise binding is refused with HYC00.)
     conn->reader_opts.no_param_arrays = true;
   }
   if (strstr((const char*)name, "virtodbc")) {
     // OpenLink Virtuoso ships both an ANSI driver (virtodbc.so) and a Unicode one
     // (virtodbcu.so); both answer SQL_DRIVER_NAME "virtodbc.so", so this keys on either.
-    // The ANSI driver has no SQL_C_WCHAR support worth the name: a bound SQL_C_WCHAR
-    // parameter is read as if it were narrow, so "héllo 🚀" stores as its first byte pair
-    // ("0\0"). Its narrow path is UTF-8 already -- Virtuoso's own charsets are all
-    // single-byte, and an unqualified connection passes narrow bytes through -- so stay
-    // on it.  That holds for the 2-byte-SQLWCHAR builds (unixODBC, Linux).  Built against
+    // The ANSI driver implements SQL_C_WCHAR as 4-byte wchar_t on both the parameter and
+    // the fetch side, so a UTF-16 buffer is consumed four bytes at a time: "héllo 🚀"
+    // stores as the single character "0", and a wide read of "héllo 🚀" widens each
+    // UTF-8 byte to a 4-byte unit.  Its narrow path is UTF-8 already -- Virtuoso's own
+    // charsets are all single-byte, and an unqualified connection passes narrow bytes
+    // through -- so stay on it.  That holds for the 2-byte-SQLWCHAR builds (unixODBC, Linux).  Built against
     // iODBC (4-byte SQLWCHAR, the width the macOS driver is compiled to) the picture is
     // the reverse, measured on macOS 26 with Homebrew 7.2.17: the narrow path's charset
     // is single-byte there (a 'héllo' statement literal never matches the NVARCHAR data,
@@ -806,11 +808,16 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // narrow route is taken only on a 2-byte build.
     if (sizeof(SQLWCHAR) < 4) conn->reader_opts.wchar_as_utf8 = true;
     // SQL_C_SBIGINT parameters are read as 0 without a diagnostic (the driver's
-    // conversion table has no 64-bit integer); numeric text converts exactly.
+    // conversion table has no 64-bit integer -- SQLGetData(SQL_C_SBIGINT) answers ind=0
+    // too); text declared SQL_NUMERIC converts exactly, INT64_MIN/MAX included.  The
+    // declaration matters: the same text as SQL_BIGINT or SQL_VARCHAR also stores 0.
     conn->reader_opts.bigint_param_as_string = true;
     // virtodbc accepts SQL_ATTR_PARAMSET_SIZE and reports the right number of affected
-    // rows, but binds SQL_C_TYPE_DATE from the first parameter set only: every row of a
-    // bound array gets row 0's date, silently.  One execute per row instead.
+    // rows, but steps a column-wise SQL_C_TYPE_DATE/TIME/TIMESTAMP array by the ColumnSize
+    // argument instead of by the size of the C struct.  We bind DATE32 with ColumnSize 0,
+    // so the stride is 0 and every row of a bound array gets row 0's date, silently; a
+    // timestamp array (ColumnSize 23, 16-byte elements) is corrupted rather than repeated.
+    // One execute per row instead.
     conn->reader_opts.no_param_arrays = true;
 #if defined(_WIN32)
     // virtodbc.dll reports the SQL_GD_* extensions that make the in-place truncation
@@ -1052,7 +1059,9 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // one ODBC driver for any Arrow Flight SQL server.  Its SQLColumns builds a result
     // set and describes it, then segfaults inside the first SQLFetch on it -- with no
     // bound columns at all -- so GetObjects has to skip SQLColumns and describe a
-    // zero-row SELECT instead.
+    // zero-row SELECT instead.  That is against sqlflite and InfluxDB 3; against Dremio
+    // 26 the same call fetches cleanly, but a crash leaves no return code to detect the
+    // difference at run time, so the quirk stays keyed on the driver name.
     conn->reader_opts.no_sql_columns = true;
 #if defined(_WIN32)
     // On Windows its SQL_C_WCHAR conversion keeps the low 16 bits of a non-BMP code
