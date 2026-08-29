@@ -1049,17 +1049,42 @@ static bool ArrayParamsRowCount(SQLHSTMT hstmt, const struct OdbcReaderOptions* 
   return answered;
 }
 
+// Rows of a batch whose parameter set the driver marked SQL_PARAM_ERROR (or
+// SQL_PARAM_DIAG_UNAVAILABLE) inside an execute it otherwise reported as a
+// success.  The execute has moved past them, so they are neither applied nor
+// part of the remainder the caller replays; they are re-run one at a time
+// afterwards, where they either land or fail with their own diagnostics.
+struct RetryRows {
+  int64_t* idx;
+  int64_t n;
+  int64_t cap;
+};
+
+static bool RetryRowsAppend(struct RetryRows* r, int64_t row) {
+  if (r->n == r->cap) {
+    int64_t cap = r->cap ? r->cap * 2 : 16;
+    int64_t* idx = realloc(r->idx, sizeof(int64_t) * (size_t)cap);
+    if (!idx) return false;
+    r->idx = idx;
+    r->cap = cap;
+  }
+  r->idx[r->n++] = row;
+  return true;
+}
+
 /// Execute one Arrow batch using column-wise parameter arrays.
 ///
 /// On return *rows_done holds how many leading rows of the batch were applied;
 /// the caller replays the remainder row-at-a-time.  *use_array is cleared when
 /// the driver turns out not to support parameter arrays, or when it stops
-/// accounting for every parameter set it was handed.
+/// accounting for every parameter set it was handed.  Rows inside the applied
+/// range whose parameter set the driver rejected are appended to *retry.
 static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
                                         const struct ArrowSchemaView* svs,
                                         const struct ArrowArrayView* view, int64_t ncols,
                                         int64_t nrows, bool* use_array, int64_t* rows_done,
-                                        int64_t* total, struct AdbcError* error) {
+                                        int64_t* total, struct RetryRows* retry,
+                                        struct AdbcError* error) {
   SQLHSTMT hstmt = stmt->ref->hstmt;
   const struct OdbcReaderOptions* opts = &stmt->reader_opts;
   AdbcStatusCode status = ADBC_STATUS_OK;
@@ -1188,8 +1213,22 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
       status_filled = true;
       if (param_status[i] == SQL_PARAM_SUCCESS || param_status[i] == SQL_PARAM_SUCCESS_WITH_INFO) {
         applied++;
+      } else if (param_status[i] == SQL_PARAM_ERROR ||
+                 param_status[i] == SQL_PARAM_DIAG_UNAVAILABLE) {
+        // A driver that walks the array set by set (MySQL Connector/ODBC) answers
+        // SQL_SUCCESS_WITH_INFO for the execute, counts the set in
+        // SQL_ATTR_PARAMS_PROCESSED_PTR and marks only its status.  Taking the
+        // processed count at face value would drop the row without a word (OceanBase
+        // refuses the first execute of a prepared INSERT that carries a NULL, so the
+        // leading rows of an ingest went missing there).  Re-run it on its own below.
+        if (!RetryRowsAppend(retry, row + i)) {
+          InternalAdbcSetError(error, "out of memory");
+          status = ADBC_STATUS_INTERNAL;
+          break;
+        }
       }
     }
+    if (status != ADBC_STATUS_OK) break;
 
     // How many parameter sets the driver owns up to having run.  ODBC requires
     // SQL_ATTR_PARAMS_PROCESSED_PTR to be written; the parameter-status array is
@@ -2504,10 +2543,11 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
         if (seen > 1) OdbcAutoTxnBegin(&txn);
       }
     }
+    struct RetryRows retry = {NULL, 0, 0};
     if (use_array && row == 0 && batch.length > 1 && status == ADBC_STATUS_OK) {
       int64_t done = 0;
       status = ExecuteBatchArray(stmt, svs, &view, ncols, batch.length, &use_array, &done, &total,
-                                 error);
+                                 &retry, error);
       row = done;
     }
     // Parameter arrays gave up part way through the batch (or turned out not to work at
@@ -2533,6 +2573,19 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
       if (count > 0) total += count;
       if (nres > 0) SQLCloseCursor(hstmt);
     }
+    // Parameter sets the driver rejected inside an array execute it reported as a
+    // success: each gets its own execute, so it either lands or fails the ingest with
+    // that row's diagnostics instead of vanishing.
+    for (int64_t k = 0; k < retry.n && status == ADBC_STATUS_OK; k++) {
+      SQLSMALLINT nres = 0;
+      status = BindAndExecuteRow(hstmt, stmt->prepared, stmt->query, slots, svs, &view, ncols,
+                                 retry.idx[k], &stmt->reader_opts, &nres, error);
+      if (status != ADBC_STATUS_OK) break;
+      SQLLEN count = OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
+      if (count > 0) total += count;
+      if (nres > 0) SQLCloseCursor(hstmt);
+    }
+    free(retry.idx);
     batch.release(&batch);
     if (status != ADBC_STATUS_OK) break;
   }
