@@ -183,8 +183,10 @@ coerces them, instead of the driver emitting MySQL charset-introducer literals
 - A NULL Arrow value sets the ODBC length/indicator to `SQL_NULL_DATA`. The C and
   SQL type are still chosen from the Arrow column type, so a typed NULL is sent.
 - Arrow `null` (untyped, e.g. Python `None`) is sent as a NULL `SQL_VARCHAR`.
-- Under quirk **`null_param_as_varchar`** (clickhouse-odbc, which cannot encode a
-  typed NULL for a numeric parameter) every NULL is bound as a NULL `SQL_VARCHAR`
+- Under quirk **`null_param_as_varchar`** (clickhouse-odbc, which ignores
+  `SQL_NULL_DATA` while a value buffer is bound and sends an empty string; a NULL
+  value pointer stores NULL for every type, so this is belt-and-braces there) every
+  NULL is bound as a NULL `SQL_VARCHAR`
   whatever the column's Arrow type. This is a per-value decision, so a batch with
   NULLs in such a column cannot use array binding and falls back to row-at-a-time.
 - On read, a column the driver reports as `SQL_NO_NULLS` clears the Arrow

@@ -260,9 +260,13 @@ DBS = {
     "clickhouse": dict(
         env="CLICKHOUSE_ODBC_DRIVER", conn="Driver={drv};Url=http://127.0.0.1:18123;Database=adbc;UID=adbc;PWD=adbc;",
         ddl="CREATE TABLE adbc_t (i Nullable(Int32), f Nullable(Float64), s Nullable(String), b Nullable(String), d Nullable(Date), ts Nullable(DateTime64(6)), n Nullable(Decimal(10,3)), bo Nullable(Bool)) ENGINE = Memory",
-        # clickhouse-odbc sends NULL parameters as empty strings (driver limitation) and
-        # does not report affected row counts.
-        null_params=False, rowcount=False, big_rows=300),
+        # clickhouse-odbc ignores SQL_NULL_DATA whenever a value buffer is bound and sends
+        # an empty string instead ('' into String, the epoch into DateTime64, a parse
+        # error for numeric/date/decimal/bool); a NULL bound with a NULL value pointer --
+        # the shape the driver's row path uses -- is stored as NULL for every type, so the
+        # all-NULL row goes through bound parameters here like everywhere else.  The
+        # driver does not report affected row counts (SQLRowCount answers 0 on every write).
+        rowcount=False, big_rows=300),
     "mssql": dict(
         env="MSSQL_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1,14331;Database=master;Uid=sa;Pwd=Adbc!Bridge2026;TrustServerCertificate=yes;",
         ddl="CREATE TABLE adbc_t (i INT, f FLOAT, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME2(6), n DECIMAL(10,3), bo BIT)",
@@ -875,7 +879,8 @@ DBS = {
         # 14), so psqlodbc drives it, but its type system is its own: there is no binary
         # column type at all (blobs live in separate blob tables, outside SQL) and no
         # DATE storage type -- "Type `date` does not support storage" -- so `b` is TEXT
-        # and `d` is TIMESTAMP here.  NUMERIC needs an explicit precision and scale.
+        # and `d` is TIMESTAMP here.  NUMERIC needs a declared precision: a bare NUMERIC
+        # is refused, and NUMERIC(10) is accepted as NUMERIC(10,0).
         env="CRATEDB_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1;Port=15440;Database=doc;Uid=crate;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b TEXT,"
             " d TIMESTAMP, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
@@ -887,7 +892,9 @@ DBS = {
         # (CrateDB spells it BOOLEAN and has no alias).  Send those two columns as types
         # CrateDB does have, so create/append/replace ingest is still exercised in full.
         ingest_types={pa.date32(): pa.timestamp("us"), pa.bool_(): pa.int8()},
-        # `b` is text, so the bytes arrive as psqlodbc's bytea hex escape; TIMESTAMP is
+        # `b` is text, so on the parameter-array path this two-row executemany takes the
+        # bytes arrive as psqlodbc's bytea hex escape (a single-row execute would store the
+        # raw bytes through a server-side prepared statement); TIMESTAMP is
         # millisecond-precision; and CrateDB does not report the precision/scale of a
         # NUMERIC column over the wire, so psqlodbc falls back to its own default (28, 6)
         # instead of the declared (10, 3).
@@ -906,8 +913,10 @@ DBS = {
         # Two settings in the connection string are psqlodbc's, not QuestDB's:
         # BoolsAsChar=0, without which the driver reports every BOOLEAN as a VARCHAR(5)
         # holding "1"/"0" instead of SQL_BIT; and Protocol=7.4-0, which turns off the
-        # per-statement SAVEPOINT psqlodbc wraps a repeated execute in -- QuestDB has no
-        # SAVEPOINT statement and fails the whole insert with "internal SAVEPOINT failed".
+        # SAVEPOINT psqlodbc puts in front of every statement inside a driver-managed
+        # transaction -- QuestDB has no SAVEPOINT statement, so those executes fail with
+        # "internal SAVEPOINT failed".  (It does not stop the SAVEPOINT;DEALLOCATE;RELEASE
+        # sent when a prepared statement is freed mid-transaction; see the README.)
         env="QUESTDB_ODBC_DRIVER",
         conn="Driver={drv};Server=127.0.0.1;Port=18812;Database=qdb;Uid=admin;Pwd=quest;"
              "BoolsAsChar=0;Protocol=7.4-0;",

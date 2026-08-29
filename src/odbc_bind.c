@@ -1407,7 +1407,8 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
 // OdbcReaderOptions::no_param_arrays) and one -- MySQL Connector/ODBC -- accepts them
 // and then walks them row by row inside the driver.  On those, ingest costs one
 // SQLExecute, and for a client/server database one network round trip, per row:
-// clickhouse-odbc sends one HTTP request per row and manages sixteen rows a second.
+// clickhouse-odbc sends one HTTP request per execute and manages sixteen rows a second
+// one row at a time.
 //
 // The rewrite here needs no array support at all.  Instead of executing
 // `INSERT INTO t VALUES (?,?,?,?)` N times, it prepares
@@ -1853,7 +1854,7 @@ static AdbcStatusCode MultiRowExecGroup(struct MultiRowInsert* mr, SQLHSTMT hstm
   // An INSERT that did not raise has inserted every row-group it was given, so the group
   // size is the row count -- and it is a better one than the driver's: DuckDB answers
   // SQLRowCount with 1 for a multi-row INSERT however many row-groups it carried, and
-  // clickhouse-odbc answers -1.  (Only the INSERT that bulk ingest generates reaches
+  // clickhouse-odbc answers 0.  (Only the INSERT that bulk ingest generates reaches
   // here; there is no WHERE clause or conflict rule that could apply fewer.)
   SQLSMALLINT nres = 0;
   *total += n;
