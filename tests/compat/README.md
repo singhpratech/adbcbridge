@@ -533,7 +533,7 @@ docker exec adbcbridge-cockroach ./cockroach sql --insecure -e 'SELECT version()
 ```sh
 ADBC_ODBC_DRIVER=build/libadbc_driver_odbc.so \
   .venv/bin/python tests/compat/test_matrix.py cockroachdb
-# cockroachdb PASS  (PostgreSQL 18.0.0)
+# cockroachdb PASS  (PostgreSQL (via ODBC) 18.0.0)
 ```
 
 ### Notes
@@ -541,15 +541,22 @@ ADBC_ODBC_DRIVER=build/libadbc_driver_odbc.so \
 The entry needs **no tolerance flags and no driver quirk** — CockroachDB passes
 the full workload through the unmodified PostgreSQL code path. `GetInfo` reports
 `PostgreSQL 18.0.0` because CockroachDB advertises a PostgreSQL server version
-over the wire; `SELECT version()` is the only way to tell the two apart, and
-`SQL_DRIVER_NAME` is `psqlodbcw.so` for both. That is exactly why no quirk keyed
-on the driver name would be correct here: it would also fire on real PostgreSQL.
+over the wire, and `SQL_DRIVER_NAME` is `psqlodbcw.so` and `SQL_DBMS_NAME` is
+`PostgreSQL` for both — the names alone never separate the two. That is exactly why
+no quirk keyed on the driver name would be correct here: it would also fire on real
+PostgreSQL. So the driver asks the server who it is instead, with `SELECT version()`
+(`CockroachDB CCL v26.3.0 …`), and that is the discriminator the code keys on. It is
+not the only thing that works — `current_setting('crdb_version')` and
+`SHOW CLUSTER SETTING version` both answer here and raise `42704`/`42601` on
+PostgreSQL, and even `SQLGetInfo` differs (`SQL_MAX_IDENTIFIER_LEN` 128 against
+PostgreSQL's 63, `SQL_DEFAULT_TXN_ISOLATION` serializable against read committed) —
+but `version()` is the one banner that names the server outright.
 
 Type-name differences worth knowing for the ingest path:
 
 | Standard / PostgreSQL | CockroachDB | note |
 |---|---|---|
-| `INTEGER` | `INT8` | `INTEGER` is **64-bit** in CockroachDB, not 32-bit; it reports column size 19 and reads back as `int64` |
+| `INTEGER` | `INT8` | `INTEGER` is **64-bit** in CockroachDB, not 32-bit; it reports column size 19 and reads back as `int64`. The driver binds it `SQL_C_SBIGINT`, which matters here: psqlodbc narrows an out-of-range `int8` to `SQL_C_SLONG` silently (`9223372036854775807` reads as `-1` under `SQL_SUCCESS`, where ODBC specifies `22003`), on stock PostgreSQL just the same |
 | `DOUBLE PRECISION` | `FLOAT8` | same semantics |
 | `BYTEA` | `BYTES` | `BYTEA` and `BLOB` are both accepted as synonyms |
 | `NUMERIC(p,s)` | `DECIMAL(p,s)` | both spellings accepted |
@@ -572,13 +579,28 @@ rowid INT8 NOT VISIBLE NOT NULL DEFAULT unique_rowid(),
 CONSTRAINT adbc_t_pkey PRIMARY KEY (rowid ASC)
 ```
 
-`SELECT *` never returns `rowid`, so the read path is unaffected — but
-`information_schema.columns` lists it, and `psqlodbc` builds `SQLColumns` from
-that view without filtering on `is_hidden`. `GetObjects` and `GetTableSchema`
-therefore report a 9th column `rowid`. Declaring an explicit primary key is the
-supported fix (and is what CockroachDB's own documentation recommends for every
-table). Tables created by `adbc_ingest` get the hidden `rowid` too; it is
-harmless there because ingest names its columns explicitly.
+`SELECT *` never returns `rowid`, so the read path is unaffected — but CockroachDB's
+`pg_catalog.pg_attribute` lists it as `attnum` 9, and `psqlodbc` builds `SQLColumns`
+from a `pg_catalog` join (`pg_class`/`pg_namespace`/`pg_attribute`/`pg_type`/
+`pg_attrdef`) whose only column filter is `not a.attisdropped and a.attnum > 0`.
+CockroachDB does mark the column hidden — `information_schema.columns` reports
+`is_hidden=YES`, and its `pg_attribute` carries a non-standard `attishidden` column
+that is `true` for `rowid` — but upstream PostgreSQL has neither, so a driver written
+against it looks at neither. `GetObjects` therefore reports a 9th column `rowid`;
+`GetTableSchema` does not, because it describes `SELECT * … WHERE 1=0`, which skips
+the hidden column. Declaring an explicit primary key is the supported fix (and is
+what CockroachDB's own documentation recommends for every table); a `UNIQUE NOT NULL`
+column is not enough — only a declared `PRIMARY KEY` suppresses the synthesised
+`rowid`. Tables created by `adbc_ingest` get the hidden `rowid` too; it is harmless
+there because ingest names its columns explicitly.
+
+Two more things a plain-ODBC probe of this server turned up. `COPY … TO STDOUT` and
+`COPY … FROM STDIN` hang the connection through psqlodbc (the CSV form, which
+CockroachDB accepts, never returns; the binary form fails cleanly with `0A000`), so no
+`COPY`-based path is available here. And `crdb_internal` is closed even to `root` on a
+default v26.3 node (`42501 Access to crdb_internal and system is restricted`);
+`current_setting('crdb_version')` and `SHOW CLUSTER SETTING version` are the
+identification queries that work.
 
 ### Clean up
 
@@ -652,15 +674,20 @@ full workload through the unmodified PostgreSQL code path, with the same DDL the
 `postgres` entry uses. `GetInfo` reports `PostgreSQL 15.0.12` because YSQL
 advertises a PostgreSQL server version over the wire (`SQL_DBMS_NAME` is
 `PostgreSQL`, `SQL_DRIVER_NAME` is `psqlodbcw.so`) -- exactly as CockroachDB
-does. `SELECT version()` is the only way to tell them apart:
+does. `SELECT version()` is what the driver asks (`SHOW server_version` and
+`current_setting('server_version')` carry the same `-YB-` string, and YSQL's catalog
+holds 66 `yb_*` functions that stock PostgreSQL lacks — `SQLProcedures(NULL,
+"pg_catalog", "yb\_%")` finds them without running a query at all):
 
 ```
 PostgreSQL 15.12-YB-2026.1.1.1-b0 on x86_64-pc-linux-gnu, ...
 ```
 
 Any future YugabyteDB-specific quirk would therefore have to key on that
-`-YB-` marker in `SQL_DBMS_VER`/`version()`, never on the DBMS or driver name,
-which real PostgreSQL shares.
+`-YB-` marker in `version()` (or in `server_version`, which carries it too), never
+on `SQL_DBMS_VER` — psqlodbc rewrites the server version into ODBC's three-part
+shape and drops the suffix, so it reads a bare `15.0.12` — and never on the DBMS or
+driver name, which real PostgreSQL shares.
 
 Unlike CockroachDB, the DDL needs **no explicit `PRIMARY KEY`**. A YSQL table
 declared without one still gets an internal row identifier, but it is a *system*
@@ -681,6 +708,14 @@ An `adbc_ingest` of `int64/string/double/date32/bool` lands as `bigint / text /
 double precision / date / boolean`, the same mapping `psqlodbc` negotiates for
 PostgreSQL through `SQLGetTypeInfo`. The 5000-row batched ingest and read-back
 complete in about two seconds on a single local node.
+
+On the partitioned-read side, `ctid` is not the only system column YSQL refuses:
+`xmin` and `cmin` fail with the same `0A000 … system column "<name>" is not supported
+yet`, while `ybctid` and `tableoid` are selectable. `ybctid` is no split key, though —
+a range predicate on it plans as a `Seq Scan` with an ordinary `Filter`, no pushdown —
+which is why the driver splits on `yb_hash_code()` instead. Its value space is
+`[0, 65536)` and covers the table exactly once (a 1 M-row checksum comes out identical
+for the hash, key-range and `LIMIT`/`OFFSET` splits).
 
 ### Clean up
 
@@ -884,6 +919,28 @@ the extension version is only visible via `pg_extension`, exactly as for a real
 PostgreSQL server, so no quirk keyed on the driver or server name could tell the two
 apart — nor should it.
 
+What a hypertable looks like from ODBC, for the partitioned-read path: the parent is an
+ordinary relation (`relkind` `r`) with its chunks attached through `pg_inherits` — not a
+declarative partitioned parent (`relkind` `p`; a real one created beside it has a row in
+`pg_partitioned_table`, the hypertable has none) — and its own heap is empty
+(`pg_relation_size` 0, also after `migrate_data => true` and after compressing every
+chunk). The driver's block-count probe therefore declines the `ctid` split, and that
+is the only thing that rules it out: `SELECT ctid` *succeeds* on an uncompressed
+hypertable and hands back chunk-local ctids that repeat across chunks (90 rows, 7
+distinct ctids; a `ctid >= '(0,0)' AND ctid < '(1,0)'` slice matched every row), so a
+ctid split taken on trust would silently return rows in several slices at once.
+Compressed chunks turn it into `42P10 transparent decompression only supports tableoid
+system column`. The key-range split applies only to a primary key that *leads* with an
+integer NOT NULL column: TimescaleDB refuses a unique index that omits the partitioning
+column (`TS103`), so `PRIMARY KEY (d, a)` leads with the DATE and gets no split, `(a, d)`
+qualifies, and the entry's own `adbc_ht`, which has no key, gets none. Two smaller
+things the harness absorbs: `create_hypertable()` refuses a table that already has
+rows (`0A000 table … is not empty`; the entry's first step is `DROP TABLE IF EXISTS`),
+and on a `VARCHAR` column it warns (`01000 column type "character varying" … does not
+follow best practices`), so that step returns `SQL_SUCCESS_WITH_INFO`. Chunks are
+visible to `SQLTables` as ordinary `TABLE` rows in `_timescaledb_internal`; the workload
+skips them by name.
+
 The entry is re-runnable: its first `extra` step is `DROP TABLE IF EXISTS`, which drops
 the hypertable and all of its chunks.
 
@@ -1074,8 +1131,13 @@ and the first that is eventually consistent. What that costs the entry:
   read-your-writes statement.
 * **No binary type.** CrateDB has no `BYTEA`/`BLOB` column type at all — blobs live in
   separate blob tables addressed over HTTP, outside SQL. `b` is therefore `TEXT`, and
-  the bytes of a `SQL_C_BINARY` parameter arrive as whatever the ODBC driver encoded
-  them to, for psqlodbc PostgreSQL's bytea hex escape (`binary_text="\x0102"`).
+  the two bytes land as psqlodbc rendered them rather than as themselves: `adbc_t` is
+  loaded with a two-row `executemany`, and psqlodbc runs a parameter array by inlining
+  the values into one `BEGIN;INSERT …;INSERT …` string, where a binary parameter
+  becomes PostgreSQL's bytea hex escape — the six characters `\x0102`
+  (`binary_text="\x0102"`). A single-row execute takes the other path, a server-side
+  prepared `INSERT … VALUES ($1, $2)` whose typed parameter stores the raw two bytes;
+  stock PostgreSQL splits the same way, so this is the driver's rendering, not CrateDB's.
 * **No `DATE` column type.** `CREATE TABLE t (d DATE)` fails with ``Type `date` does not
   support storage``; only `TIMESTAMP` can hold a date, so `d` is `TIMESTAMP` in the DDL.
 * **`ingest_types`.** The DDL `adbc_ingest(mode="create")` generates takes its type
@@ -1093,16 +1155,30 @@ and the first that is eventually consistent. What that costs the entry:
 
 Benchmark (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000`): ingest 626 rows/s
 row-at-a-time, 511 rows/s with parameter arrays (pyodbc `executemany`: 162 rows/s), fetch
-767k rows/s (pyodbc 552k). Ingest is slow in absolute terms because every `INSERT` is a
-distributed write into Lucene; parameter arrays do not help, since psqlodbc sends each
-set as its own bind/execute over the wire either way.
+767k rows/s (pyodbc 552k). Ingest is slow in absolute terms because CrateDB fsyncs its
+translog once per write operation (`translog.durability` defaults to `REQUEST`) and
+every `INSERT` statement is one such operation: a prepared single-row `INSERT` costs
+~1.4 ms against ~0.3 ms for the same bind/execute/fetch on a parameterised `SELECT`, and
+a table created `WITH ("translog.durability"='ASYNC')` takes the identical
+row-at-a-time loop from ~710 to ~4,900 rows/s. Parameter arrays do not help, because
+psqlodbc does not send an array as one statement — it substitutes the values as SQL
+literals and sends `BatchSize` (default 100) separate single-row `INSERT`s per round
+trip, so the server still executes and fsyncs one statement per row (868 rows/s
+row-at-a-time against 1.07k with 1,000 sets per execute in a plain-ODBC probe).
+Widening the statement is what helps: the same rows sent 1,000 to one multi-row
+`INSERT … VALUES (?,?,?),…` — which psqlodbc does send as a single `PQexecPrepared` —
+go at 47k rows/s, one fsync amortised over the batch. That is the bulk-ingest path, and
+the 50.0k rows/s the compatibility table quotes.
 
 ### Driver fix: a row count the driver never wrote
 
 The first run reported `0` rows ingested for an ingest that had in fact inserted every
-row. Root cause, from a standalone ODBC probe (no adbcBridge involved): with a parameter
-array of three sets, psqlodbc against CrateDB behaves differently depending on whether a
-transaction is open —
+row. Root cause, from a standalone ODBC probe (no adbcBridge involved): with autocommit
+off, psqlodbc against CrateDB returns `SQL_SUCCESS` from `SQLRowCount` without writing
+its out-parameter at all — for a parameter array, a single-row `INSERT`, a multi-row
+`VALUES`, an `UPDATE`, a `DELETE` and a `CREATE TABLE` alike (a `SELECT` still answers,
+because psqlodbc counts those rows itself). In autocommit every one of them is answered
+with the true count. The three-set parameter array, both ways:
 
 ```
 direct, autocommit           ret=0 processed=3 first RowCount=1 total=3
@@ -1112,7 +1188,14 @@ prepared, in transaction     ret=0 processed=3 first RowCount=-99 total=0
 ```
 
 `-99` is the value the probe pre-filled: inside a transaction `SQLRowCount` returns
-`SQL_SUCCESS` **without writing the out-parameter at all**. adbcBridge batches a
+`SQL_SUCCESS` **without writing the out-parameter at all**. The cause is on the wire:
+in a driver-managed transaction psqlodbc sends `BEGIN;<statement>` as a single query
+string, and CrateDB tags every result of a multi-statement query with the leading text
+of the whole string — `BEGIN;INSERT 1`, where PostgreSQL sends `BEGIN` then
+`INSERT 0 1` — so the driver never recognises the tag (the count is in it; only the
+command name is unexpected). The same driver and the same query string against stock
+PostgreSQL write the count, and an explicit `BEGIN` sent as SQL with
+`SQL_ATTR_AUTOCOMMIT` left on leaves CrateDB's counts intact. adbcBridge batches a
 multi-row execute into one transaction, and its `OdbcRowCount()` zeroed the variable
 first (for the 32-bit-`SQLLEN` quirk), so "not written" read as "0 rows affected".
 
@@ -1193,7 +1276,7 @@ PostgreSQL's internal ones, which QuestDB rejects outright:
 | `i` | `INT` | `INTEGER` also accepted; `int4` is **not** |
 | `f` | `DOUBLE` | `DOUBLE PRECISION` also accepted; `float8` is not |
 | `s` | `STRING` | `TEXT` and a bare `VARCHAR` work; `VARCHAR(50)` is a **syntax error** — QuestDB's VARCHAR takes no length |
-| `b` | `BINARY` | `BLOB`/`BYTEA`/`VARBINARY(n)` are not QuestDB types |
+| `b` | `BINARY` | `BLOB` and `VARBINARY` (length or not) fail with `unsupported column type`; `BYTEA` is accepted but silently creates a `STRING` column, which then refuses a bound binary parameter |
 | `d` | `DATE` | millisecond resolution; reads back as a timestamp, not a date |
 | `ts` | `TIMESTAMP` | microsecond resolution, no time zone — the round-trip is exact |
 | `n` | `DECIMAL(10,3)` | `NUMERIC` does not exist here |
@@ -1212,10 +1295,21 @@ Both are the driver's, not the server's:
 * **`BoolsAsChar=0`.** By default psqlodbc reports a PostgreSQL `bool` column as a
   `VARCHAR(5)` holding `"1"`/`"0"`, which would make the workload's `bo` column an Arrow
   string. With it off the column is `SQL_BIT` → Arrow `bool`, as for every other entry.
-* **`Protocol=7.4-0`.** The trailing digit is psqlodbc's "level of rollback on errors";
-  `2` (the default) wraps each execute of a prepared statement in `SAVEPOINT`. QuestDB
-  has no `SAVEPOINT` statement — it fails the whole insert with
-  `internal SAVEPOINT failed` — and `0` turns that off.
+* **`Protocol=7.4-0`.** The trailing digit is psqlodbc's "level of rollback on errors".
+  At `2` (the default), once the driver is inside a transaction it puts a `SAVEPOINT` in
+  front of every further statement so it can roll that one statement back; with
+  autocommit on it opens no transaction and sends none. QuestDB has no `SAVEPOINT`
+  statement — `ERROR: table does not exist [table=SAVEPOINT]` — so on an autocommit-off
+  connection the second statement of the transaction fails and every one after it does
+  too (psqlodbc skips the savepoint on the statement following a failure). `SQLExecute`
+  of a prepared statement reports it as `internal SAVEPOINT failed`; `SQLExecDirect` and
+  a bound parameter array surface QuestDB's own text. Bulk ingest is exactly that case,
+  because the driver wraps an ingest in its own transaction (`SQL_TXN_CAPABLE` here is
+  `SQL_TC_ALL`): psqlodbc sends inlined statements 100 per round trip, so a 100-row array
+  still commits and a 101-row one fails with nothing written. `0` turns the savepoints
+  off — the same setting, for the same reason, as the `materialize` entry. It does
+  **not** cover the `SAVEPOINT …; DEALLOCATE …; RELEASE` psqlodbc sends when a prepared
+  statement is freed inside a transaction; see "Manual commit" below.
 
 ### Driver quirks
 
@@ -1235,12 +1329,23 @@ only for psqlodbc — and looks for `questdb` in the answer.
   stores as **false without any diagnostic** — every `True` silently became `False`. The
   flag binds booleans as a `VARCHAR` holding those two words instead.
 * **`no_param_arrays`.** psqlodbc executes a column-wise parameter array by inlining the
-  values into a single `BEGIN;INSERT ...;INSERT ...` string, where every non-numeric
-  value becomes a string literal. PostgreSQL types such a literal from the target column;
-  QuestDB does not convert it at all, so a bound `b"\x01\x02"` fails with
-  `inconvertible types: STRING -> BINARY [from='\x0102']`. One execute per row instead,
-  which psqlodbc sends as a typed `PQexecPrepared` — and QuestDB takes the bytes. The
-  cost is small here: 22.3k rows/s row-at-a-time against 23.9k with arrays forced on.
+  values into batched multi-statement strings — 100 rows per round trip — where every
+  non-numeric value becomes a string literal. QuestDB converts such a literal into
+  `INT`, `DOUBLE`, `STRING`, `DATE`, `TIMESTAMP` and `DECIMAL` without complaint (a
+  200-row array over those six, bound NULLs included, reads back value for value). It
+  has no string conversion at all for the other two types the workload uses, so a bound
+  `b"\x01\x02"` fails with `inconvertible types: STRING -> BINARY [from='\x0102', to=b]`
+  and a boolean with `inconvertible types: STRING -> BOOLEAN [from='true', to=bo]` (an
+  `SQL_BIT` bind fails the same way as `CHAR -> BOOLEAN [from='1']`). That is QuestDB's
+  own SQL, not an ODBC artefact — `'\x0102'`, `x'0102'` and `CAST('\x0102' AS BINARY)`
+  are all refused over the REST endpoint too, and only the bare keyword `true` reaches a
+  `BOOLEAN`. No C-type or SQL-type pairing sidesteps it, and the failure tears rather
+  than rolling back: of a 250-row array whose row 150 held bytes, rows 0–149 landed and
+  the rest did not. What breaks it is the inlining, not the array — with
+  `UseServerSidePrepare=0` the identical bytes fail one-execute-per-row with the same
+  error, while with server-side prepare on psqlodbc sends a typed `PQexecPrepared` and
+  QuestDB takes them. Hence one execute per row. The cost is small here: 22.3k rows/s
+  row-at-a-time against 23.9k with arrays forced on.
 
 ### `GetObjects` falls back to `SQLDescribeCol`
 
@@ -1278,9 +1383,35 @@ The entry needs two tolerance flags:
   `YESNO`: the workload's all-NULL second row reads back with `bo` false.
 
 Everything else passes unchanged: typed and NULL parameters, the emoji (QuestDB is
-UTF-8 throughout), microsecond timestamps, `BINARY` round-trips, affected-row counts,
-5000-row batched reads, and the "table does not exist [table=adbc_no_such_table]" error
-text.
+UTF-8 throughout), microsecond timestamps, affected-row counts, 5000-row batched reads,
+and the "table does not exist [table=adbc_no_such_table]" error text. `BINARY`
+round-trips as long as the value holds no `0x00`: QuestDB returns a `BYTEA` column with
+format code 1 — raw bytes — even in the simple query protocol, where PostgreSQL always
+sends text, so psqlodbc reads the field as a NUL-terminated string and hands back only
+the bytes before the first `0x00`, silently, under plain `SQL_SUCCESS`, whatever the C
+type or binding (`0x0001` comes back empty, `0x010002` as `01`). The server keeps the
+whole value — its own `length()` reports the full length — and the same psqlodbc build
+round-trips the same bytes against real PostgreSQL. The workload's `b"\x01\x02"` is
+unaffected.
+
+### Manual commit: free prepared statements after the commit
+
+The entry runs with autocommit on. With it off, a prepared `INSERT` executed through
+psqlodbc and then **freed before the commit** loses its rows: two `SQLExecute`s return
+`SQL_SUCCESS`, `SQLEndTran(SQL_COMMIT)` returns `SQL_SUCCESS`, and `count(*)` is 0 from
+the same connection and from a fresh one. Freed *after* the commit, both rows are there;
+so are literal `INSERT`s, autocommit inserts, and the same bound inserts with
+`UseServerSidePrepare=0`. The wire shows why: on `SQLFreeHandle` psqlodbc sends
+`SAVEPOINT _per_query_svp_;DEALLOCATE "_PLAN0x…";RELEASE _per_query_svp_` as one query,
+regardless of `Protocol=7.4-0`; QuestDB has no `SAVEPOINT`, the statement fails, the
+transaction is aborted, the error is never surfaced through ODBC, and the later `COMMIT`
+is answered with success. Driven through libpq directly (psycopg 3: named or unnamed
+statements, text or binary parameters, a plain `DEALLOCATE` inside the transaction)
+every combination keeps its rows, so the discard is this psqlodbc path — the one already
+recorded against Materialize in `docs/UPSTREAM.md` — meeting a second server without
+`SAVEPOINT`. Through adbcBridge that means: on a manual-commit connection to QuestDB,
+release statements after `Commit()`, not before. (One QuestDB-side nit found on the way:
+`DEALLOCATE ALL` raises a `NullPointerException` in `PGPipelineEntry.close()`.)
 
 ### Clean up
 
