@@ -653,9 +653,11 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   if (strstr((const char*)name, "clickhouse")) {
     conn->reader_opts.null_param_as_varchar = true;
     conn->reader_opts.nullable_type_format = "Nullable(%s)";
-    // clickhouse-odbc applies only the first set of a parameter array and drops the
-    // rest under SQL_SUCCESS, writing SQL_ATTR_PARAMS_PROCESSED_PTR as 0, so nothing
-    // reports what ran.
+    // clickhouse-odbc runs one parameter set per SQLExecute/SQLMoreResults call (its
+    // own protocol, clickhouse-odbc#324); a plain SQLExecute therefore runs set 0 only,
+    // and on 1.5.5 the first SQLMoreResults runs set 1 but answers SQL_NO_DATA, so
+    // nothing past set 1 ever runs (clickhouse-odbc#582).  SQL_ATTR_PARAMS_PROCESSED_PTR
+    // holds the index of the set being sent, not a count.
     conn->reader_opts.no_param_arrays = true;
     // clickhouse-odbc reports only the whole-second Time for SQL_TYPE_TIME, with no
     // CREATE_PARAMS; a "13:45:10.123456" parameter bound into such a column is stored as
