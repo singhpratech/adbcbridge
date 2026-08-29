@@ -929,8 +929,9 @@ DBS = {
         # needs neither `ansi_ddl_type_names` nor `ingest_types`.
         env="RISINGWAVE_ODBC_DRIVER", # UseServerSidePrepare=0: with the extended protocol psqlodbc names its server-side
         # statement _PLAN<hex> and RisingWave refuses to prepare a second one under that
-        # name ("XX000 Failed to prepare the statement: Duplicated statement name"), so
-        # the second parameterised query of any connection failed -- QuestDB says the same
+        # name ("XX000 Failed to prepare the statement: Duplicated statement name") once
+        # the first handle is freed, so the second query of the usual allocate/prepare/
+        # execute/free loop failed, parameters or not -- QuestDB says the same
         # thing as "duplicate statement [name=_PLAN0x...]".  The simple protocol has no
         # statement names.
         conn="Driver={drv};Server=127.0.0.1;Port=14566;Database=dev;Uid=root;UseServerSidePrepare=0;",
@@ -1807,9 +1808,10 @@ def check_ingest(cur, cfg, ing_name):
     # *following* rows, which a NULL in the last row would hide.  (Firebird's OdbcFb did
     # exactly that for SQL_BIGINT -- see NullParamCType in src/odbc_bind.c.  That is what
     # the fourth row is for: `a` and `d` used to have their NULL last.)  Row 0 has no
-    # NULL at all, which OceanBase needs -- a NULL bound into the first execute of a
-    # prepared INSERT fixes that parameter's type as MYSQL_TYPE_NULL there, and every
-    # later row is then refused with "Object type error" (4001).
+    # NULL at all, which OceanBase needs -- on a server-side prepared INSERT the
+    # connector sends a NULL as MYSQL_TYPE_NULL until a value has fixed the parameter's
+    # type, and OceanBase refuses that execute with "Object type error" (4001); the
+    # multi-row form is refused the same way and the fallback drops such rows silently.
     tbl = ingest_payload(cfg, {
         "a": pa.array([1, 2, None, 4], pa.int64()),
         "b": pa.array(["x", None, "zz", "w"]),
