@@ -1191,9 +1191,11 @@ prepared, in transaction     ret=0 processed=3 first RowCount=-99 total=0
 `SQL_SUCCESS` **without writing the out-parameter at all**. The cause is on the wire:
 in a driver-managed transaction psqlodbc sends `BEGIN;<statement>` as a single query
 string, and CrateDB tags every result of a multi-statement query with the leading text
-of the whole string — `BEGIN;INSERT 1`, where PostgreSQL sends `BEGIN` then
-`INSERT 0 1` — so the driver never recognises the tag (the count is in it; only the
-command name is unexpected). The same driver and the same query string against stock
+of the whole string — two `CommandComplete`s, `BEGIN;INSERT 0` for the `BEGIN` and
+`BEGIN;INSERT 1` for the `INSERT`, where PostgreSQL sends `BEGIN` then `INSERT 0 1`
+(likewise `BEGIN;UPDATE n`, `BEGIN;DELETE n`, `BEGIN;CREATE 1`) — so the driver never
+recognises the tag (the count is in it; only the command name is unexpected). Reported
+as [crate/crate#20085](https://github.com/crate/crate/issues/20085). The same driver and the same query string against stock
 PostgreSQL write the count, and an explicit `BEGIN` sent as SQL with
 `SQL_ATTR_AUTOCOMMIT` left on leaves CrateDB's counts intact. adbcBridge batches a
 multi-row execute into one transaction, and its `OdbcRowCount()` zeroed the variable
@@ -1391,8 +1393,13 @@ sends text, so psqlodbc reads the field as a NUL-terminated string and hands bac
 the bytes before the first `0x00`, silently, under plain `SQL_SUCCESS`, whatever the C
 type or binding (`0x0001` comes back empty, `0x010002` as `01`). The server keeps the
 whole value — its own `length()` reports the full length — and the same psqlodbc build
-round-trips the same bytes against real PostgreSQL. The workload's `b"\x01\x02"` is
-unaffected.
+round-trips the same bytes against real PostgreSQL. psqlodbc is not alone: psycopg 3 over
+libpq reads the same simple-query field as text too (`b'\x01\x00\x02'` arrives as
+`b'\x01'`), since the protocol promises text there; any bound parameter, which forces the
+extended protocol, returns all three bytes. Reported as [questdb/questdb#7566](https://github.com/questdb/questdb/issues/7566)
+(and the `DEALLOCATE ALL` NullPointerException below as [questdb/questdb#7567](https://github.com/questdb/questdb/issues/7567),
+which fires even on a fresh connection with nothing prepared). The workload's `b"\x01\x02"`
+is unaffected.
 
 ### Manual commit: free prepared statements after the commit
 
@@ -2732,7 +2739,14 @@ synthesised `rowid` there.
 
 **A parameter array with NULLs bound into a `BIT` column takes the server down.** This is
 not a driver problem: it reproduces with plain pyodbc and with plain ODBC, and the
-failure is a *server abort*, not an error return.
+failure is a *server abort*, not an error return. It is also already fixed upstream:
+[matrixorigin/matrixone#27635](https://github.com/matrixorigin/matrixone/issues/27635)
+(prepared `BIT` NULLs stored as zero or stale values) was closed on 2026-08-27 by
+[#27645](https://github.com/matrixorigin/matrixone/pull/27645), which fixes `strToBit`'s
+NULL handling — the same path this batch corrupted — and against the 2026-08-28 nightly
+(`nightly-d9aede4f`) the bound NULL stores as NULL and the 999-set NULL-mixed array
+completes with the server alive. The entry keeps the `TINYINT` mapping because the
+released image (`matrixorigin/matrixone:latest` = 4.2.0) is the one that aborts.
 
 ```
 malloc(): unaligned fastbin chunk detected
@@ -4091,6 +4105,27 @@ alone rather than attempted a second time, which against a locking-out server wo
 a second bad login. Everything after the connect — `SQLExecDirect`, `SQLDescribeCol`,
 `SQLGetData`, `SQLColumns` — goes through the driver's ANSI entry points as before and
 works, emoji included.
+
+### Driver bug: a connect that fails for any other reason never returns
+
+That "real answer" branch cannot in practice be reached through unixODBC, because a
+connect that fails for a network or authentication reason — a closed port, `useSSL=1`
+against a plaintext cluster, an unknown `auth=` value — never returns at all: the call
+sits at 100 % CPU until the process is killed, `responseTimeout=` or not. The network
+part does finish (the refused `connect()` is diagnosed within about two seconds, after
+the AWS SDK's probe of the EC2 metadata endpoint `169.254.169.254`); what never ends is
+the driver manager collecting the diagnostics. unixODBC's `SQLDriverConnectW` prefers a
+driver's `SQLErrorW` over `SQLGetDiagRecW` for that, and calls it in a
+`do … while (SQL_SUCCEEDED(ret))` loop — `SQLError` has no record number, so the driver
+must clear each error as it hands it out. This driver exports `SQLErrorW` and its
+`OPENSEARCHAPI_ConnectError` returns the connection's error on every call without ever
+clearing it (an `strace` of the hung process is 31,948 log writes in 20 seconds, all
+`OPENSEARCHAPI_ConnectError … entering`). Called directly through `dlopen`, the same
+driver answers `SQLGetDiagRecW` correctly (`08001`, then `SQL_NO_DATA` for record 2) and
+`SQLErrorW` with the same `08001` on call 1, 2 and 3. psqlodbc, which this code descends
+from, has the same no-clear `ConnectError` but exports neither `SQLError` nor `SQLErrorW`,
+which is why it never loops. Reported as [opensearch-project/sql-odbc#102](https://github.com/opensearch-project/sql-odbc/issues/102);
+the today's-date conversion above is [opensearch-project/sql-odbc#101](https://github.com/opensearch-project/sql-odbc/issues/101).
 
 ### Driver fix: `sem_init()` with the wrong initial count
 
