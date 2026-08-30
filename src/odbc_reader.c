@@ -416,7 +416,9 @@ static inline bool TruncationRepairable(const struct OdbcReaderOptions* opts) {
 // TEXT column, MySQL says 16,777,215, SQL Server says 2,147,483,647 for NVARCHAR(MAX).
 // Binding that literally is out of the question -- the rowset alone would be hundreds of
 // megabytes, and a driver that null-fills a bound buffer writes every byte of it on every
-// row (sqliteodbc reads a 100,000-row table 4x slower bound at 256 KiB than at 4 KiB) --
+// row (sqliteodbc null-fills a bound SQL_C_CHAR buffer to its full width on every row:
+// a 100,000-row table reads 20x slower bound at 256 KiB than at 4 KiB, 0.52 s against
+// 0.026 s, while bound as SQL_C_WCHAR the same driver writes only the value) --
 // so such a column is bound at `long_bind_bytes` instead and the few values that overflow
 // that are re-read in full.  Re-reading needs a driver that can go back to a row (see
 // TruncationRepairable); without one the column stays unbound, which costs the whole

@@ -133,7 +133,7 @@ protocol as the template.
    ODBC driver library), `conn` (the connection-string template, where `{drv}`
    expands to the driver library and `{drvdir}` to its directory), `ddl` (the
    `CREATE TABLE` in that server's dialect), and the tolerance fields an entry
-   needs — for example `decimal_type`, `ts_precision`, `astral` (whether the
+   needs — for example `decimal_type`, `ts_us`, `astral` (whether the
    server round-trips an astral-plane character), `text_sortable`, `ident` (an
    identifier-folding function such as `str.upper`), `unicode_env`, and `extra`
    (additional setup/read steps). The connection string can be overridden at run

@@ -1950,10 +1950,13 @@ struct ArrayIngest {
 //
 // The spelling is derived from the Arrow type, never from the target column: an
 // `INSERT ... SELECT` assignment-casts each expression to its column, so a bigint array
-// lands correctly in an int, smallint or numeric column.  Where PostgreSQL has no
-// assignment cast at all (an Arrow date column against a text column, say) the prepared
-// statement is refused outright at SQLPrepare and the ingest falls back with nothing
-// applied.
+// lands correctly in an int, smallint or numeric column, and a string column takes any
+// element type through an I/O conversion cast.  Where PostgreSQL has no assignment
+// cast from the element type to the column (a date array against an int column, say)
+// psqlodbc still answers SQLPrepare with SQL_SUCCESS -- it never reports a server
+// parse error at prepare -- and the server's 42804 arrives at SQLExecute with nothing
+// applied; so the prepare-time fallback below cannot fire on this driver, and such a
+// table fails at execute instead (see ArrayIngestSetup).
 static const char* ArrayIngestElemType(const struct ArrowSchemaView* sv) {
   switch (sv->type) {
     case NANOARROW_TYPE_BOOL:

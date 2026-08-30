@@ -436,7 +436,11 @@ struct OdbcReaderOptions {
   // Driver quirk: never call SQLColumns -- nothing usable comes back from it, and not in
   // a way the return code reveals.  The Arrow Flight SQL ODBC driver returns SQL_SUCCESS
   // from SQLColumns and describes all 18 result columns, then segfaults inside the first
-  // SQLFetch on that cursor, with no bound columns at all.  psqlodbc against ArcadeDB
+  // SQLFetch on that cursor -- with no bound columns at all -- whenever the request spans
+  // a table whose Flight SQL schema has no per-field key-value metadata: every table
+  // tried against sqlflite, and InfluxDB 3's information_schema and most system tables
+  // (its iox tables fetch cleanly, and Dremio 26 does not crash at all).  Nothing in the
+  // return code separates the cases.  psqlodbc against ArcadeDB
   // returns SQL_SUCCESS and an empty result set, because the pg_catalog query it builds
   // is one ArcadeDB's SQL parser rejects -- so every table would look like it has no
   // columns.  MySQL Connector/ODBC against the MongoDB BI Connector segfaults inside

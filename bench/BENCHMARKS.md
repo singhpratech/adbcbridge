@@ -861,7 +861,7 @@ whether the server has the form at all. Three answers:
 
 | server | probe result |
 |---|---|
-| Oracle | `VALUES (…),(…)` is `ORA-00933`; the probe re-asks with `INSERT ALL INTO t VALUES (…) INTO t VALUES (…) SELECT 1 FROM dual` (a keyed quirk on `sqora`, consulted only after the standard form has actually been refused) and uses that |
+| Oracle | on releases without a multi-row `VALUES`, `VALUES (…),(…)` is `ORA-00933` and the probe re-asks with `INSERT ALL INTO t VALUES (…) INTO t VALUES (…) SELECT 1 FROM dual` (a keyed quirk on `sqora`, consulted only after the standard form has actually been refused); Oracle 23.26 takes the plain form |
 | SQLite | 2000 parameters is over a 999-variable build's limit; K halves until it prepares |
 | ClickHouse | clickhouse-odbc prepares 500 row-groups and refuses to execute them; K halves to 125 |
 | Firebird 5 (OdbcFb) | no multi-row `VALUES` (`-104 Token unknown` at the second row-group's comma) and no `INSERT ALL`; the probe re-asks a third time with `INSERT INTO t (cols) SELECT CAST(? AS <type>), … FROM RDB$DATABASE UNION ALL SELECT …` (a keyed quirk, `multirow_union_from`, again consulted only after the standard form has been refused) and uses that. Firebird's limit of 256 relation contexts caps it at ~250 row-groups, which the same halving search finds |
