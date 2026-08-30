@@ -596,10 +596,15 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     conn->reader_opts.getdata_bound = (gd & SQL_GD_BOUND) != 0;
   }
 
-  // Can an earlier row of this cursor be read again?  SQL_CA1_ABSOLUTE on the
-  // forward-only cursor -- the cursor type the reader uses -- says SQLFetchScroll can
-  // reposition without asking for a scrollable (and, on a client/server driver, far
-  // more expensive) cursor type.
+  // Can an earlier row of this cursor be read again?  The reader sets no cursor type,
+  // so it gets the driver's default -- SQL_CURSOR_FORWARD_ONLY by the specification,
+  // SQL_CURSOR_STATIC on sqliteodbc, whose materialised result set is what makes the
+  // re-read work there.  SQL_CA1_ABSOLUTE in SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1 says
+  // SQLFetchScroll can reposition without asking for a scrollable (and, on a
+  // client/server driver, far more expensive) cursor type; sqliteodbc leaves it out of
+  // that bitmask and claims it for the static cursor only -- and means it: a cursor
+  // explicitly set forward-only answers SQLFetchScroll(SQL_FETCH_ABSOLUTE) with 01000
+  // "wrong fetch direction".  Since nothing here sets the type, the default carries it.
   SQLUINTEGER ca1 = 0;
   if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1, &ca1,
                                sizeof(ca1), NULL))) {
@@ -924,7 +929,9 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       // is the bare "14.0.5".  What YDB does do differently is map the server_version
       // *setting* to version() itself, so "SHOW server_version" hands back that whole
       // banner, where PostgreSQL -- and every other server reached over this wire --
-      // answers with a bare version number ("16.10").  So: ask, and compare.  One
+      // answers with a version string that is not the banner: a version number,
+      // possibly with a packager's suffix (Debian 16 answers "16.15 (Debian
+      // 16.15-1.pgdg13+2)").  So: ask, and compare.  One
       // small query, and only when version() matched no other marker.
       char setting[256];
       OdbcServerScalarString(conn->hdbc, "SHOW server_version", setting, sizeof(setting));
@@ -1088,26 +1095,35 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;
-    // Oracle has no multi-row VALUES clause ("INSERT INTO t VALUES (1),(2)" is ORA-00933,
-    // "SQL command not properly ended"); its spelling of the same thing is INSERT ALL.
-    // Only consulted once the plain form has actually been refused, so a future Oracle
-    // that grows one would simply use it.
+    // Older Oracle has no multi-row VALUES clause and answers "INSERT INTO t VALUES (1),(2)"
+    // with a syntax error; INSERT ALL is its spelling of the same thing.  Only consulted
+    // once the plain form has actually been refused, so a release that has one uses it --
+    // 23.26 (SQORA 23.9) takes `INSERT INTO t (a, b) VALUES (?, ?), (?, ?)` prepared or
+    // direct, at 1,998 parameters, with NULLs and CLOB columns, so the quirk is inert there.
     conn->reader_opts.multirow_insert_all = true;
-    // SQORA cannot be told a new SQL_ATTR_ROW_ARRAY_SIZE once a cursor is open.  Raising
-    // it on a cursor holding a LOB column segfaults inside the driver on the next
-    // SQLFetch -- bcoReturnColData dereferences a null entry of the per-rowset LOB state
-    // it sized when the statement was executed (SQLFetch -> bcoSQLFetch -> bcoSQLScroll
-    // -> bcoCacheFetch -> bcoCacheFetchNext -> bcoCacheReturnData -> bcoReturnUserData
-    // -> bcoReturnColData, all in libsqora 23.9).  Reproduced with plain SQLBindCol and
-    // SQLFetch and nothing else: a 20,000-row (NUMBER, CLOB) cursor fetched at 128 rows
-    // and then raised to 1,024 dies on the fetch after the raise, while the same cursor
-    // held at either size reads every row.  AddressSanitizer, which sees the driver's
-    // own allocations, reports no overflow of any buffer this driver hands out -- the
-    // fault is a read of address 0x1d8 inside libsqora, so there is nothing a caller can
-    // bind differently to avoid it.  Lowering the size is not safe either, and does not
-    // even crash: it ends the result set early and silently (100,000 rows of
-    // (TIMESTAMP, NUMBER, VARCHAR2) come back as 14,336 when the array size drops from
-    // 1,024 to 128 mid-cursor), which is worse than a crash.
+    // SQORA cannot be told a new SQL_ATTR_ROW_ARRAY_SIZE once a cursor is open.  It
+    // accepts the change and then goes wrong on a later SQLFetch.  Raising it segfaults
+    // inside the driver -- bcoReturnColData dereferences a null entry of the per-rowset
+    // state it sized when the statement was executed (SQLFetch -> bcoSQLFetch ->
+    // bcoSQLScroll -> bcoCacheFetch -> bcoCacheFetchNext -> bcoCacheReturnData ->
+    // bcoReturnUserData -> bcoReturnColData, all in libsqora 23.9).  Reproduced with
+    // plain SQLBindCol and SQLFetch and nothing else: a 20,000-row (NUMBER, CLOB) cursor
+    // fetched at 128 rows and then raised to 1,024 dies on the fetch after the raise at
+    // 17 of the first 20 switch points (the same 17 every run; it survives only where the
+    // raise lands exactly 128 + k*1,024 rows in), while the same cursor held at either
+    // size reads every row.  A LOB column is not required, only the likeliest way to
+    // meet it: the same raise kills a (NUMBER, VARCHAR2(50)) cursor after 8 to 15 rowsets
+    // and a (TIMESTAMP, NUMBER, VARCHAR2) one after 7 to 13, in the same frame, and
+    // where it does not crash it can rewind (64 -> 4,096 after 400 rowsets re-delivers
+    // 140 rows and drops 140 others).  AddressSanitizer, which sees the driver's own
+    // allocations, reports no overflow of any buffer this driver hands out, so there is
+    // nothing a caller can bind differently to avoid it.  Lowering the size is not safe
+    // either, and does not even crash: it silently drops rows -- the driver keeps
+    // stepping the cursor by the array size it was executed with and returns only the
+    // first N rows of each block, so a 100,000-row (TIMESTAMP, NUMBER, VARCHAR2) cursor
+    // read at 1,024 and dropped to 128 yields 13,440-14,336 rows depending on where the
+    // change falls, every SQLFetch SQL_SUCCESS, no diagnostic.  Which is worse than a
+    // crash.
     //   So the reader settles the rowset before the first fetch and never moves it: no
     // probe-then-restore for the bind-width adaptation, no collapse to one row to repair
     // a rowset.  Every result set here is fetched at the one size it was given before its
@@ -1120,12 +1136,16 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // bound buffer cannot be re-read where it sits; and with SQL_CA1_ABSOLUTE absent from
     // SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1 -- SQLFetchScroll(SQL_FETCH_ABSOLUTE) answers
     // HY106, "Fetch type out of range" -- it cannot be re-read by going back to its row
-    // either.  Nothing repairs a truncated value on this driver, so a column whose
-    // declared width is a type maximum rather than a real bound stays unbound and is read
-    // with SQLGetData, which does work once the cursor holds a single row.
+    // either.  Only a one-row rowset lets SQLGetData re-read a truncated bound value
+    // (asking for SQL_CURSOR_STATIC makes the calls succeed on a block cursor, but then a
+    // LOB slot past the first hands back an earlier row's value, rc=0, no diagnostic), so
+    // a column whose declared width is a type maximum rather than a real bound stays
+    // unbound and is read with SQLGetData, which does work once the cursor holds a
+    // single row.
     //   That is the whole cost of these two quirks, and it falls on exactly one shape of
-    // result set: one that selects a LOB column (CLOB, NCLOB, BLOB and LONG are all
-    // SQL_LONGVARCHAR/SQL_LONGVARBINARY of column_size 2,147,483,647 here) reads a row at
+    // result set: one that selects a LOB column (CLOB, NCLOB, BLOB, LONG and LONG RAW all
+    // describe with column_size 2,147,483,647 here -- CLOB and LONG as SQL_LONGVARCHAR,
+    // NCLOB as SQL_WLONGVARCHAR, BLOB and LONG RAW as SQL_LONGVARBINARY) reads a row at
     // a time instead of a rowset at a time.  It buys correctness for every CLOB width:
     // bound, the driver clips a value longer than adbc.odbc.long_bind_bytes to a prefix
     // and has no way to hand back the rest.  Result sets with no LOB column -- NUMBER,

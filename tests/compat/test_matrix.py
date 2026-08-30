@@ -194,8 +194,12 @@ DBS = {
     "sqlite": dict(
         env="SQLITE_ODBC_DRIVER", conn="Driver={drv};Database=" + os.path.join(TMP, "m.db") + ";",
         ddl="CREATE TABLE adbc_t (i INTEGER, f REAL, s TEXT, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
-        # sqliteodbc converts UTF-8 through UCS-2 and drops the astral-plane emoji.
-        decimal_type="string", ts_precision="ms", astral=False, text_sortable=True),
+        # ts_us: sqliteodbc renders a bound SQL_C_TYPE_TIMESTAMP parameter with exactly
+        # three fractional digits, so ROW1's 13:45:10.123456 -- sent as a bound timestamp
+        # parameter -- is stored as "...10.123" and reads back as 123000 us; the same value
+        # written as statement text keeps all six digits.  (On Linux/unixODBC the astral
+        # emoji round-trips whole through SQL_C_CHAR and SQL_C_WCHAR alike.)
+        decimal_type="string", ts_us=(123000,), text_sortable=True),
     "duckdb": dict(
         # A file, not :memory:: with an in-memory database every ODBC connection is its
         # own empty DuckDB, so a benchmark that ingests on one connection and reads on
@@ -594,9 +598,12 @@ DBS = {
         # statement protocol yet", exactly as Databend's MySQL handler does.  With NO_SSPS
         # the connector substitutes bound parameters into the SQL text and every statement
         # goes as a plain query.
-        # {plugin_dir}: mongosqld offers only mysql_native_password, whose client-side
-        # plugin Connector/ODBC 9 loads at run time -- and here it does not fail cleanly
-        # without it, it *segfaults* in the handshake.  See conn_uri() and README.md.
+        # {plugin_dir}: mongosqld offers only mysql_native_password -- its greeting names
+        # no plugin (no CLIENT_PLUGIN_AUTH) and every handshake response is answered with
+        # an AuthSwitchRequest for it -- whose client-side plugin Connector/ODBC 9 loads at
+        # run time.  Here its absence is not a clean failure but a *segfault* in the
+        # handshake: libmysqlclient strcmp()s the NULL plugin name (authsm_begin_plugin_auth).
+        # See conn_uri() and README.md.
         conn="Driver={drv};Server=127.0.0.1;Port=13315;Database=adbc;User=adbc;"
              "NO_SSPS=1;{plugin_dir}",
         # read_only: mongosqld is a query engine only -- it has no DDL and no DML at all
@@ -632,8 +639,9 @@ DBS = {
         # as its exact text, as it does for the `databend` and `flightsql` entries.
         decimal_type="string",
         # A BSON date is milliseconds since the epoch, so `ts` keeps 123 of ROW1's 123456
-        # microseconds (the default tolerance already allows it) and `d`, which has no DATE
-        # type to land in either, is a midnight timestamp.
+        # microseconds (the default tolerance already allows it) and `d` is a midnight
+        # timestamp because the entry's DRDL maps it `SqlType: timestamp` (mongosqld does
+        # have a DATE type: `SqlType: date` is described SQL_TYPE_DATE).
         # adbc_big holds 100,000 documents -- the table check_big() reads and the one
         # bench/matrix_bench.py times a fetch of on a read_only entry.
         big_rows=100000,
@@ -1558,7 +1566,8 @@ def conn_uri(name, cfg, drv=None):
     drivers that need one: MySQL Connector/ODBC loads client-side authentication plugins
     from the directory it was *built* with (/usr/local/mysql/lib/plugin for the generic
     tarball), so a tarball unpacked elsewhere cannot load them and a server still using
-    mysql_native_password (TiDB, Dolt, Databend) refuses the connection.  The tarball
+    mysql_native_password (TiDB, Dolt, Databend) the connector fails to connect before
+    authentication (08004/2059, "Authentication plugin ... cannot be loaded").  The tarball
     keeps those plugins next to the driver, so point PLUGIN_DIR there when that directory
     exists; a packaged install has no such directory and keeps its own -- correct --
     compiled-in default.
@@ -1917,8 +1926,8 @@ def check_text_sortable(cur, cfg, ing_name, n):
     that cannot be sorted on its own text column is a defect worth a test.
 
     Left off by default because the same restriction is genuine on some servers whatever
-    adbcbridge does -- Oracle's SQL_LONGVARCHAR is CLOB, and ORDER BY on a CLOB is
-    ORA-00932 -- so this is only claimed where it has been checked.
+    adbcbridge does -- Oracle's SQL_LONGVARCHAR is CLOB, and ORDER BY (also DISTINCT and
+    GROUP BY) on a CLOB is ORA-22848 -- so this is only claimed where it has been checked.
     """
     if not cfg.get("text_sortable"):
         return

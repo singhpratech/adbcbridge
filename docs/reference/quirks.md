@@ -85,9 +85,9 @@ MySQL-wire warehouse matches `myodbc` and then a server probe narrows it further
 | … + `SQL_DBMS_VER` contains `mongosqld` | MongoDB BI Connector | `no_sql_columns` | `SQLColumns` segfaults on a NULL `NUMERIC_PRECISION` for a DECIMAL column |
 | … + `@@version_comment` contains `doris` | Apache Doris | `ddl_table_options="DISTRIBUTED BY RANDOM BUCKETS AUTO PROPERTIES (…)"` | An MPP warehouse refuses a CREATE TABLE with no distribution clause |
 | … + `version()` contains `greptimedb` | GreptimeDB (MySQL wire) | `ddl_extra_column="greptime_timestamp TIMESTAMP(3) TIME INDEX DEFAULT CURRENT_TIMESTAMP"`, `ddl_table_options="WITH ('append_mode'='true')"` | Every table needs one NOT NULL TIMESTAMP time index; without append mode rows sharing a time index merge |
-| `arrow flight` | Arrow Flight SQL servers (Dremio, sqlflite, …) | `no_sql_columns`; **(Windows only)** `text_as_binary` | `SQLColumns` segfaults inside the first `SQLFetch` (observed against sqlflite and InfluxDB 3; against Dremio 26 the same call fetches normally, so the quirk is applied driver-wide for want of a return code to fall back on); on Windows only `SQL_C_BINARY` reads its text byte-exact |
+| `arrow flight` | Arrow Flight SQL servers (Dremio, sqlflite, …) | `no_sql_columns`; **(Windows only)** `text_as_binary` | `SQLColumns` describes its 18 result columns and then segfaults inside the first `SQLFetch` — `arrow::KeyValueMetadata::Get` on a null pointer, from `GetColumns_Transformer::Transform` — for tables whose Flight SQL schema carries no per-field key-value metadata: every table tried against sqlflite, and against InfluxDB 3 twelve of the seventeen tables `SQLTables` returns (all seven `information_schema` views and five of the eight `system` tables); InfluxDB's own `iox` tables fetch cleanly, and against Dremio 26 the call fetches normally. Nothing in the return code marks any of it, so the quirk is applied driver-wide; on Windows only `SQL_C_BINARY` reads its text byte-exact |
 | `taos_odbc` | TDengine | `timestamp_as_text`, `bool_param_as_tinyint` | No `TIMESTAMP_STRUCT` conversion; the only route into a BOOL column is an integer described as `SQL_TINYINT` |
-| `sqora` | Oracle | `bigint_param_as_string`, `multirow_insert_all`, `fixed_rowset`, `getdata_repair=false` | Rejects `SQL_C_SBIGINT`; has no multi-row VALUES (uses `INSERT ALL`); segfaults if the rowset size changes mid-cursor; cannot re-read a truncated LOB value |
+| `sqora` | Oracle | `bigint_param_as_string`, `multirow_insert_all`, `fixed_rowset`, `getdata_repair=false` | Rejects `SQL_C_SBIGINT`; keeps `INSERT ALL` for Oracle releases with no multi-row `VALUES`, though 23.26 takes the plain form and never reaches the fallback; takes a mid-cursor rowset change and then segfaults or loses rows, LOB column or not; cannot re-read a truncated LOB value unless the rowset holds exactly one row |
 | `msodbcsql` | Microsoft SQL Server | `ddl_string_type_name="NVARCHAR(MAX)"` | Its `SQL_LONGVARCHAR` is the deprecated `TEXT`, which cannot be sorted, grouped, de-duplicated or compared |
 | `db2` + `SQL_DBMS_NAME` = `IDS…` | IBM Informix | `wchar_as_utf8`, `narrow_params`, `bool_param_as_int` | Gives up on a UTF-16 surrogate pair (-415); a `SQL_C_BIT` param breaks the DRDA stream |
 | `db2` + `SQL_DBMS_NAME` not `IDS…` | IBM Db2 | `ddl_string_as_max_varchar` | Its `SQL_LONGVARCHAR` is `LONG VARCHAR`, ~700× slower to bulk-insert than VARCHAR |
@@ -122,7 +122,7 @@ Every field of `OdbcReaderOptions` that acts as a quirk, with its exact meaning.
 | `getdata_repair` | bool | `SQLGetData` can re-read a bound column of any row of a block cursor in any order (`SQL_GD_BLOCK|SQL_GD_BOUND|SQL_GD_ANY_ORDER`). Lets a long column be bound and only the truncated values re-read. |
 | `getdata_bound` | bool | `SQLGetData` can re-read a bound column (`SQL_GD_BOUND`); enough on its own when the cursor holds one row. |
 | `refetch_repair` | bool | `SQLFetchScroll(SQL_FETCH_ABSOLUTE)` re-reads an earlier row and a plain `SQLFetch` resumes after it; another way to recover a truncated bound value. |
-| `fixed_rowset` | bool | `SQL_ATTR_ROW_ARRAY_SIZE` is fixed for the life of a cursor (Oracle's SQORA segfaults if it changes); the rowset is chosen before the first fetch and never touched again. |
+| `fixed_rowset` | bool | `SQL_ATTR_ROW_ARRAY_SIZE` is fixed for the life of a cursor (Oracle's SQORA takes the change and then either segfaults on a later fetch or silently duplicates and drops rows, LOB column or not); the rowset is chosen before the first fetch and never touched again. |
 
 ### Parameter binding
 
@@ -171,7 +171,7 @@ Every field of `OdbcReaderOptions` that acts as a quirk, with its exact meaning.
 
 | Flag | Type | Meaning |
 |---|---|---|
-| `multirow_insert_all` | bool | The server has no multi-row `VALUES` but has Oracle's `INSERT ALL … SELECT 1 FROM dual`. |
+| `multirow_insert_all` | bool | Oracle's `INSERT ALL … SELECT 1 FROM dual`, for a server with no multi-row `VALUES`. Consulted only after the standard form has actually been refused, so an Oracle that takes the plain form (23.26 does) simply uses it. |
 | `multirow_union_from` | string | The server has neither; use `INSERT … SELECT <typed>, … FROM <this> UNION ALL …` over this one-row table (Firebird's `RDB$DATABASE`). |
 | `pg_array_ingest` | bool | Send a whole batch as one array parameter per column via multi-argument `unnest` (real PostgreSQL only; verified once per connection before use). |
 | `max_statement_len` | int64 | `SQL_MAX_STATEMENT_LEN` in bytes (0 = unknown). |

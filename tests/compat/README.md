@@ -239,10 +239,11 @@ Authentication plugin 'mysql_native_password' cannot be loaded:
 
 The tarball does ship the plugin, in `lib/plugin/` beside the driver library, so the entry
 points `PLUGIN_DIR` at it. To keep a machine-specific path out of the repo, the connection
-string uses `{drvdir}` — a second placeholder alongside `{drv}`, expanding to the directory
-holding the driver library — so the entry reads
-`…;User=root;PLUGIN_DIR={drvdir}/plugin;`. A driver installed somewhere whose plugins live
-elsewhere can override the whole string with `DOLT_CONN`.
+string ends `…;User=root;{plugin_dir}{no_ssps}` — `{plugin_dir}` expands to
+`PLUGIN_DIR=<the directory holding the driver library>/plugin;` when that directory
+exists and to nothing when it does not, so a packaged install keeps its own compiled-in
+default. A driver installed somewhere whose plugins live elsewhere can override the whole
+string with `DOLT_CONN`.
 
 This is a packaging mismatch between the two, not a bug in either, and nothing in `src/`
 works around it: it is a connection option.
@@ -258,11 +259,16 @@ double-quoted identifiers `adbc_ingest` emits). `VARBINARY(10)`, `DATE`, `DATETI
 One thing worth recording because it is easy to misread as a driver bug: under **pyodbc**,
 a `datetime` bound as a parameter reaches a Dolt `DATETIME(6)` column truncated to one
 fractional digit (`13:45:10.123456` → `13:45:10.1`), while the same value inserted as a SQL
-literal round-trips exactly. Dolt describes every `DATETIME` column as scale 0 (`SQLColumns`
-returns a NULL `DECIMAL_DIGITS`), and pyodbc's own parameter binding follows that. adbcBridge
-binds timestamps with an explicit scale, so it stores and reads back the full microseconds
-and the matrix assertion passes — the benchmark's pyodbc column is the only place the
-truncation is visible.
+literal round-trips exactly. The truncation is MySQL Connector/ODBC and pyodbc between them,
+not Dolt: Dolt itself reports `datetime(6)` with `datetime_precision` 6 (and MariaDB
+Connector/ODBC 3.1.15 against the same column describes it as 26/6), but Connector/ODBC 9.4
+describes a `DATETIME(6)` as `COLUMN_SIZE` 19 / `DECIMAL_DIGITS` 0 and answers
+`SQLGetTypeInfo(SQL_TYPE_TIMESTAMP)` with `COLUMN_SIZE` 21 — one fractional digit — and pyodbc
+sizes its bound datetimes from that, hence `13:45:10.1`. adbcBridge binds timestamps with an
+explicit scale and stores and reads back the full microseconds, so the matrix assertion
+passes (through this driver a bound `SQL_C_TYPE_TIMESTAMP` keeps the microseconds at any
+declared scale; the digit count pyodbc derives is what loses them) — the benchmark's pyodbc
+column is the only place the truncation is visible.
 
 
 ## Databend
@@ -1712,7 +1718,6 @@ format itself:
 | `params=False` | neither `SQLPrepare` nor `SQLBindParameter` is implemented ("Driver does not support this function"); the parameterised query runs with a literal instead. |
 | `error_text=False` | an unknown table produces a bare `Couldn't parse SQL` naming neither the table nor the problem. |
 | `astral=False` | the iconv conversion out of Jet's UCS-2 turns the emoji's surrogate pair into `??`. Latin-1 accents survive. |
-| `ts_precision="s"` | Access `DATETIME` is a day fraction with one-second resolution; the 123456 µs of the fixture timestamp cannot be stored. |
 | `not_null=("bo",)` | Access `YESNO` has no NULL state — the all-NULL row reads back `False`, not `None`. |
 
 Three fixes in `src/` were needed to reach `PASS`; two of them reuse machinery that was
@@ -2128,11 +2133,17 @@ SQLNumResultCols(stmt, &n);                                               /* n =
 SQLFetch(stmt);                                                           /* SIGSEGV */
 ```
 
-It happens for any table, including the server's own TPC-H tables, and whether or not the
-catalog and schema are given (passing a catalog that matches nothing returns an empty
-result set, which fetches without crashing — the crash is in producing the first row).
-`SQLTables` and `SQLPrimaryKeys` are fine, and `SQLStatistics` is honestly reported as
-`HYC00 Unsupported function`.
+It happens for any table against sqlflite, including the server's own TPC-H tables, and
+whether or not the catalog and schema are given (passing a catalog that matches nothing
+returns an empty result set, which fetches without crashing — the crash is in producing the
+first row). The trigger, found later against InfluxDB 3, is a table whose Flight SQL schema
+carries no per-field key-value metadata: `arrow::KeyValueMetadata::Get` is called on a null
+pointer from `GetColumns_Transformer::Transform`. Against InfluxDB that is the `system` and
+`information_schema` tables (twelve of the seventeen `SQLTables` lists) while its `iox`
+tables fetch cleanly, and against Dremio 26 the call fetches normally. `SQLTables` and
+`SQLPrimaryKeys` are fine, and `SQLStatistics` fails cleanly with `HYC00 Unsupported
+function` rather than crashing — though `SQLGetFunctions` claims it is supported, the same
+claim it makes for `SQLBindParameter`.
 
 A crash leaves no return code to fall back on, so the call has to be skipped outright.
 adbcBridge already has the fallback this needs: `AppendColumnsViaDescribe`
@@ -3387,9 +3398,10 @@ export INFLUXDB3_ODBC_DRIVER=$FLIGHTSQL_ODBC_DRIVER
 
 ### Loading the data (the entry cannot)
 
-InfluxDB 3's SQL is query-only: `CREATE TABLE`, `CREATE VIEW` and `INSERT` all come back
-as `Error during planning: DDL not supported`, and a table exists only once line protocol
-has been written to it. Together with the driver's missing `SQLBindParameter` that leaves
+InfluxDB 3's SQL is query-only: `CREATE TABLE`, `CREATE VIEW` and `DROP TABLE` come back as
+`Error during planning: DDL not supported: <op>` (`CreateMemoryTable`, `CreateView`,
+`DropTable`), and `INSERT`, `UPDATE` and `DELETE` as `Error during planning: DML not
+supported: <op>`; a table exists only once line protocol has been written to it. Together with the driver's missing `SQLBindParameter` that leaves
 no way at all to load a table over the ODBC connection, so the entry is `read_only=True`
 and its two tables are written over the HTTP API first:
 
@@ -3431,9 +3443,20 @@ The whole read side of the workload, exactly as for `flightsql`: `int64`, `doubl
 `SQL_VARCHAR`, so the reader is on its correct narrow UTF-8 path and the astral-plane
 emoji survives), `bool`, `DATE`, `TIMESTAMP`, the all-NULL row, the 100,000-row batched
 read, `GetObjects`, `GetTableSchema` and the error text (`table
-'public.iox.adbc_no_such_table' not found`). `GetObjects` works because the existing
-`no_sql_columns` quirk already covers this driver. **No driver change was needed for
-InfluxDB.** The entry also runs two things only a time-series engine does: a `date_bin`
+'public.iox.adbc_no_such_table' not found`). `GetObjects` works, and it would work here even
+without the driver quirk: `SQLColumns` on the entry's own tables is fine — `adbc_t` returns
+its eight columns and `adbc_big` its three, whether the call is spelled
+`(NULL, NULL, "adbc_t")` or fully qualified — and the entry's `GetObjects` filters by table
+name, so nothing else is asked for. What `no_sql_columns` buys against InfluxDB is an
+*unfiltered* `GetObjects`: `SQLTables` returns 17 tables, and `SQLColumns` segfaults on
+twelve of them — all seven `information_schema` views and five of the eight `system`
+tables, starting with the first row `SQLTables` hands back. So, as with Dremio, the quirk
+arrives keyed on the driver name rather than because this entry needs it. **No driver
+change was needed for InfluxDB.** Two more driver facts: `SQLGetFunctions` claims
+`SQLStatistics` is supported while the call answers `HYC00`; and `UID`/`PWD` given to a
+server started `--without-auth` make `SQLDriverConnect` fail (`Invalid handshake. No
+payload provided`), while omitting `database` connects and fails on the first query
+(`no 'database' header in request`). The entry also runs two things only a time-series engine does: a `date_bin`
 1-hour bucketed aggregate, and a range scan on the `time` column InfluxDB partitions by.
 
 Fetch: **1.03M rows/s** over the 100,000-row `adbc_big` (`bench/matrix_bench.py`). There
@@ -4676,7 +4699,8 @@ It does name itself in the `server_version` **ParameterStatus** of the startup h
 `14.0.5` as `SQL_DBMS_VER`, so nothing reachable through ODBC carries the string "ydb".
 What YDB *does* do differently is map the `server_version` **setting** to `version()`
 itself, so `SHOW server_version` hands back the whole banner where every other server on
-this wire answers with a bare version number:
+this wire answers with a version string that is not the banner — a version number, possibly
+with a packager's suffix (Debian's PostgreSQL 16 answers `16.15 (Debian 16.15-1.pgdg13+2)`):
 
 | server | `SELECT version()` | `SHOW server_version` |
 |---|---|---|
@@ -5895,8 +5919,11 @@ docker exec adbcbridge-mongodbbi tail -2 /tmp/mongosqld.log
 `fixtures/mongodbbi.drdl` is a DRDL schema — the BI Connector's own mapping format, of
 which `mongodrdl` (in the same tarball) generates a first draft by sampling. The matrix
 uses a written one because sampling types a field from the values it happens to see:
-`adbc_big.c` comes out `int` because its first values are whole, and a `binData` field
-comes out `varchar` and then reads back NULL. Anything the schema does not list is not a
+`adbc_big.c` comes out `int` because its first values are whole, and a `binData` field lands
+in one of three places depending on what the sampler saw: a generic `binData` gets no column
+at all, a UUID (subtype 3 or 4) gets a `varchar` holding the UUID text, and a field that is
+`binData` in some documents and a string in others is typed `varchar` from the strings
+alone — after which its `binData` rows read back NULL. Anything the schema does not list is not a
 table, which is also why `mongosqld` needs restarting (or `--schemaRefreshIntervalSecs`)
 after the collections change.
 
@@ -5974,7 +6001,7 @@ which is where `GetTableSchema` already gets a table's columns from. It is keyed
 | `{plugin_dir}` (in `conn`) | `mysql_native_password`, as above — and here its absence is a segfault, not a diagnostic. |
 | `pseudo_columns=("_id",)` | every MongoDB document carries an `_id` and the BI Connector maps it as an ordinary column, so `SELECT *` returns a ninth, always-populated column — the same shape as ArcadeDB's `@rid`. |
 | `catalog_cols=(...)` | `mongosqld` reports a table's columns in its own alphabetical order, in the catalog and in `SELECT *` alike. |
-| `quote` set to a backtick | a MySQL dialect with no `sql_mode` to set (there is no `SET SESSION` at all), so `"…"` is a string literal and identifiers are backtick-quoted, as for GreptimeDB. |
+| `quote` set to a backtick | a MySQL dialect that accepts `SET SESSION sql_mode=…` and then discards it — every value succeeds, `'THIS_IS_NOT_A_MODE'` included, while `@@sql_mode` keeps reading `NO_ENGINE_SUBSTITUTION` — so `"…"` is a string literal and identifiers are backtick-quoted, as for GreptimeDB. |
 | `bool_type="int8"` | MongoDB's boolean goes over the MySQL wire as `TINYINT(1)`, which Connector/ODBC reports as `SQL_TINYINT`, exactly as MySQL's own `BOOLEAN` does. |
 | `decimal_type="string"` | `mongosqld` describes every decimal as `DECIMAL(65,20)` whatever is in it; 65 digits is past what an Arrow `decimal128` holds, so the column arrives as its exact text (`"12.345"`), as for `databend` and `flightsql`. |
 | `big_rows=100000` | `adbc_big` is what `check_big()` reads and what `bench/matrix_bench.py` times a fetch of on a read-only entry. |
@@ -5996,8 +6023,12 @@ Two more facts about the mapping, both of them the connector's and neither costi
 be started again (the `docker exec -d ... mongosqld` line above) after every container
 start; and a `docker compose up -d mongodbbi` run *without* `MONGODB_BI_DIR` in the
 environment recreates the container with nothing mounted at `/opt/mongobi` — the
-collections survive (they are on the data volume), the binary does not. Stage the tarball
-plus the two OpenSSL 1.1 libraries into a directory once and always pass it:
+collections survive (`/data/db` is the `mongo:7` image's own anonymous volume, which Compose
+carries into the replacement container), the binary does not. What does lose the collections
+is destroying the container rather than recreating it — `docker compose down`,
+`docker rm -f`, or `up -d -V` — each of which starts a fresh `/data/db`; after one of those,
+re-run the mongosh loader before `mongosqld`. Stage the tarball plus the two OpenSSL 1.1
+libraries into a directory once and always pass it:
 
 ```sh
 MONGODB_BI_DIR=/path/to/bi docker compose -f tests/compat/docker-compose.yml --profile extra up -d mongodbbi

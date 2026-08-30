@@ -114,7 +114,7 @@ server with no multi-row `VALUES` at all is found the same way — by a two-row
 
 | server | what happens |
 |---|---|
-| Oracle | `VALUES (…),(…)` is `ORA-00933`, so the probe re-asks with `INSERT ALL INTO t VALUES (…) INTO t VALUES (…) SELECT 1 FROM dual` and uses that |
+| Oracle | on releases without a multi-row `VALUES`, `VALUES (…),(…)` is `ORA-00933` and the probe re-asks with `INSERT ALL INTO t VALUES (…) INTO t VALUES (…) SELECT 1 FROM dual`; Oracle 23.26 takes the plain form and the fallback is never reached |
 | SQLite | 2000 parameters is over the limit of a 999-variable build; K halves until it prepares |
 | ClickHouse | clickhouse-odbc prepares the first multi-row form and then refuses to execute it; K halves until a form runs |
 | Firebird (OdbcFb) | no multi-row `VALUES` and no `INSERT ALL`; the probe re-asks a third time with `INSERT INTO t (cols) SELECT CAST(? AS <type>), … FROM RDB$DATABASE UNION ALL SELECT …` — a bare `?` in a select list has no type Firebird can infer, and the `CAST` names the type ingest would have *created* for that column, so it cannot narrow anything the plain form would not |

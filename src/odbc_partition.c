@@ -133,11 +133,19 @@
 // SQL parser, and a wrong answer here is silent data loss rather than an error.  So the
 // rule is the narrow one, and everything else gets one partition.
 //
-// Views, foreign tables and declarative-partitioned parents need no special case: they
-// have no heap of their own, `pg_relation_size` reports 0 blocks for them, and a
-// zero-block table takes the single-partition path already.  They have no primary key
-// of their own either, so SQLPrimaryKeys returns nothing and the key-range strategy
-// declines them for the same reason.
+// Views and foreign tables need no special case: they have no heap of their own --
+// `pg_relation_size` reports 0 blocks -- and no primary key either (PostgreSQL rejects
+// one on a foreign table outright, 0A000), so SQLPrimaryKeys returns nothing and both
+// strategies decline them.  A declaratively partitioned parent reports 0 blocks too, so
+// the heap split declines it for the same reason -- but not for want of a key: a parent
+// can carry a primary key of its own and SQLPrimaryKeys returns it, so when that key
+// leads with an integer NOT NULL column the parent takes the key-range split; a parent
+// with no primary key, or one whose key leads with the partitioning column (PRIMARY KEY
+// (ts, id) on a time-ranged table, since PostgreSQL requires the partition key inside
+// the primary key), still gets one partition.  It is the zero block count and not an
+// error that rules the heap split out: `SELECT ctid` succeeds on a partitioned parent
+// (partition-local ctids that repeat) and on a foreign table; only a view rejects the
+// column, 42703.  A materialized view has a heap of its own and takes the ctid split.
 //
 // Nothing here ever *guesses* a partition column.  Every strategy either proves its
 // expression is total and NOT NULL over the table from the catalog, or hands back one
