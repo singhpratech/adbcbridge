@@ -118,6 +118,28 @@ table.mx td.m{text-align:center;width:120px;font-family:"JetBrains Mono",monospa
 .pkg code.call{white-space:pre;overflow-x:auto}
 .machines{font-size:.92rem;color:var(--muted);border-left:3px solid var(--line);padding:.4rem .9rem;margin:.6rem 0 1.2rem}
 .docs-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:22px;margin:22px 0 8px}.docs-cols ul{list-style:none;margin:0;padding:0}.docs-cols li{margin:6px 0}
+
+/* live upstream tracker: status line + pulse on each report card, click to expand the project's own timeline */
+.pkg.tracked{cursor:pointer}.pkg.tracked:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.pkg .track{display:flex;align-items:center;flex-wrap:wrap;gap:.35rem .5rem;font-size:.78rem;color:var(--muted);margin-top:auto;padding-top:.15rem}
+.pkg .track .st{text-transform:uppercase;letter-spacing:.05em;font-size:.68rem;font-weight:600}
+.pkg .track .st.fixed{color:var(--teal)}.pkg .track .st.prs{color:var(--lamp)}
+.pkg .track .chev{margin-left:auto;transition:transform .15s ease;opacity:.7}.pkg.open .track .chev{transform:rotate(180deg)}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--line);flex:none}
+.pulse.on{background:var(--teal);animation:pulse 2.4s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--teal) 55%,transparent)}100%{box-shadow:0 0 0 9px transparent}}
+@media (prefers-reduced-motion:reduce){.pulse.on{animation:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--teal) 35%,transparent)}}
+.pkg .timeline{display:none;border-top:1px solid var(--line);margin-top:.3rem;padding-top:.5rem;font-size:.8rem;cursor:default}
+.pkg.open .timeline{display:block}
+.timeline h5{margin:.5rem 0 .25rem;font-size:.76rem;font-weight:600;color:var(--ink);display:flex;gap:.5rem;align-items:baseline;flex-wrap:wrap}
+.timeline h5 a{border:0}.timeline h5 .st{font-weight:500;color:var(--muted);text-transform:none;letter-spacing:0}
+.timeline .ev{display:grid;grid-template-columns:4.6rem 1fr;gap:.5rem;padding:.3rem 0 .3rem .7rem;border-left:2px solid var(--line);margin-left:.15rem}
+.timeline .ev.fix{border-left-color:var(--teal)}.timeline .ev.pr{border-left-color:var(--lamp)}
+.timeline .ev time{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.timeline .ev .who{font-weight:600}.timeline .ev .who small{font-weight:400;color:var(--muted)}
+.timeline .ev p{margin:.1rem 0 0;color:var(--ink)}.timeline .ev p a{border:0}
+.timeline .none{color:var(--muted);font-style:italic;padding:.2rem 0 .2rem .85rem;border-left:2px solid var(--line);margin-left:.15rem}
+.timeline .foot{color:var(--muted);font-size:.72rem;margin:.5rem 0 0}
 </style>
 <div class="wrap">
 <nav>
@@ -354,5 +376,66 @@ cmake --build build --config Release
 </script>
 
 
+
+<script>
+(function(){
+// Live tracker for the "Giving back" cards.  One JSON file, refreshed hourly by a GitHub
+// Action, holds what each project did with each report -- only the project side's own
+// comments, labels, pull requests and closes.  Nothing here calls api.github.com.
+var sec=document.getElementById('upstream'); if(!sec) return;
+var fmt=function(iso){ if(!iso) return ''; var d=new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso)?iso+'T12:00:00':iso); return d.toLocaleDateString(undefined,{day:'numeric',month:'short'}) + (d.getFullYear()!==new Date().getFullYear()?' '+d.getFullYear():''); };
+var esc=function(t){ return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
+var STATE={open:'open',fixed:'fixed'};
+function evRow(e){
+  var cls='ev', who='', body='';
+  if(e.type==='comment'){ who='<span class="who">'+esc(e.actor)+' <small>'+esc(e.association)+'</small></span>'; body='<p>'+esc(e.text)+' <a href="'+esc(e.url)+'">↗</a></p>'; }
+  else if(e.type==='pull_request'){ cls+=' pr'; who='<span class="who">'+esc(e.actor)+' <small>pull request · '+esc(e.state)+'</small></span>'; body='<p><a href="'+esc(e.url)+'">'+esc(e.title)+'</a></p>'; }
+  else if(e.type==='closed'){ cls+=' fix'; who='<span class="who">'+esc(e.actor||'project')+' <small>closed'+(e.reason?' · '+esc(e.reason.replace('_',' ')):'')+'</small></span>'; body=e.commit?'<p><a href="'+esc(e.commit)+'">closing commit</a></p>':''; }
+  else if(e.type==='reopened'){ who='<span class="who">'+esc(e.actor)+' <small>reopened</small></span>'; }
+  else if(e.type==='labeled'||e.type==='unlabeled'){ who='<span class="who">'+esc(e.actor||'project')+' <small>'+(e.type==='labeled'?'labelled':'unlabelled')+' <code>'+esc(e.label)+'</code></small></span>'; }
+  else if(e.type==='commit'){ cls+=' fix'; who='<span class="who">'+esc(e.actor||'project')+' <small>commit references this report</small></span>'; body='<p><a href="'+esc(e.url)+'">'+esc(e.url.split('/').pop().slice(0,10))+'</a></p>'; }
+  else if(e.type==='milestoned'){ who='<span class="who">'+esc(e.actor||'project')+' <small>milestone '+esc(e.milestone)+'</small></span>'; }
+  else return '';
+  return '<div class="'+cls+'"><time datetime="'+esc(e.at)+'">'+fmt(e.at)+'</time><div>'+who+body+'</div></div>';
+}
+fetch('/upstream/status.json',{cache:'no-cache'}).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(d){
+  var byUrl={}; d.items.forEach(function(i){ byUrl[i.url.split('#')[0]]=i; });
+  var cards=sec.querySelectorAll('.pkg'), tracked=0;
+  Array.prototype.forEach.call(cards,function(card){
+    var items=[]; Array.prototype.forEach.call(card.querySelectorAll('code.call a'),function(a){ var i=byUrl[a.href.split('#')[0]]; if(i&&items.indexOf(i)<0) items.push(i); });
+    if(!items.length) return;
+    tracked++;
+    var fixed=items.filter(function(i){return i.state==='fixed';}).length;
+    var closed=items.filter(function(i){return i.state!=='open'&&i.state!=='fixed';}).length;
+    var open=items.length-fixed-closed;
+    var evs=items.reduce(function(n,i){return n+i.maintainer_events.length;},0);
+    var prs=items.reduce(function(n,i){return n+i.maintainer_events.filter(function(e){return e.type==='pull_request'&&e.state!=='closed';}).length;},0);
+    var pulse=items.some(function(i){return i.pulse;});
+    var last=items.map(function(i){return i.last_activity||'';}).sort().pop();
+    var parts=[];
+    if(fixed) parts.push('<span class="st fixed">'+fixed+' fixed</span>');
+    if(open) parts.push('<span class="st">'+open+' open</span>');
+    if(closed) parts.push('<span class="st">'+closed+' closed</span>');
+    if(prs) parts.push('<span class="st prs">'+prs+' PR'+(prs>1?'s':'')+' in flight</span>');
+    parts.push('<span>'+(evs? evs+' project event'+(evs>1?'s':'') : 'no response yet')+(last?' · '+fmt(last):'')+'</span>');
+    var track=document.createElement('div'); track.className='track';
+    track.innerHTML='<span class="pulse'+(pulse?' on':'')+'" title="'+(pulse?'activity in the last '+d.window_days+' days':'quiet')+'"></span>'+parts.join('<span aria-hidden="true">·</span>')+'<span class="chev" aria-hidden="true">▾</span>';
+    var tl=document.createElement('div'); tl.className='timeline';
+    tl.innerHTML=items.map(function(i){
+      var head='<h5><a href="'+esc(i.url)+'">'+esc(i.repo)+'#'+i.number+'</a><span class="st">'+esc(i.state)+' · reported '+fmt(i.reported)+(i.labels.length?' · '+i.labels.map(esc).join(', '):'')+'</span></h5>';
+      var rows=i.maintainer_events.map(evRow).join('');
+      return head+(rows||'<div class="none">No response from the project yet.</div>');
+    }).join('')+'<p class="foot">Project-side events only, read from GitHub; as of '+fmt(d.as_of)+' '+new Date(d.as_of).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})+'. The reporter’s own comments are not shown.</p>';
+    card.appendChild(track); card.appendChild(tl);
+    card.classList.add('tracked'); card.setAttribute('tabindex','0'); card.setAttribute('role','button'); card.setAttribute('aria-expanded','false');
+    var toggle=function(){ var on=card.classList.toggle('open'); card.setAttribute('aria-expanded',on?'true':'false'); };
+    card.addEventListener('click',function(ev){ if(ev.target.closest('a')||ev.target.closest('.timeline')) return; toggle(); });
+    card.addEventListener('keydown',function(ev){ if((ev.key==='Enter'||ev.key===' ')&&ev.target===card){ ev.preventDefault(); toggle(); } });
+  });
+  var cap=sec.querySelector('p.cap');
+  if(cap&&tracked){ var n=d.count, w=d.with_project_activity, f=d.fixed; cap.insertAdjacentHTML('beforeend',' <span class="live">Live: '+n+' reports tracked, '+w+' with a response from the project'+(f?', '+f+' fixed':'')+' — as of '+fmt(d.as_of)+', refreshed twice a day. Click a card for the project’s timeline.</span>'); }
+}).catch(function(){ /* no status file: the cards stay as they are */ });
+})();
+</script>
 </body>
 </html>
