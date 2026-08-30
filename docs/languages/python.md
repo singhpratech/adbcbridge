@@ -477,6 +477,40 @@ import polars as pl
 pl_df = pl.from_arrow(table)       # pyarrow -> polars
 ```
 
+### pandas and Polars through their own ADBC support
+
+Both libraries speak ADBC natively — pandas since 2.2, Polars since 0.19 — but neither
+ships a driver: you hand them a connection, and an adbcBridge connection is one. That
+gives any ODBC database the columnar path those libraries otherwise reserve for the
+few databases with a native ADBC driver (without it, pandas goes through SQLAlchemy and
+a row-by-row DBAPI cursor, and Polars falls back to the same cursor for anything
+ConnectorX does not speak — ConnectorX has no ODBC).
+
+```python
+import adbcbridge
+import pandas as pd
+import polars as pl
+
+conn = adbcbridge.connect(uri="Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so;Database=:memory:;")
+
+# pandas: read_sql / to_sql take the ADBC connection directly -- no SQLAlchemy, no pyodbc
+df = pd.read_sql("SELECT 1 AS one, 'héllo 🚀' AS s, 2.5 AS f", conn)
+df = pd.read_sql("SELECT * FROM sales", conn, dtype_backend="pyarrow")   # keep Arrow-backed columns
+pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]}).to_sql("t", conn, index=False)   # ADBC bulk ingest
+
+# Polars: read_database / write_database with engine="adbc"
+pl_df = pl.read_database("SELECT * FROM sales", connection=conn)
+pl.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]}).write_database("t", connection=conn, engine="adbc")
+```
+
+`to_sql` and `write_database` go through `adbc_ingest`, so the modes, per-driver row
+batching and array binding described under [Bulk ingest](#bulk-ingest) apply, and the
+table is created from the frame's Arrow schema. What does not reach adbcBridge is
+`pl.read_database_uri(..., engine="adbc")`: Polars maps the URI *scheme* to a package
+name (`sqlite://` → `adbc_driver_sqlite`, `postgresql://` → `adbc_driver_postgresql`),
+and there is no scheme for an ODBC connection string — use the connection-object form
+above. Verified with pandas 3.0.5 and Polars 1.44.1 over the SQLite ODBC driver.
+
 ---
 
 ## Parameters
