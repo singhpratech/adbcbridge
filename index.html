@@ -389,7 +389,7 @@ var STATE={open:'open',fixed:'fixed'};
 function evRow(e){
   var cls='ev', who='', body='';
   if(e.type==='comment'){ who='<span class="who">'+esc(e.actor)+' <small>'+esc(e.association)+'</small></span>'; body='<p>'+esc(e.text)+' <a href="'+esc(e.url)+'">↗</a></p>'; }
-  else if(e.type==='pull_request'){ cls+=' pr'; who='<span class="who">'+esc(e.actor)+' <small>pull request · '+esc(e.state)+'</small></span>'; body='<p><a href="'+esc(e.url)+'">'+esc(e.title)+'</a></p>'; }
+  else if(e.type==='pull_request'){ cls+=(e.state==='merged'?' fix':' pr'); who='<span class="who">'+esc(e.actor)+' <small>'+(e.state==='merged'?'fixed it — pull request merged':e.state==='open'?'fix proposed — pull request open':'pull request '+esc(e.state))+'</small></span>'; body='<p><a href="'+esc(e.url)+'">'+esc(e.title)+'</a></p>'; }
   else if(e.type==='closed'){ cls+=' fix'; who='<span class="who">'+esc(e.actor||'project')+' <small>closed'+(e.reason?' · '+esc(e.reason.replace('_',' ')):'')+'</small></span>'; body=e.commit?'<p><a href="'+esc(e.commit)+'">closing commit</a></p>':''; }
   else if(e.type==='reopened'){ who='<span class="who">'+esc(e.actor)+' <small>reopened</small></span>'; }
   else if(e.type==='labeled'||e.type==='unlabeled'){ who='<span class="who">'+esc(e.actor||'project')+' <small>'+(e.type==='labeled'?'labelled':'unlabelled')+' <code>'+esc(e.label)+'</code></small></span>'; }
@@ -416,16 +416,16 @@ fetch('/upstream/status.json',{cache:'no-cache'}).then(function(r){ if(!r.ok) th
     if(fixed) parts.push('<span class="st fixed">'+fixed+' fixed</span>');
     if(open) parts.push('<span class="st">'+open+' open</span>');
     if(closed) parts.push('<span class="st">'+closed+' closed</span>');
-    if(prs) parts.push('<span class="st prs">'+prs+' PR'+(prs>1?'s':'')+' in flight</span>');
+    if(prs) parts.push('<span class="st prs">'+(prs>1?prs+' fix PRs open':'fix PR open')+'</span>');
     parts.push('<span>'+(evs? evs+' project event'+(evs>1?'s':'') : 'no response yet')+(last?' · '+fmt(last):'')+'</span>');
     var track=document.createElement('div'); track.className='track';
     track.innerHTML='<span class="pulse'+(pulse?' on':'')+'" title="'+(pulse?'activity in the last '+d.window_days+' days':'quiet')+'"></span>'+parts.join('<span aria-hidden="true">·</span>')+'<span class="chev" aria-hidden="true">▾</span>';
     var tl=document.createElement('div'); tl.className='timeline';
     tl.innerHTML=items.map(function(i){
-      var head='<h5><a href="'+esc(i.url)+'">'+esc(i.repo)+'#'+i.number+'</a><span class="st">'+esc(i.state)+' · reported '+fmt(i.reported)+(i.labels.length?' · '+i.labels.map(esc).join(', '):'')+'</span></h5>';
+      var head='<h5><a href="'+esc(i.url)+'">'+esc(i.repo)+'#'+i.number+'</a><span class="st">'+esc(i.state)+' · reported '+(i.reporter?'by '+esc(i.reporter)+' ':'')+fmt(i.reported)+(i.labels.length?' · '+i.labels.map(esc).join(', '):'')+'</span></h5>';
       var rows=i.maintainer_events.map(evRow).join('');
       return head+(rows||'<div class="none">No response from the project yet.</div>');
-    }).join('')+'<p class="foot">Project-side events only, read from GitHub; as of '+fmt(d.as_of)+' '+new Date(d.as_of).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})+'. The reporter’s own comments are not shown.</p>';
+    }).join('')+'<p class="foot">Project-side events only, read from GitHub; as of '+fmt(d.as_of)+' '+new Date(d.as_of).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})+'. Reporter: the account named on each issue; fixes are credited to whoever opened the pull request.</p>';
     card.appendChild(track); card.appendChild(tl);
     card.classList.add('tracked'); card.setAttribute('tabindex','0'); card.setAttribute('role','button'); card.setAttribute('aria-expanded','false');
     var toggle=function(){ var on=card.classList.toggle('open'); card.setAttribute('aria-expanded',on?'true':'false'); };
