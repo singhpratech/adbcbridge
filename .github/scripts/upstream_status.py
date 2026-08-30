@@ -149,7 +149,7 @@ def build(md_path, token):
         pulse = bool(last) and (now - dt.datetime.fromisoformat(last.replace("Z", "+00:00"))).days <= PULSE_DAYS
         items.append({
             "project": project, "repo": f"{owner}/{repo}", "number": int(num), "url": url + anchor,
-            "title": issue["title"], "reported": reported_on, "what": what,
+            "title": issue["title"], "reported": reported_on, "reporter": reporter, "what": what,
             "kind": "comment on existing issue" if is_comment_report else "issue",
             "state": state, "closed_at": iso(issue.get("closed_at")),
             "labels": [l["name"] for l in issue.get("labels", []) if not is_comment_report],
