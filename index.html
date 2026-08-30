@@ -140,14 +140,9 @@ table.mx td.m{text-align:center;width:120px;font-family:"JetBrains Mono",monospa
 .timeline .ev p{margin:.1rem 0 0;color:var(--ink)}.timeline .ev p a{border:0}
 .timeline .none{color:var(--muted);font-style:italic;padding:.2rem 0 .2rem .85rem;border-left:2px solid var(--line);margin-left:.15rem}
 .timeline .foot{color:var(--muted);font-size:.72rem;margin:.5rem 0 0}
-nav a .pulse{display:inline-block;vertical-align:middle;margin-left:.45rem;width:8px;height:8px;position:relative}
-nav a .pulse.on{animation:navglow 2s ease-in-out infinite}
-nav a .pulse.on::before,nav a .pulse.on::after{content:'';position:absolute;inset:-1px;border-radius:50%;border:1.5px solid var(--teal);opacity:0;animation:navring 2s ease-out infinite}
-nav a .pulse.on::after{animation-delay:1s}
-@keyframes navring{0%{transform:scale(1);opacity:.7}100%{transform:scale(3);opacity:0}}
-@keyframes navglow{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--teal) 60%,transparent)}50%{box-shadow:0 0 6px 2px color-mix(in srgb,var(--teal) 45%,transparent)}}
-nav a:has(.pulse.on){color:var(--ink)}
-@media (prefers-reduced-motion:reduce){nav a .pulse.on{animation:none}nav a .pulse.on::before,nav a .pulse.on::after{animation:none;opacity:.5;transform:scale(1.8)}}
+nav a.live{color:var(--teal);animation:navaura 2.6s ease-in-out infinite}
+@keyframes navaura{0%,100%{text-shadow:0 0 0 color-mix(in srgb,var(--teal) 0%,transparent)}50%{text-shadow:0 0 10px color-mix(in srgb,var(--teal) 70%,transparent),0 0 22px color-mix(in srgb,var(--teal) 35%,transparent)}}
+@media (prefers-reduced-motion:reduce){nav a.live{animation:none;text-shadow:0 0 8px color-mix(in srgb,var(--teal) 45%,transparent)}}
 </style>
 <div class="wrap">
 <nav>
@@ -441,7 +436,7 @@ fetch('/upstream/status.json',{cache:'no-cache'}).then(function(r){ if(!r.ok) th
     card.addEventListener('keydown',function(ev){ if((ev.key==='Enter'||ev.key===' ')&&ev.target===card){ ev.preventDefault(); toggle(); } });
   });
   var navA=document.getElementById('nav-tracker');
-  if(navA){ var anyPulse=d.items.some(function(i){return i.pulse;}); navA.insertAdjacentHTML('beforeend','<span class="pulse'+(anyPulse?' on':'')+'" title="'+(anyPulse?'a project responded in the last '+d.window_days+' days':'live tracker')+'"></span>'); navA.title=d.count+' upstream reports, '+d.with_project_activity+' answered'; }
+  if(navA){ var anyPulse=d.items.some(function(i){return i.pulse;}); if(anyPulse) navA.classList.add('live'); navA.title=d.count+' upstream reports, '+d.with_project_activity+' answered'+(anyPulse?' — a project responded in the last '+d.window_days+' days':''); }
   var cap=sec.querySelector('p.cap');
   if(cap&&tracked){ var n=d.count, w=d.with_project_activity, f=d.fixed; cap.insertAdjacentHTML('beforeend',' <span class="live">Live: '+n+' reports tracked, '+w+' with a response from the project'+(f?', '+f+' fixed':'')+' — as of '+fmt(d.as_of)+', refreshed twice a day. Click a card for the project’s timeline.</span>'); }
 }).catch(function(){ /* no status file: the cards stay as they are */ });
