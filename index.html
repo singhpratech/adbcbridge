@@ -436,9 +436,10 @@ fetch('/upstream/status.json',{cache:'no-cache'}).then(function(r){ if(!r.ok) th
     card.addEventListener('keydown',function(ev){ if((ev.key==='Enter'||ev.key===' ')&&ev.target===card){ ev.preventDefault(); toggle(); } });
   });
   var navA=document.getElementById('nav-tracker');
-  if(navA){ var anyPulse=d.items.some(function(i){return i.pulse;}); if(anyPulse) navA.classList.add('live'); navA.title=d.count+' upstream reports, '+d.with_project_activity+' answered'+(anyPulse?' — a project responded in the last '+d.window_days+' days':''); }
+  var recent=d.items.filter(function(i){return i.pulse;}).length;
+  if(navA){ if(recent) navA.classList.add('live'); navA.title=d.count+' upstream reports · '+recent+' with recent activity'+(recent?' (last '+d.window_days+' days)':''); }
   var cap=sec.querySelector('p.cap');
-  if(cap&&tracked){ var n=d.count, w=d.with_project_activity, f=d.fixed; cap.insertAdjacentHTML('beforeend',' <span class="live">Live: '+n+' reports tracked, '+w+' with a response from the project'+(f?', '+f+' fixed':'')+' — as of '+fmt(d.as_of)+', refreshed twice a day. Click a card for the project’s timeline.</span>'); }
+  if(cap&&tracked){ var n=d.count, w=d.with_project_activity, f=d.fixed; cap.insertAdjacentHTML('beforeend',' <span class="live">Live: '+n+' upstream reports · '+recent+' with recent activity · '+w+' answered so far'+(f?' · '+f+' fixed':'')+' — as of '+fmt(d.as_of)+', refreshed twice a day. Click a card for the project’s timeline.</span>'); }
 }).catch(function(){ /* no status file: the cards stay as they are */ });
 })();
 </script>
