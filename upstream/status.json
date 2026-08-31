@@ -1,5 +1,5 @@
 {
- "as_of": "2026-08-31T13:44:01Z",
+ "as_of": "2026-08-31T22:53:55Z",
  "window_days": 7,
  "count": 24,
  "with_project_activity": 7,
@@ -610,11 +610,19 @@
      "at": "2026-08-31T10:14:52Z",
      "actor": "mergify[bot]",
      "url": "https://github.com/crate/crate/commit/cd8922a3f4939f4f9ab3ad9fe34633c246eaba3b"
+    },
+    {
+     "type": "comment",
+     "at": "2026-08-31T17:45:54Z",
+     "actor": "mfussenegger",
+     "association": "member",
+     "text": "With the python script from your description I btw. got the following output with the fix included: [code] Note that I added a `refresh table` after the second insert to get the update rowcount 2 - otherwise it would be 0 as by default new records take a second to become visible without explicit refresh.",
+     "url": "https://github.com/crate/crate/issues/20085#issuecomment-5482210527"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-08-31T10:14:52Z",
+   "last_activity": "2026-08-31T17:45:54Z",
    "pulse": true
   },
   {
@@ -667,11 +675,19 @@
      "title": "Don't savepoint-wrap internal queries at rollback level 0 (Protocol=7.4-0) (#208)",
      "url": "https://github.com/postgresql-interfaces/psqlodbc/pull/209",
      "state": "open"
+    },
+    {
+     "type": "comment",
+     "at": "2026-08-31T15:38:44Z",
+     "actor": "davecramer",
+     "association": "contributor",
+     "text": "@singhpratech so PR #209 is an attempt to fix the problem, let me know if it works",
+     "url": "https://github.com/postgresql-interfaces/psqlodbc/issues/208#issuecomment-5480687345"
     }
    ],
-   "reporter_comments": 1,
+   "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-08-30T12:04:56Z",
+   "last_activity": "2026-08-31T15:38:44Z",
    "pulse": true
   }
  ]
