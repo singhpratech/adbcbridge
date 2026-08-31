@@ -1,9 +1,9 @@
 {
- "as_of": "2026-08-30T14:36:31Z",
+ "as_of": "2026-08-31T13:44:01Z",
  "window_days": 7,
  "count": 24,
- "with_project_activity": 5,
- "fixed": 0,
+ "with_project_activity": 7,
+ "fixed": 1,
  "items": [
   {
    "project": "unixODBC",
@@ -248,11 +248,24 @@
    "closed_at": null,
    "labels": [],
    "reactions": 3,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "labeled",
+     "at": "2026-08-31T12:40:03Z",
+     "actor": "slabko",
+     "label": "bug"
+    },
+    {
+     "type": "unlabeled",
+     "at": "2026-08-31T12:40:10Z",
+     "actor": "slabko",
+     "label": "enhancement"
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-08-31T12:40:10Z",
+   "pulse": true
   },
   {
    "project": "OpenLink Virtuoso",
@@ -477,7 +490,7 @@
     }
    ],
    "reporter_comments": 0,
-   "community_comments": 0,
+   "community_comments": 1,
    "last_activity": "2026-08-30T04:37:54Z",
    "pulse": true
   },
@@ -512,7 +525,7 @@
     }
    ],
    "reporter_comments": 0,
-   "community_comments": 0,
+   "community_comments": 1,
    "last_activity": "2026-08-30T03:13:48Z",
    "pulse": true
   },
@@ -526,15 +539,83 @@
    "reporter": "singhpratech",
    "what": "A multi-statement simple query returns each `CommandComplete` tagged with the leading text of the whole string (`BEGIN;INSERT 0`, `BEGIN;INSERT 1`) instead of per-statement tags (`BEGIN`, `INSERT 0 1`), so tag-parsing clients such as psqlodbc get no row count inside a transaction.",
    "kind": "issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "fixed",
+   "closed_at": "2026-08-31T08:57:20Z",
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "pull_request",
+     "at": "2026-08-31T08:45:23Z",
+     "actor": "mfussenegger",
+     "title": "Fix pgwire command tags for multi statement execution",
+     "url": "https://github.com/crate/crate/pull/20088",
+     "state": "merged"
+    },
+    {
+     "type": "commit",
+     "at": "2026-08-31T08:51:42Z",
+     "actor": "mfussenegger",
+     "url": "https://github.com/crate/crate/commit/364db0da7572b4fafe522685bcc43c6e1804209e"
+    },
+    {
+     "type": "commit",
+     "at": "2026-08-31T08:55:48Z",
+     "actor": "mfussenegger",
+     "url": "https://github.com/crate/crate/commit/732f095569ed618b3326f65501b7677bb5888717"
+    },
+    {
+     "type": "comment",
+     "at": "2026-08-31T08:57:20Z",
+     "actor": "mfussenegger",
+     "association": "member",
+     "text": "Thank you for the report. This will be fixed in 6.4.4 via https://github.com/crate/crate/pull/20088",
+     "url": "https://github.com/crate/crate/issues/20085#issuecomment-5476086808"
+    },
+    {
+     "type": "closed",
+     "at": "2026-08-31T08:57:20Z",
+     "actor": "mfussenegger",
+     "reason": null,
+     "commit": null
+    },
+    {
+     "type": "commit",
+     "at": "2026-08-31T09:36:41Z",
+     "actor": "mfussenegger",
+     "url": "https://github.com/crate/crate/commit/7b00c6adbf7c642f585ccfb79491ec89fbb7ac8f"
+    },
+    {
+     "type": "commit",
+     "at": "2026-08-31T09:49:59Z",
+     "actor": "mergify[bot]",
+     "url": "https://github.com/crate/crate/commit/fb0b41c123c755fa4a0b6d6d248ac67cf6e6dec1"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-08-31T09:50:16Z",
+     "actor": "mergify[bot]",
+     "title": "Fix pgwire command tags for multi statement execution (backport #20088)",
+     "url": "https://github.com/crate/crate/pull/20091",
+     "state": "merged"
+    },
+    {
+     "type": "commit",
+     "at": "2026-08-31T09:57:17Z",
+     "actor": "mfussenegger",
+     "url": "https://github.com/crate/crate/commit/5c99d680642a847620cbd1bc297567590aba03fd"
+    },
+    {
+     "type": "commit",
+     "at": "2026-08-31T10:14:52Z",
+     "actor": "mergify[bot]",
+     "url": "https://github.com/crate/crate/commit/cd8922a3f4939f4f9ab3ad9fe34633c246eaba3b"
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-08-31T10:14:52Z",
+   "pulse": true
   },
   {
    "project": "psqlodbc",
