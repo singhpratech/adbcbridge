@@ -6,8 +6,10 @@
 [![NuGet](https://img.shields.io/nuget/v/AdbcBridge)](https://www.nuget.org/packages/AdbcBridge)
 [![Go Reference](https://pkg.go.dev/badge/github.com/singhpratech/adbcbridge/go.svg)](https://pkg.go.dev/github.com/singhpratech/adbcbridge/go)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![ADBC docs](https://img.shields.io/badge/Apache_Arrow_ADBC_docs-listed-0B7285)](https://arrow.apache.org/adbc/main/integrations.html)
 
-**An [ADBC](https://arrow.apache.org/adbc/) driver for any ODBC data source.**
+**An [ADBC](https://arrow.apache.org/adbc/) driver for any ODBC data source** —
+listed on the Apache Arrow ADBC [Tools & Integrations](https://arrow.apache.org/adbc/main/integrations.html) page.
 One plain-C11 shared library that turns every ODBC driver on your machine into an
 Arrow-native ADBC driver — columnar record batches out, bulk ingest in — from Python,
 Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
