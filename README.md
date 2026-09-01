@@ -1,12 +1,12 @@
 # adbcBridge
 
+[![ADBC docs](https://img.shields.io/badge/Apache_Arrow_ADBC_docs-listed-0B7285)](https://arrow.apache.org/adbc/main/integrations.html)
 [![CI](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/adbcbridge)](https://pypi.org/project/adbcbridge/)
 [![crates.io](https://img.shields.io/crates/v/adbcbridge)](https://crates.io/crates/adbcbridge)
 [![NuGet](https://img.shields.io/nuget/v/AdbcBridge)](https://www.nuget.org/packages/AdbcBridge)
 [![Go Reference](https://pkg.go.dev/badge/github.com/singhpratech/adbcbridge/go.svg)](https://pkg.go.dev/github.com/singhpratech/adbcbridge/go)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![ADBC docs](https://img.shields.io/badge/Apache_Arrow_ADBC_docs-listed-0B7285)](https://arrow.apache.org/adbc/main/integrations.html)
 
 **An [ADBC](https://arrow.apache.org/adbc/) driver for any ODBC data source** —
 listed on the Apache Arrow ADBC [Tools & Integrations](https://arrow.apache.org/adbc/main/integrations.html) page.
