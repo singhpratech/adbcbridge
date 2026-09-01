@@ -1,8 +1,8 @@
 {
- "as_of": "2026-08-31T22:53:55Z",
+ "as_of": "2026-09-01T11:43:58Z",
  "window_days": 7,
  "count": 24,
- "with_project_activity": 7,
+ "with_project_activity": 8,
  "fixed": 1,
  "items": [
   {
@@ -281,11 +281,20 @@
    "closed_at": null,
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "comment",
+     "at": "2026-08-31T23:50:49Z",
+     "actor": "smalinin",
+     "association": "collaborator",
+     "text": "1. use UNICODE virtuoso ODBC driver 2. create DSN with option [code] DSN-less will NOT work properly with UTF16, that you need for unixODBC 3. Try connection with unixODBC unicode test tool `iusql` — it should work",
+     "url": "https://github.com/openlink/virtuoso-opensource/issues/1470#issuecomment-5486412179"
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-08-31T23:50:49Z",
+   "pulse": true
   },
   {
    "project": "OpenLink Virtuoso",
