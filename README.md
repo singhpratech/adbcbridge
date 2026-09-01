@@ -15,7 +15,9 @@ Arrow-native ADBC driver — columnar record batches out, bulk ingest in — fro
 Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
 
 Site and docs: <https://adbcbridge.org> · Launch write-up with the numbers:
-<https://theaivibe.org/blog/adbcbridge-apache-arrow-adbc-driver-for-any-odbc-database>
+<https://theaivibe.org/blog/adbcbridge-apache-arrow-adbc-driver-for-any-odbc-database> ·
+Write-up on the ADBC docs listing:
+<https://theaivibe.org/blog/adbcbridge-listed-apache-arrow-adbc-official-integrations-page>
 
 ```
 Python / R / Go / Rust / Java / C#
