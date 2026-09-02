@@ -11,6 +11,7 @@ on:
 permissions:
   contents: write
   issues: read
+  discussions: read
 concurrency:
   group: upstream-status
   cancel-in-progress: true

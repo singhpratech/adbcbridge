@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Build upstream/status.json for the landing page's live report tracker.
 
-Reads the "Reported" table in docs/UPSTREAM.md, fetches every linked GitHub issue and
+Reads the "Reported" table in docs/UPSTREAM.md, fetches every linked GitHub issue (or
+GitHub Discussion, for projects that take bug reports there) and
 keeps only what the *project side* did with it: comments by accounts with an
 owner/member/collaborator/contributor association (never the reporter, never bots),
-label changes, close/reopen events and pull requests that reference the issue.
+label changes, close/reopen events and pull requests that reference the issue.  A
+discussion has no timeline API, so its pull requests are the ones a project-side comment
+names (#123 or a pull URL in the same repository).
 The reporter's own comments are counted but not shown.  Output is one JSON file the
 page fetches; nothing on the page talks to api.github.com.
 
@@ -41,6 +44,25 @@ def get(url, token):
         return None, ""
 
 
+def gql(query, variables, token):
+    body = json.dumps({"query": query, "variables": variables}).encode()
+    req = urllib.request.Request(f"{API}/graphql", data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "User-Agent": "adbcbridge-upstream-status",
+        **({"Authorization": f"Bearer {token}"} if token else {}),
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        sys.stderr.write(f"graphql: HTTP {e.code}\n")
+        return None
+    if data.get("errors"):
+        sys.stderr.write(f"graphql: {data['errors'][0].get('message')}\n")
+        return None
+    return data.get("data")
+
+
 def paged(url, token):
     out = []
     while url:
@@ -67,7 +89,7 @@ def reported_rows(md_path):
         cells = [c.strip() for c in line.strip().strip("|").split(" | ")]
         if len(cells) < 4:
             continue
-        for m in re.finditer(r"\((https://github\.com/[^/]+/[^/]+/(?:issues|pull)/\d+)(#[^)]*)?\)", cells[2]):
+        for m in re.finditer(r"\((https://github\.com/[^/]+/[^/]+/(?:issues|pull|discussions)/\d+)(#[^)]*)?\)", cells[2]):
             yield cells[0], cells[1], m.group(1), (m.group(2) or ""), cells[3]
 
 
@@ -81,12 +103,93 @@ def clean(text):
 def iso(s):
     return s if s else None
 
+DISCUSSION_QUERY = """
+query($owner: String!, $repo: String!, $num: Int!) {
+  repository(owner: $owner, name: $repo) {
+    discussion(number: $num) {
+      title closed closedAt stateReason isAnswered
+      author { login }
+      labels(first: 20) { nodes { name } }
+      reactions { totalCount }
+      comments(first: 100) {
+        nodes {
+          author { login } authorAssociation createdAt body url
+          replies(first: 100) { nodes { author { login } authorAssociation createdAt body url } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def discussion_item(owner, repo, num, url, reported_on, project, what, token, now):
+    """Same item shape as an issue, from the GraphQL Discussion API (REST has no timeline for these)."""
+    data = gql(DISCUSSION_QUERY, {"owner": owner, "repo": repo, "num": int(num)}, token)
+    d = ((data or {}).get("repository") or {}).get("discussion")
+    if not d:
+        return None
+    reporter = (d.get("author") or {}).get("login")
+    flat = []
+    for c in d["comments"]["nodes"]:
+        flat.append(c)
+        flat.extend(c["replies"]["nodes"])
+    events, own_comments, community, prs_seen = [], 0, 0, set()
+    for c in flat:
+        login = (c.get("author") or {}).get("login") or ""
+        if login == reporter:
+            own_comments += 1
+            continue
+        if login.endswith("[bot]") or login.endswith("-bot"):
+            continue
+        if c.get("authorAssociation") not in PROJECT_SIDE:
+            community += 1
+            continue
+        events.append({"type": "comment", "at": c["createdAt"], "actor": login,
+                       "association": c["authorAssociation"].lower(), "text": clean(c["body"]), "url": c["url"]})
+        # pull requests the project side names in the same repository
+        refs = re.findall(r"(?<![\w/#])#(\d+)\b", c["body"] or "")
+        refs += re.findall(rf"github\.com/{re.escape(owner)}/{re.escape(repo)}/pull/(\d+)", c["body"] or "", flags=re.I)
+        for n in refs:
+            if n in prs_seen:
+                continue
+            prs_seen.add(n)
+            pr, _ = get(f"{API}/repos/{owner}/{repo}/pulls/{n}", token)
+            if pr is None:
+                continue        # an issue number or a dangling reference, not a PR
+            events.append({"type": "pull_request", "at": pr["created_at"], "actor": (pr.get("user") or {}).get("login"),
+                           "title": pr["title"], "url": pr["html_url"],
+                           "state": "merged" if pr.get("merged_at") else pr["state"]})
+    if d.get("closed"):
+        events.append({"type": "closed", "at": d.get("closedAt"), "actor": None,
+                       "reason": (d.get("stateReason") or "").lower() or None, "commit": None})
+    events.sort(key=lambda e: e.get("at") or "")
+    last = max([e.get("at") for e in events if e.get("at")] + [d.get("closedAt") or ""] + [""])
+    state = "open"
+    if d.get("closed"):
+        state = {"RESOLVED": "fixed", "DUPLICATE": "closed (duplicate)", "OUTDATED": "closed (outdated)"}.get(d.get("stateReason"), "closed")
+    pulse = bool(last) and (now - dt.datetime.fromisoformat(last.replace("Z", "+00:00"))).days <= PULSE_DAYS
+    return {
+        "project": project, "repo": f"{owner}/{repo}", "number": int(num), "url": url,
+        "title": d["title"], "reported": reported_on, "reporter": reporter, "what": what,
+        "kind": "discussion", "state": state, "closed_at": iso(d.get("closedAt")),
+        "labels": [l["name"] for l in d.get("labels", {}).get("nodes", [])],
+        "reactions": d.get("reactions", {}).get("totalCount", 0),
+        "maintainer_events": events, "reporter_comments": own_comments, "community_comments": community,
+        "last_activity": last or None, "pulse": pulse,
+    }
+
 
 def build(md_path, token):
     items = []
     now = dt.datetime.now(dt.timezone.utc)
     for reported_on, project, url, anchor, what in reported_rows(md_path):
-        owner, repo, kind, num = re.match(r"https://github\.com/([^/]+)/([^/]+)/(issues|pull)/(\d+)", url).groups()
+        owner, repo, kind, num = re.match(r"https://github\.com/([^/]+)/([^/]+)/(issues|pull|discussions)/(\d+)", url).groups()
+        if kind == "discussions":
+            item = discussion_item(owner, repo, num, url, reported_on, project, what, token, now)
+            if item:
+                items.append(item)
+            continue
         issue, _ = get(f"{API}/repos/{owner}/{repo}/issues/{num}", token)
         if issue is None:
             continue
