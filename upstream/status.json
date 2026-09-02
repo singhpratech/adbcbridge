@@ -1,8 +1,8 @@
 {
- "as_of": "2026-09-01T21:06:05Z",
+ "as_of": "2026-09-02T11:25:06Z",
  "window_days": 7,
  "count": 24,
- "with_project_activity": 9,
+ "with_project_activity": 10,
  "fixed": 1,
  "items": [
   {
@@ -79,11 +79,20 @@
    "closed_at": null,
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "comment",
+     "at": "2026-09-02T01:36:52Z",
+     "actor": "smalinin",
+     "association": "collaborator",
+     "text": "Now: 1. you must open connection via SQLDriverConnectW/SQLConnectW for properly use UTF16 and have option `WideAsUTF16=Yes` in DSN. You used Ansi version `SQLDriverConnect()`, so it doesn't work for you. 2. I could be wrong , but the `CHARSET=UTF-8` is for SPARQL mode What do you need UTF8 or UTF16 ? Also iODBC could use/return WCHAR strings/data as UCS4/UTF16/UTF8 it is configured via settings in…",
+     "url": "https://github.com/openlink/virtuoso-opensource/issues/1469#issuecomment-5503026121"
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-09-02T01:36:52Z",
+   "pulse": true
   },
   {
    "project": "Dremio / Arrow Flight SQL ODBC",
@@ -204,7 +213,7 @@
      "type": "pull_request",
      "at": "2026-08-29T12:40:13Z",
      "actor": "1fanwang",
-     "title": "[fix](fe) Accept BLOB prepared statement parameters",
+     "title": "[fix](compatibility) Accept BLOB prepared statement parameters",
      "url": "https://github.com/apache/doris/pull/67306",
      "state": "open"
     }
@@ -289,11 +298,27 @@
      "association": "collaborator",
      "text": "1. use UNICODE virtuoso ODBC driver 2. create DSN with option [code] DSN-less will NOT work properly with UTF16, that you need for unixODBC 3. Try connection with unixODBC unicode test tool `iusql` — it should work",
      "url": "https://github.com/openlink/virtuoso-opensource/issues/1470#issuecomment-5486412179"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-02T01:17:12Z",
+     "actor": "smalinin",
+     "association": "collaborator",
+     "text": "You must open connection via `SQLDriverConnectW()` for properly work with UTF16, so driver will autodetect that you uses UTF16, than recheck it via checking `WideAsUTF16` options and after this switch to UTF16 mode. You could not do it: - for Ansi virtuoso odbc driver - without call SQLDriverConnectW for open connection The `iusql` tool work properly because it open connection via SQLDriverConnect…",
+     "url": "https://github.com/openlink/virtuoso-opensource/issues/1470#issuecomment-5502874039"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-02T01:23:41Z",
+     "actor": "smalinin",
+     "association": "collaborator",
+     "text": "[code] [code]",
+     "url": "https://github.com/openlink/virtuoso-opensource/issues/1470#issuecomment-5502926335"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-08-31T23:50:49Z",
+   "last_activity": "2026-09-02T01:23:41Z",
    "pulse": true
   },
   {
