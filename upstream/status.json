@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-02T21:06:40Z",
+ "as_of": "2026-09-03T11:21:16Z",
  "window_days": 7,
  "count": 25,
  "with_project_activity": 11,
@@ -324,7 +324,7 @@
      "url": "https://github.com/openlink/virtuoso-opensource/issues/1470#issuecomment-5502926335"
     }
    ],
-   "reporter_comments": 1,
+   "reporter_comments": 2,
    "community_comments": 0,
    "last_activity": "2026-09-02T01:23:41Z",
    "pulse": true
@@ -749,7 +749,7 @@
      "url": "https://github.com/postgresql-interfaces/psqlodbc/commit/3f297b90eac6440d286cec24e054dbe5ff57f3fb"
     }
    ],
-   "reporter_comments": 3,
+   "reporter_comments": 4,
    "community_comments": 0,
    "last_activity": "2026-09-02T14:53:45Z",
    "pulse": true
