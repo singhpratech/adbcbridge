@@ -853,6 +853,39 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // still what runs when the caller turns array binding off.)
     conn->reader_opts.prefer_param_arrays = true;
   }
+  if (strstr((const char*)name, "libodbchdb")) {
+    // SAP HANA's own client driver.  Three things it does differently:
+    //
+    // 1. It decodes narrow statement text as Latin-1, not as the UTF-8 bytes unixODBC
+    //    handed it, so a non-ASCII literal in a statement is stored double-encoded and
+    //    matches nothing sent as a parameter.  No connection property or locale changes
+    //    it; the W entry points do.  See OdbcReaderOptions::wide_sql.
+    conn->reader_opts.wide_sql = true;
+    // 2. SQLGetTypeInfo(SQL_LONGVARCHAR) names CLOB, and HANA bars a LOB column from
+    //    ORDER BY ("264 invalid datatype: LOB type in ORDER BY clause") and from
+    //    SELECT DISTINCT ("264 ... LOB type in distinct select clause"), so a table
+    //    adbcbridge created could not be sorted or de-duplicated on its own string
+    //    column -- the same trap as SQL Server's TEXT.  Its SQL_VARCHAR is VARCHAR,
+    //    5,000 characters wide and (HANA 2.0 having merged VARCHAR into NVARCHAR) fully
+    //    Unicode, so the widest-VARCHAR route Db2 uses gives a usable column here.
+    conn->reader_opts.ddl_string_as_max_varchar = true;
+    // 3. SQLGetTypeInfo(SQL_TYPE_TIMESTAMP) names SECONDDATE first -- HANA's
+    //    whole-second timestamp -- and TIMESTAMP, the 7-fractional-digit one, only in
+    //    its second and third rows.  Generated ingest DDL takes the first row, so an
+    //    Arrow timestamp column landed in a column that silently dropped every
+    //    sub-second value.  TIMESTAMP takes no precision argument here ("TIMESTAMP(6)"
+    //    is a syntax error, 42000/257), so the name is fixed rather than formatted.
+    conn->reader_opts.ddl_timestamp_type_name = "TIMESTAMP";
+    // 4. The third driver whose parameter arrays beat a multi-row INSERT, and here it is
+    //    the server's doing rather than the driver's: HANA has no multi-row VALUES at
+    //    all ("INSERT INTO t VALUES (1,'a'),(2,'b')" is 42000/257, "incorrect syntax
+    //    near ,"), so the multi-row path is refused at its probe and ingest falls back
+    //    to one execute per row.  20,000-row ingests here: 3,506 rows/s that way against
+    //    296,082 with a bound array.  (MultiRowSetup's UNION ALL fallback would fit --
+    //    HANA spells the one-row table DUMMY -- but a column store takes each such
+    //    INSERT as one row-store insert, which is the case arrays already beat.)
+    conn->reader_opts.prefer_param_arrays = true;
+  }
   if (strstr((const char*)name, "psqlodbc")) {
     // psqlodbc is the driver for every PostgreSQL-wire server (PostgreSQL itself,
     // CockroachDB, YugabyteDB, TimescaleDB, QuestDB, ...), so its name says nothing
@@ -1638,7 +1671,7 @@ static AdbcStatusCode OdbcConnectionGetTableSchema(struct AdbcConnection* connec
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
              "SQLAllocHandle(SQL_HANDLE_STMT)", error);
-  SQLRETURN ret = OdbcExecDirectSql(hstmt, sb.buffer, conn->reader_opts.narrow_sql);
+  SQLRETURN ret = OdbcExecDirectSql(hstmt, sb.buffer, &conn->reader_opts);
   InternalAdbcStringBuilderReset(&sb);
   AdbcStatusCode s;
   if (!SQL_SUCCEEDED(ret)) {
@@ -2144,7 +2177,7 @@ static AdbcStatusCode OdbcStatementDoPrepare(struct OdbcStatement* stmt,
                                              struct AdbcError* error) {
   if (stmt->prepared) return ADBC_STATUS_OK;
   RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
-  ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, stmt->reader_opts.narrow_sql), SQL_HANDLE_STMT,
+  ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, &stmt->reader_opts), SQL_HANDLE_STMT,
              stmt->ref->hstmt, "SQLPrepare", error);
   stmt->prepared = true;
   return ADBC_STATUS_OK;
@@ -2207,7 +2240,7 @@ static AdbcStatusCode OdbcStatementExecuteQuery(struct AdbcStatement* statement,
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecute", error);
     }
   } else {
-    ret = OdbcExecDirectSql(hstmt, stmt->query, stmt->reader_opts.narrow_sql);
+    ret = OdbcExecDirectSql(hstmt, stmt->query, &stmt->reader_opts);
     if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) {
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecDirect", error);
     }

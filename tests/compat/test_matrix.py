@@ -37,7 +37,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, TDENGINE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SPANNER_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MONGODBBI_ODBC_DRIVER
-    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SINGLESTORE_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SINGLESTORE_ODBC_DRIVER, HANA_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -726,6 +726,23 @@ DBS = {
         # `i` reads back as int64, and VARBINARY round-trips bytes.
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b VARBINARY(10),"
             " d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"),
+    "hana": dict(
+        # SAP HANA Express Edition, SAP's in-memory column store, driven by SAP's own
+        # first-party ODBC driver (libodbcHDB.so from the free HANA client download;
+        # SQL_DRIVER_NAME "libodbcHDB.so", SQL_DBMS_NAME "HDB").  See README.md for the
+        # EULA-cookie fetch, the sysctl/ulimit prerequisites and the driver quirks.
+        env="HANA_ODBC_DRIVER",
+        conn="Driver={drv};SERVERNODE=127.0.0.1:39017;UID=SYSTEM;PWD=AdbcBridge2026;DATABASENAME=HXE;",
+        # Plain HANA types, all native.  A bare CREATE TABLE is a COLUMN table here
+        # (default_table_type = column), which is the store HANA is built around; a ROW
+        # table takes the same DDL and the same workload, verified with both.
+        # TIMESTAMP takes no precision argument -- "TIMESTAMP(6)" is a syntax error
+        # (42000, 257 "incorrect syntax near (") -- because HANA's TIMESTAMP is always
+        # 7 fractional digits, so microseconds round-trip exactly.
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s NVARCHAR(50), b VARBINARY(10),"
+            " d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        # HANA folds unquoted identifiers to upper case (SQL_IDENTIFIER_CASE = SQL_IC_UPPER).
+        ident=str.upper),
     "cockroachdb": dict(
         # Wire-compatible with PostgreSQL, so it uses psqlodbc; INTEGER is 64-bit here.
         # The PRIMARY KEY is required, not decorative: a CockroachDB table declared without

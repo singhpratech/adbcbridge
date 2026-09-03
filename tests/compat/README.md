@@ -6291,3 +6291,206 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down singlesto
 # or, if started standalone:
 docker rm -f adbcbridge-singlestore
 ```
+
+## SAP HANA Express 2.00.088 (HANA 2.0 SPS08)
+
+[SAP HANA](https://www.sap.com/products/technology-platform/hana.html) is SAP's in-memory
+column store. Express Edition is the free developer edition, and SAP publishes it as an
+image — so this entry is a first-party server driven by a first-party ODBC driver,
+`libodbcHDB.so` from SAP's own HANA client. The driver answers `SQL_DRIVER_NAME`
+`libodbcHDB.so` and `SQL_DBMS_NAME` `HDB`; `"libodbchdb"` is what its quirks key on.
+
+Every one of the workload's eight types is a native HANA type and round-trips exactly:
+
+```python
+i int32, f double, s string, b binary, d date32[day],
+ts timestamp[us], n decimal128(10, 3), bo bool
+```
+
+A bare `CREATE TABLE` here is a **column** table (`default_table_type = column`), which is
+the store HANA is built around; a `CREATE ROW TABLE` takes the same DDL and the same
+workload, and both were verified. HANA folds unquoted identifiers to upper case
+(`SQL_IDENTIFIER_CASE` = `SQL_IC_UPPER`), so the entry sets `ident=str.upper`. There are no
+catalogs (`SQL_CATALOG_NAME` is false); the schema is the user, `SYSTEM`.
+
+Two spellings to know, both of which cost a `CREATE TABLE` if you get them wrong:
+
+* **`TIMESTAMP` takes no precision argument.** `TIMESTAMP(6)` is `42000`, `257 sql syntax
+  error: incorrect syntax near "("`. HANA's `TIMESTAMP` is always 7 fractional digits, so
+  microseconds round-trip exactly without asking.
+* **There is no multi-row `VALUES`.** `INSERT INTO t VALUES (1,'a'),(2,'b')` is `42000`,
+  `257 sql syntax error: incorrect syntax near ","` — with parameters or with literals.
+  `INSERT ... SELECT ... FROM DUMMY UNION ALL SELECT ... FROM DUMMY` is the form HANA has.
+
+### Get the ODBC driver without root
+
+The HANA client is a free download from SAP Development Tools. The page gates it behind a
+EULA checkbox, and the documented way past that is the cookie the checkbox sets:
+
+```sh
+mkdir -p ~/odbc-drivers/hana && cd ~/odbc-drivers/hana
+curl -sSLO -H 'Cookie: eula_3_2_agreed=tools.hana.ondemand.com/developer-license-3_2.txt' \
+  https://tools.hana.ondemand.com/additional/hanaclient-latest-linux-x64.tar.gz
+tar xzf hanaclient-latest-linux-x64.tar.gz     # -> client/
+```
+
+That is a 126 MB tarball of the whole client (`client/hdbinst` installs it properly). The
+ODBC driver is one member of it and needs nothing else — no `hdbinst`, no
+`LD_LIBRARY_PATH`, no `.ini` of its own:
+
+```sh
+mkdir -p lib && tar xzf client/client/ODBC.TGZ -C lib
+export HANA_ODBC_DRIVER=$HOME/odbc-drivers/hana/lib/libodbcHDB.so
+```
+
+`client/client/manifest` names the version: `2.29.25` (`rev-number 29`, `2026-07-02`), which
+reports itself to ODBC as `02.29.0025`. It drives the 2.00.088 server below without
+complaint. `ldd` shows no unmet dependency on a stock Ubuntu.
+
+### Start the server
+
+`saplabs/hanaexpress` pulls anonymously — no Docker Hub login was needed here (2026-09-03),
+though SAP's page asks you to accept its terms and the image refuses to start without
+`--agree-to-sap-license`. It also wants a JSON password file mounted in, and the mount has
+to be writable by the image's `hxeadm` (uid 12000), which `chmod 777` gives without root:
+
+```sh
+mkdir -p ~/hana-mounts && chmod 777 ~/hana-mounts
+printf '{"master_password":"AdbcBridge2026"}' > ~/hana-mounts/passwords.json
+chmod 666 ~/hana-mounts/passwords.json
+HANA_MOUNT_DIR=$HOME/hana-mounts \
+  docker compose -f tests/compat/docker-compose.yml --profile extra up -d hana
+until docker logs adbcbridge-hana 2>&1 | grep -q "Startup finished"; do sleep 10; done
+# ... Post start: 55s / Overall: 158s / Startup finished!
+```
+
+Startup is the slow part: 158 s on a cold volume here, most of it creating the system
+database and then the `HXE` tenant. It settles at about 5 GB resident under a 12 GB cap.
+
+About the compose service:
+
+* **Ports 39013 and 39017, both published unmapped.** 39013 is the system database and
+  39017 the `HXE` tenant this entry uses (instance number 90, so HANA's `3<nn>13` /
+  `3<nn>17` convention). Do not remap them: the client resolves a tenant by asking for its
+  port number and then reconnecting to exactly that number.
+* **`--ulimit nofile=1048576:1048576`**, which SAP asks for and which is also this host's
+  hard limit, so it needs no `sysctl` of its own.
+* **`--sysctl kernel.shmmax=1073741824`.** Of the four SAP asks for, this is the one that
+  is IPC-namespaced and so can be set per container. The other three — `fs.file-max`,
+  `vm.max_map_count`, `net.ipv4.ip_local_port_range` — are host-wide and are not Docker's
+  to set. A stock Ubuntu 24.04 already exceeds SAP's minimum on the first two; if you want
+  them exactly as SAP documents them, that is a root step done once on the host:
+
+  ```sh
+  sudo sysctl -w fs.file-max=20000000
+  sudo sysctl -w vm.max_map_count=135217728
+  sudo sysctl -w net.ipv4.ip_local_port_range="40000 60999"
+  ```
+
+  The entry was verified without any of them, on a host reporting `fs.file-max
+  9223372036854775807`, `vm.max_map_count 67108864` and `ip_local_port_range 32768 60999`.
+
+### Run it
+
+```sh
+export HANA_ODBC_DRIVER=$HOME/odbc-drivers/hana/lib/libodbcHDB.so
+ADBC_ODBC_DRIVER=build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py hana
+# hana      PASS  (HDB (via ODBC) 02.00.0088 00-1760424921)
+```
+
+### Driver quirks
+
+Four, all keyed on `libodbchdb` in `OdbcDetectQuirks`. One of them is a correctness bug
+that had nothing to do with HANA being new to the matrix — it would have silently corrupted
+data for anyone using this driver — so it is worth reading in full.
+
+**1. Narrow statement text is decoded as Latin-1 (`wide_sql`, new).** unixODBC hands a
+narrow `char*` to the driver as the bytes it is, so on Linux every other driver in this
+matrix reads adbcBridge's UTF-8 statement text correctly. HANA's client does not: it takes
+each byte for one Latin-1 character and re-encodes it. Measured with plain ODBC, no
+adbcBridge in the way — the UTF-8 bytes of `héllo 🚀` sent through `SQLExecDirect`:
+
+```
+sent    68 c3a9 6c6c6f 20 f09f9a80          "héllo 🚀"  (8 characters)
+stored  68 c383c2a9 6c6c6f 20 c3b0c29fc29ac280   LENGTH(s) = 11
+        i.e. the eleven Latin-1 characters those bytes spell
+```
+
+Through `SQLExecDirectW` the same statement stores `héllo 🚀` exactly. The corruption is
+self-consistent within narrow statements — a narrow `LIKE 'héllo%'` still matches a narrow
+`INSERT`, because both are mangled the same way — which is what hides it; it shows the
+moment a literal has to match a value sent as a *bound parameter*, which travels as
+`SQL_C_WCHAR` and arrives correct. That is exactly the compat workload's statement-literal
+step, and it is exactly the corruption the Windows driver manager causes for every driver
+(see the header of `src/odbc_text.c`) — here caused by one driver, on every platform.
+
+No connection property fixes it (`CHAR_AS_UTF8=TRUE`, `CHAR_SET=UTF8`, `charset=UTF8` all
+store the same mangled bytes) and neither does the locale (`LC_ALL=C`, `en_US.UTF-8` and
+`C.UTF-8` are identical). So `wide_sql` sends caller statement text through
+`SQLExecDirectW` / `SQLPrepareW` on every platform — the mirror image of the existing
+`narrow_sql`, and it reuses the same conversion the Windows build already had.
+
+**2. `SQLGetTypeInfo(SQL_TYPE_TIMESTAMP)` names `SECONDDATE` first
+(`ddl_timestamp_type_name`, new).** Generated ingest DDL reads the first row of that result
+set, and HANA's first row is `SECONDDATE` — its *whole-second* timestamp (`COLUMN_SIZE` 19,
+`MAXIMUM_SCALE` 0, no `CREATE_PARAMS`). `TIMESTAMP`, the 7-digit one, is rows two and three:
+
+```
+SQL_TYPE_TIMESTAMP   SECONDDATE   size=19  CREATE_PARAMS=None
+SQL_TYPE_TIMESTAMP   TIMESTAMP    size=23  CREATE_PARAMS=None
+SQL_TYPE_TIMESTAMP   TIMESTAMP    size=27  CREATE_PARAMS=None
+```
+
+So an Arrow `timestamp[us]` column ingested into a table adbcBridge created landed in a
+column that silently dropped every microsecond. Nothing in the ODBC metadata separates the
+two: `SECONDDATE` takes no `CREATE_PARAMS`, so the existing `fractional_time_type_format`
+route — ask the type for a scale — has nothing to ask, and HANA's `TIMESTAMP` takes no
+precision argument either. Hence a fixed name rather than a format.
+
+**3. `SQLGetTypeInfo(SQL_LONGVARCHAR)` names `CLOB` (`ddl_string_as_max_varchar`).** The
+same trap as SQL Server's `TEXT` and Db2's `LONG VARCHAR`, and the flag Db2 already uses is
+the fix. A HANA `CLOB` column cannot be sorted or de-duplicated:
+
+```
+ORDER BY  -> HY000  264 invalid datatype: "V" LOB type in ORDER BY clause
+DISTINCT  -> HY000  264 invalid datatype: LOB type in distinct select clause
+```
+
+so a table adbcBridge created could not be ordered or grouped on its own string column.
+`SQL_VARCHAR` is `VARCHAR`, `CREATE_PARAMS` `length`, 5,000 characters wide — and since
+HANA 2.0 merged `VARCHAR` into `NVARCHAR` it is fully Unicode, emoji included, so
+`VARCHAR(5000)` is a usable column in a way `CLOB` is not.
+
+(Worth noting for anyone reading `SQLGetTypeInfo` here: the first row for `SQL_WVARCHAR` is
+`ALPHANUM`, a HANA-specific 127-character type. adbcBridge's string chain is
+`SQL_LONGVARCHAR → SQL_WLONGVARCHAR → SQL_VARCHAR` and never asks for `SQL_WVARCHAR`, so it
+does not step on that one — but a driver-agnostic tool that does would get a 127-character
+column for an unbounded string.)
+
+**4. Parameter arrays beat multi-row `INSERT` (`prefer_param_arrays`).** The third driver
+to set this, after MariaDB Connector/ODBC and Vertica's — and here it is the server's doing
+rather than the driver's. HANA has no multi-row `VALUES` at all, so `MultiRowSetup`'s probe
+is refused and bulk ingest falls back to one execute per row. 20,000-row ingests:
+
+| path | rows/s |
+|---|---:|
+| one execute per row (`adbc.odbc.array_binding=false`) | 7,675 |
+| parameter array (the default now) | 1,142,092 |
+
+`MultiRowSetup`'s `UNION ALL` fallback would fit — HANA spells the one-row table `DUMMY` —
+but a column store takes each such `INSERT` as one row-store insert, which is the case the
+array path already beats by two orders of magnitude.
+
+Fetch is 6,768,257 rows/s — the fastest read in `bench/MATRIX_BENCHMARKS.md`, by a factor
+of 3.5 over the next entry: an in-memory column store reading back a column it never had
+to leave memory for.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down hana
+```
+
+The container keeps its database in the image's own volume, so a `down` and a fresh `up`
+replays the same 158 s bootstrap.
