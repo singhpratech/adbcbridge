@@ -1207,14 +1207,32 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     if (nres > 0) SQLFreeStmt(hstmt, SQL_CLOSE);
 
     int64_t applied = 0;
+    int64_t unavailable = 0;
     bool status_filled = false;
     for (int64_t i = 0; i < n; i++) {
       if (param_status[i] == SQL_PARAM_UNUSED) continue;
       status_filled = true;
       if (param_status[i] == SQL_PARAM_SUCCESS || param_status[i] == SQL_PARAM_SUCCESS_WITH_INFO) {
         applied++;
-      } else if (param_status[i] == SQL_PARAM_ERROR ||
-                 param_status[i] == SQL_PARAM_DIAG_UNAVAILABLE) {
+      } else if (param_status[i] == SQL_PARAM_DIAG_UNAVAILABLE) {
+        unavailable++;
+      }
+    }
+    // SQL_PARAM_DIAG_UNAVAILABLE says the driver cannot tell, not that the set
+    // failed.  Db2 11.5 through the 12.1 clidriver marks every set of a clean
+    // execute that way while SQLRowCount and SQL_ATTR_PARAMS_PROCESSED_PTR both
+    // say the whole array went in; re-running those sets inserted every row
+    // twice.  When the execute reported no diagnostic at all and the row count
+    // covers the sets marked success plus the unknowns, they landed.  Otherwise
+    // the unknowns are re-run one at a time like errors, where a duplicate is
+    // still the lesser risk than a silently dropped row.
+    bool unknown_landed = unavailable > 0 && r == SQL_SUCCESS && have_row_count &&
+                          affected >= applied + unavailable;
+    if (unknown_landed) applied += unavailable;
+    for (int64_t i = 0; i < n; i++) {
+      if (param_status[i] == SQL_PARAM_UNUSED) continue;
+      if (param_status[i] == SQL_PARAM_ERROR ||
+          (param_status[i] == SQL_PARAM_DIAG_UNAVAILABLE && !unknown_landed)) {
         // A driver that walks the array set by set (MySQL Connector/ODBC) answers
         // SQL_SUCCESS_WITH_INFO for the execute, counts the set in
         // SQL_ATTR_PARAMS_PROCESSED_PTR and marks only its status.  Taking the
