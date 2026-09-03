@@ -419,6 +419,21 @@ struct OdbcReaderOptions {
   // the compat workload fails wide and passes narrow).  Only the calls that carry
   // caller text take this route; the bridge's own ASCII probes stay wide.
   bool narrow_sql;
+  // Driver quirk, the mirror image of narrow_sql and not Windows-only: send statement
+  // text through the W entry points (SQLExecDirectW / SQLPrepareW) everywhere, because
+  // this driver decodes narrow statement text as Latin-1 rather than UTF-8.
+  //
+  // Set for SAP HANA's libodbcHDB.so.  unixODBC hands a narrow `char*` to the driver as
+  // the bytes it is, so on Linux every other driver here reads the bridge's UTF-8
+  // statement text correctly -- but HANA's client takes each byte for one Latin-1
+  // character and re-encodes it, and no connection property (CHAR_AS_UTF8, CHAR_SET,
+  // charset) or locale (LC_ALL=C, en_US.UTF-8, C.UTF-8) changes it.  The UTF-8 bytes of
+  // 'héllo 🚀' (68 c3a9 6c6c6f 20 f09f9a80) are stored as the eleven Latin-1 characters
+  // those bytes spell, so a literal in statement text lands double-encoded and does not
+  // match the same value sent as a bound parameter -- the exact corruption the Windows
+  // driver manager causes for every driver, here caused by one driver on every platform.
+  // Through SQLExecDirectW the same statement stores 'héllo 🚀' exactly.
+  bool wide_sql;
   // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
   bool no_describe_param;
   // Driver quirk: the driver describes a column as SQL_TYPE_TIMESTAMP but has no
@@ -536,6 +551,19 @@ struct OdbcReaderOptions {
   // NVARCHAR(MAX), and a 100,000-row read 859,215 rows/s against 3,172,747 (medians of
   // 5, interleaved).
   const char* ddl_string_type_name;
+  // Driver quirk: the literal DDL type to give an Arrow timestamp column, for a driver
+  // whose SQLGetTypeInfo(SQL_TYPE_TIMESTAMP) names a whole-second type in its first row
+  // -- the row generated ingest DDL reads -- and its sub-second type only further down.
+  //
+  // Set for SAP HANA's libodbcHDB.so, whose first row is SECONDDATE (COLUMN_SIZE 19,
+  // MAXIMUM_SCALE 0, no CREATE_PARAMS) while TIMESTAMP, which holds 7 fractional
+  // digits, is the second and third.  Nothing in the ODBC metadata distinguishes them:
+  // SECONDDATE takes no CREATE_PARAMS, so fractional_time_type_format's route -- ask
+  // for a scale -- has nothing to ask, and HANA's TIMESTAMP takes no precision argument
+  // either ("TIMESTAMP(6)" is 42000/257, "incorrect syntax near ("), so the replacement
+  // is a fixed name rather than a format.  Without it an Arrow timestamp[us] column
+  // became SECONDDATE and every microsecond was silently dropped on ingest.
+  const char* ddl_timestamp_type_name;
   // SQL_MAX_STATEMENT_LEN, in bytes; 0 when the driver will not say.
   int64_t max_statement_len;
   // Server quirk: a hard ceiling on the number of parameters one statement may carry.
@@ -711,8 +739,10 @@ SQLRETURN OdbcPrepareUtf8(SQLHSTMT hstmt, const char* sql);
 // OdbcReaderOptions::narrow_sql, and only means something on Windows (the narrow
 // calls are the only ones elsewhere).  Statement text that came from the caller goes
 // through these; the two-argument forms above are for the bridge's own ASCII probes.
-SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, bool narrow);
-SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, bool narrow);
+// Statement text from the caller, routed by this connection's narrow_sql / wide_sql
+// quirks; `opts` may be NULL, which means the platform default.
+SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, const struct OdbcReaderOptions* opts);
+SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, const struct OdbcReaderOptions* opts);
 SQLRETURN OdbcDescribeColUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* name, SQLSMALLINT name_cap,
                               SQLSMALLINT* name_len, SQLSMALLINT* type, SQLULEN* size,
                               SQLSMALLINT* digits, SQLSMALLINT* nullable);

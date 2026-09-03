@@ -644,3 +644,38 @@ services:
     environment: { CLICKHOUSE_USER: adbc, CLICKHOUSE_PASSWORD: adbc, CLICKHOUSE_DB: adbc, TZ: UTC }
     ports: ["127.0.0.1:18123:8123", "127.0.0.1:19000:9000"]
     ulimits: { nofile: { soft: 262144, hard: 262144 } }
+
+  # SAP HANA Express Edition: SAP's in-memory column store, the developer edition of HANA
+  # that SAP publishes as an image (saplabs/hanaexpress).  Driven by SAP's own first-party
+  # ODBC driver, libodbcHDB.so, from the free HANA client download -- see
+  # tests/compat/README.md for the EULA-cookie fetch and the sysctl/ulimit prerequisites.
+  # In the "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   HANA_MOUNT_DIR=$HOME/hana-mounts \
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d hana
+  #   until docker logs adbcbridge-hana 2>&1 | grep -q "Startup finished"; do sleep 10; done
+  # HANA_MOUNT_DIR must hold a passwords.json ({"master_password":"..."}), and the
+  # directory has to be writable by the image's hxeadm (uid 12000) -- chmod 777 does it
+  # without root.  The image will not start without --agree-to-sap-license.
+  # Ports: 39013 is the system database and 39017 the HXE tenant that the matrix entry
+  # uses (instance number 90, so HANA's 3<nn>13 / 3<nn>17 convention).  Both are
+  # published unmapped: the client resolves a tenant by asking for its port number and
+  # reconnecting to exactly that number, which a remapped host port would break.
+  # sysctls: kernel.shmmax is the one SAP asks for that is IPC-namespaced, so Docker can
+  # set it per container; fs.file-max, vm.max_map_count and net.ipv4.ip_local_port_range
+  # are host-wide and are listed in README.md as host prerequisites instead.
+  # Startup is slow -- several minutes on a cold volume while it creates the system and
+  # tenant databases -- so wait on the log line rather than on the port.
+  hana:
+    profiles: ["extra"]
+    image: saplabs/hanaexpress:latest
+    container_name: adbcbridge-hana
+    hostname: hxehost
+    command: ["--passwords-url", "file:///hana/mounts/passwords.json", "--agree-to-sap-license"]
+    volumes:
+      - ${HANA_MOUNT_DIR:-/nonexistent}:/hana/mounts
+    sysctls:
+      kernel.shmmax: "1073741824"
+    ulimits:
+      nofile: { soft: 1048576, hard: 1048576 }
+    mem_limit: 12g
+    ports: ["127.0.0.1:39013:39013", "127.0.0.1:39017:39017"]

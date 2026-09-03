@@ -924,7 +924,7 @@ AdbcStatusCode OdbcStatementExecutePartitionsOdbc(struct OdbcStatement* stmt,
   // WHERE clause, so describing the original query answers for all of them.
   if (schema) {
     RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
-    ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, stmt->reader_opts.narrow_sql), SQL_HANDLE_STMT,
+    ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, &stmt->reader_opts), SQL_HANDLE_STMT,
                stmt->ref->hstmt, "SQLPrepare", error);
     stmt->prepared = true;
     RAISE_ADBC(OdbcDescribeResultSchema(stmt->ref->hstmt, &stmt->reader_opts, schema, error));
@@ -1049,7 +1049,7 @@ AdbcStatusCode OdbcConnectionReadPartitionOdbc(struct OdbcConnection* conn,
     free(sql);
     return OdbcSetError(SQL_HANDLE_DBC, conn->hdbc, "SQLAllocHandle(SQL_HANDLE_STMT)", error);
   }
-  SQLRETURN ret = OdbcExecDirectSql(hstmt, sql, conn->reader_opts.narrow_sql);
+  SQLRETURN ret = OdbcExecDirectSql(hstmt, sql, &conn->reader_opts);
   free(sql);
   if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) {
     AdbcStatusCode status = OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecDirect", error);
