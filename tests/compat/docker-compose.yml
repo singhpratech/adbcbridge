@@ -749,3 +749,29 @@ services:
     shm_size: 1g
     mem_limit: 10g
     ports: ["127.0.0.1:29191:9191", "127.0.0.1:28080:8080"]
+  # Actian Ingres, open-source edition: II 10.1.0, built from the GPL
+  # ingres-10.1.0-00-NPTL source kit and baked into the community image
+  # iidbdb/ingres (Actian's own actian/ingres:ii12.1.0 refuses to start without a
+  # commercial license.xml -- see tests/compat/README.md).  In the "extra" profile, so a
+  # plain `up -d` leaves it alone:
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d ingres
+  #   tests/compat/fixtures/setup_ingres.sh
+  # Two settings are load-bearing:
+  #   * entrypoint: the image's own entrypoint is a data-migration driver that exits
+  #     unless a /restore/<month>/copy.in of its owner's making is mounted; the setup
+  #     script starts Ingres instead.
+  #   * hostname: an Ingres installation's configuration is keyed on the host name it was
+  #     set up under (ii.<host>.dbms.*, ii.<host>.gcc.*, ...), and the baked install was
+  #     set up in a container called 1f0fb1d47e65.  Give it any other name and every
+  #     lookup misses.  The ODBC client on the host is pointed at the same name with
+  #     II_HOSTNAME for the same reason.
+  # 21064 is the Ingres/Net listener (TCP port "II" for II_INSTALLATION=II); the Data
+  # Access Server on 21071 is for JDBC/.NET and is not published.
+  ingres:
+    profiles: ["extra"]
+    image: iidbdb/ingres:latest
+    container_name: adbcbridge-ingres
+    hostname: 1f0fb1d47e65
+    entrypoint: ["sleep", "infinity"]
+    mem_limit: 2g
+    ports: ["127.0.0.1:21064:21064"]

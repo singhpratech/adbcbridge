@@ -38,6 +38,11 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SPANNER_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MONGODBBI_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SINGLESTORE_ODBC_DRIVER, HANA_ODBC_DRIVER, EXASOL_ODBC_DRIVER, ALTIBASE_ODBC_DRIVER, KINETICA_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, INGRES_ODBC_DRIVER
+INGRES_ODBC_DRIVER is the one that is not a path: the Ingres driver copies the connection
+string's Driver= value into a 32-byte buffer, so it holds a driver *name* registered in an
+odbcinst.ini (ODBCSYSINI) instead -- see README.md, which also has the II_SYSTEM and
+II_HOSTNAME that entry needs and the ANSI shim it is registered against.
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -747,6 +752,29 @@ DBS = {
         # from the A that ingest just created.
         quote="",
         bool_type="int16"),
+    "ingres": dict(
+        # Actian Ingres, open-source edition (II 10.1.0, the GPL ingres-10.1.0-00 source
+        # kit), reached over Ingres/Net on 21064 with the ODBC driver that ships in the
+        # installation, libiiodbcdriver.1.so.  Two things about the setup are unusual and
+        # tests/compat/README.md has the detail:
+        #   * INGRES_ODBC_DRIVER holds a *driver name* from odbcinst.ini, not a path.  The
+        #     driver strcpy()s the connection string's Driver= value into a 32-byte buffer,
+        #     so any real path aborts the process; a short registered name fits.
+        #   * that registered driver is an ANSI-only shim over the real one
+        #     (fixtures/ingres_ansi_shim.c): the driver's wide entry points take a 4-byte
+        #     SQLWCHAR and unixODBC's is 2 bytes, so every W call reaches it as one
+        #     character.
+        # `Server` is a vnode defined with netutil, which carries the network login;
+        # `adbc` must have been created with `createdb -n` (see below).
+        env="INGRES_ODBC_DRIVER",
+        conn="Driver={drv};Server=adbcing;Database=adbc;UID=ingres;PWD=adbc;ServerType=INGRES;",
+        # Ingres type names.  FLOAT8 is its 8-byte float (FLOAT alone takes a precision),
+        # BYTE VARYING is the variable-length byte string (there is no VARBINARY), and
+        # ANSIDATE is the date-only type -- plain DATE is INGRESDATE, a date-and-time type
+        # that the driver describes SQL_TYPE_TIMESTAMP.  BOOLEAN and DECIMAL(10,3) are
+        # native.
+        ddl="CREATE TABLE adbc_t (i INTEGER, f FLOAT8, s VARCHAR(50), b BYTE VARYING(10),"
+            " d ANSIDATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"),
     "monetdb": dict(
         env="MONETDB_ODBC_DRIVER", conn="Driver={drv};Host=127.0.0.1;Port=15000;Database=adbc;Uid=monetdb;Pwd=adbc;",
         ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b BLOB, d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"),

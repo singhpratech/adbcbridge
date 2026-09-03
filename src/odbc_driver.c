@@ -940,6 +940,24 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // table's columns off asks for no rows a way the planner does not fold.
     conn->reader_opts.zero_row_suffix = "LIMIT 0";
   }
+  if (strstr((const char*)name, "iiodbcdriver")) {
+    // Actian Ingres' own ODBC driver (SQL_DRIVER_NAME "iiodbcdriver.1.so",
+    // SQL_DBMS_NAME "INGRES").  Two things it cannot do:
+    //
+    //  * A SQL_C_WCHAR parameter is read as UCS-2 and each 16-bit unit is treated as a
+    //    code point, so a surrogate pair is rejected rather than combined: inserting
+    //    "héllo <U+1F680>" fails with SQLSTATE 5000B, "Unicode code point 0000D83D
+    //    cannot be mapped to local character set" (0xD83D being the high surrogate).
+    //    The narrow path is UTF-8 and stores and reads the same string back unchanged
+    //    against a Unicode-enabled database (createdb -n), so character parameters go
+    //    that way -- as they do for Firebird, Virtuoso and Informix.
+    //  * Ingres SQL has no multi-row VALUES: "INSERT INTO t VALUES (...),(...)" is a
+    //    syntax error ("Syntax error on ','", E_PS0442/2503), which is the ingest path's
+    //    default.  Parameter arrays are what it has, and it reports
+    //    SQL_PARAM_ARRAY_ROW_COUNTS = SQL_PARC_BATCH for them, so prefer those.  The
+    //    multi-row probe would settle on a batch of 1 and pay a round trip per row.
+    conn->reader_opts.wchar_as_utf8 = true;
+  }
   if (strstr((const char*)name, "psqlodbc")) {
     // psqlodbc is the driver for every PostgreSQL-wire server (PostgreSQL itself,
     // CockroachDB, YugabyteDB, TimescaleDB, QuestDB, ...), so its name says nothing
@@ -1340,10 +1358,15 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // MDB Tools writes bound-column indicators the same way: a NULL column's low four
     // bytes come back 0xffffffff with the high half untouched.  It is identified through
     // the SQL_DBMS_NAME fallback above, having no SQL_DRIVER_NAME of its own.
+    // Ingres' own driver ("iiodbcdriver.1.so") is the third: its SQLLEN is four bytes on
+    // 64-bit Linux too, so a NULL column read back as the value of the row before it (a
+    // NULL DOUBLE as 1e-323, a NULL VARCHAR as the previous row's text padded out to the
+    // bound width) until the indicators were read four bytes at a time.
     const char* n = (const char*)name;
     conn->reader_opts.sqllen_32bit = (strstr(n, "db2") != NULL && strstr(n, "libdb2o") == NULL &&
                                       strstr(n, "db2o.") == NULL) ||
-                                     strstr(n, "mdbtools") != NULL;
+                                     strstr(n, "mdbtools") != NULL ||
+                                     strstr(n, "iiodbcdriver") != NULL;
   }
 #if defined(_WIN32)
   // wchar_as_utf8 steers a driver whose SQLWCHAR is not UTF-16 onto the narrow path,
