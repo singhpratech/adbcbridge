@@ -513,6 +513,28 @@ services:
       stack: -1
     mem_limit: 6g
     ports: ["127.0.0.1:12881:2881"]
+  # SingleStore (formerly MemSQL): a distributed HTAP database that serves the MySQL wire
+  # protocol on 3306, driven by the same MySQL Connector/ODBC as the other MySQL-wire
+  # entries.  In the "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d singlestore
+  #
+  # singlestoredb-dev is the free development image: it carries its own Developer Image
+  # licence, so unlike singlestore/cluster-in-a-box it needs no LICENSE_KEY and no
+  # SingleStore account.  It runs a master and one leaf node in the container and is
+  # ready in about half a minute; ROOT_PASSWORD is the only setting it needs.  The log
+  # warns once that used cluster capacity (3 units) exceeds the licence's 1 unit --
+  # that is the free licence describing itself, and nothing in the workload is refused.
+  #
+  # 8080 is SingleStore Studio, the bundled web UI, published on 18090 for a look at the
+  # cluster; the matrix never touches it.  Port 13320 keeps the MySQL wire clear of the
+  # other MySQL-wire entries (dolt already has 13310).  The image ships no user database,
+  # so the matrix entry's `setup` creates `adbc` itself.
+  singlestore:
+    profiles: ["extra"]
+    image: ghcr.io/singlestore-labs/singlestoredb-dev:latest
+    environment: { ROOT_PASSWORD: "adbc" }
+    mem_limit: 6g
+    ports: ["127.0.0.1:13320:3306", "127.0.0.1:18090:8080"]
   # Dremio (OSS): a lakehouse query engine whose native client protocol is Arrow Flight
   # SQL, on 32010 -- the same Arrow Flight SQL ODBC driver as the `flightsql` and
   # `influxdb3` services connects to it (Dremio is the driver's publisher).  9047 is the
