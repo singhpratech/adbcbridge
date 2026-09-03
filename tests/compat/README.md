@@ -18,7 +18,7 @@ fixture.
 
 The script opens the driver libraries of the entries it is about to run *before* it
 imports pyarrow. MySQL Connector/ODBC cannot be loaded at all once pyarrow has been
-imported, so without that the eleven MySQL-wire entries would fail with unixODBC's
+imported, so without that the twelve MySQL-wire entries would fail with unixODBC's
 `Can't open lib ... : file not found`; see
 [`docs/TROUBLESHOOTING.md`](../../docs/TROUBLESHOOTING.md).
 
@@ -6045,4 +6045,249 @@ On Windows the staging (`tar`, `dpkg-deb -x`) is easiest inside the image itself
 docker compose -f tests/compat/docker-compose.yml --profile extra down mongodbbi
 # or, if started standalone:
 docker rm -f adbcbridge-mongodbbi
+```
+
+## SingleStore 9.1.1 (MySQL 5.7.32 wire)
+
+[SingleStore](https://www.singlestore.com/) (formerly MemSQL) is a distributed HTAP
+database whose tables are **columnstore by default**. It serves the MySQL wire protocol
+and announces itself as `5.7.32` — the real build number is `@@memsql_version`, `9.1.1` —
+so it needs no ODBC driver of its own: the same MySQL Connector/ODBC build used for the
+`mysql` entry drives it (see [MySQL 8](#mysql-8) above for the root-free tarball, and for
+the `LD_PRELOAD` that `import pyarrow` makes necessary).
+
+```sh
+export SINGLESTORE_ODBC_DRIVER=$MYSQL_ODBC_DRIVER   # the tarball's libmyodbc9w.so
+```
+
+SingleStore also publishes its *own* free ODBC driver, which works here too and has its
+own trade-offs — see [Two drivers work](#two-drivers-work-and-which-one-the-entry-uses)
+below.
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d singlestore
+# or standalone:
+docker run -d --name adbcbridge-singlestore --memory=6g \
+  -p 127.0.0.1:13320:3306 -p 127.0.0.1:18090:8080 \
+  -e ROOT_PASSWORD=adbc \
+  ghcr.io/singlestore-labs/singlestoredb-dev:latest
+```
+
+```sh
+until docker logs adbcbridge-singlestore 2>&1 | grep -q "Listening on 0.0.0.0:8080"; do sleep 5; done
+```
+
+**Use `singlestoredb-dev`, not `cluster-in-a-box`.** SingleStore's older
+`singlestore/cluster-in-a-box` image wants a `LICENSE_KEY`, which means a SingleStore
+account. The development image carries its own **Developer Image** licence in the
+container, so it needs no key, no account and no login of any kind — it is the image to
+reach for. Two details about its name are worth writing down, because both cost time
+here:
+
+* The image is `ghcr.io/singlestore-labs/singlestoredb-dev`, **not**
+  `singlestoredb-dev-image`. The latter is the name of the *GitHub repository* that
+  builds it; pulling it answers `denied` (GHCR's response for a package that does not
+  exist, indistinguishable from one that is private).
+* It is on GHCR only. Docker Hub carries `singlestore/cluster-in-a-box` and the
+  deprecated `memsql/cluster-in-a-box`, not this one.
+
+The container settles at just under 1 GiB (977 MiB measured after the whole matrix and
+benchmark had run) and is ready in roughly 30 seconds from an already-pulled image
+(2.65 GB). One line in the log is not a problem:
+
+```
+WARN: CheckCapacity: Used cluster capacity (3 units) has exceeded the maximum cluster
+      capacity of your license (1 units). Contact sales@memsql.com to upgrade.
+```
+
+That is the free Developer Image licence describing itself — the container runs a master
+and one leaf, which is three units of capacity. Nothing in the workload is refused, and
+the licence itself reports `Expiration = unlimited`.
+
+Port 13320 keeps the MySQL wire clear of the other MySQL-wire entries (`dolt` already
+holds 13310); 18090 publishes SingleStore Studio, the bundled web UI, which the matrix
+never touches.
+
+### Run the entry
+
+```sh
+LD_PRELOAD=/lib/x86_64-linux-gnu/libstdc++.so.6 \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+ADBC_MATRIX_SUFFIX=_singlestore ADBC_ODBC_DELEGATE=never \
+  .venv/bin/python tests/compat/test_matrix.py singlestore
+# singlestore PASS  (MySQL (via ODBC) 5.7.32)
+```
+
+The image ships no user database and only the `root` account, so the entry's `setup`
+runs `CREATE DATABASE IF NOT EXISTS adbc` and `USE adbc` rather than the connection
+string naming a database. Both are idempotent, which matters because
+`bench/matrix_bench.py` replays `setup` on every connection it opens.
+
+`PLUGIN_DIR` is needed here for the same reason as for TiDB, Dolt and OceanBase:
+SingleStore authenticates `root` with `mysql_native_password`, whose *client-side* plugin
+Connector/ODBC 9 loads at run time from its compiled-in `/usr/local/mysql/lib/plugin`.
+The entry's connection string ends in `{plugin_dir}`, which `conn_uri()` expands to the
+tarball's own `lib/plugin` when that directory exists — see [TiDB](#tidb-75) for the full
+story.
+
+### Quirks: none
+
+There is no `singlestore` key in `OdbcDetectQuirks`, and the entry needs no tolerance
+flag that the `mysql` entry does not. The whole standard workload runs on the generic
+path on the first try: the emoji round-trip, `VARBINARY(10)`, `DATETIME(6)` microseconds,
+`DECIMAL(10,3)`, NULL parameters, affected-row counts, `GetObjects`/`GetTableSchema`, and
+the 5000-row batched ingest and read. The entry is the `mysql` entry's DDL with the
+`mysql` entry's two tolerances, for the same two reasons:
+
+* `bool_type="int8"` — `BOOLEAN` is `TINYINT(1)`, which the driver reports as
+  `SQL_TINYINT`.
+* `setup=[… "SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')"]` — the
+  double-quoted identifiers `adbc_ingest` emits. SingleStore's parser implements
+  `ANSI_QUOTES` exactly as MySQL does; its stock `sql_mode` is
+  `STRICT_ALL_TABLES,NO_AUTO_CREATE_USER`.
+
+### Columnstore and rowstore both pass
+
+`@@default_table_type` is `columnstore`, so the entry's plain `CREATE TABLE adbc_t (…)`
+creates a columnstore table — `SHOW CREATE TABLE` adds `SORT KEY __UNORDERED ()` and
+`SHARD KEY ()` to it, and no explicit key of either kind is needed. The same DDL spelled
+`CREATE ROWSTORE TABLE` was run through the whole probe side by side and behaves
+identically on every point the workload checks: the emoji, the two `VARBINARY` bytes,
+microseconds, `DECIMAL(10,3)`, the all-NULL row, `SQLColumns` ordering and affected-row
+counts. Nothing in the entry depends on which storage type it gets, so it takes the
+default.
+
+### `DATETIME(6)` microseconds: right through adbcBridge, truncated through pyodbc
+
+This one is worth spelling out because the workload passes and a plain-ODBC probe of the
+same column does not.
+
+SingleStore's `SQLGetTypeInfo` row for `datetime` reports `COLUMN_SIZE` **21** with
+`MAXIMUM_SCALE` 0, and its result-set metadata describes a `DATETIME(6)` column as
+`COLUMN_SIZE` 19, `DECIMAL_DIGITS` 0 — neither carries the column's real fractional
+precision. pyodbc derives the scale it binds a Python `datetime` at from that
+`SQLGetTypeInfo` column size (21 − 20 = **1** fractional digit), so a bound
+`13:45:10.123456` is sent as `13:45:10.1` and stored as `100000` microseconds:
+
+```
+INSERT … VALUES (?, ?)  with datetime(2024,2,29,13,45,10,123456)
+SELECT CAST(ts AS CHAR) -- 2024-02-29 13:45:10.100000
+```
+
+The column is not at fault and neither is the wire: the same value inserted as a SQL
+literal, or bound as a *string*, round-trips all six digits, and `NO_SSPS=1` changes
+nothing (it happens on the text-substitution path too). adbcBridge binds its own scale
+rather than taking the driver's type table at face value, so the matrix's
+`ts.microsecond == 123456` assertion passes unchanged — but any application that lets
+pyodbc pick the scale will silently lose everything below a tenth of a second here.
+SingleStore's own driver reports the column as `COLUMN_SIZE` 26 / `DECIMAL_DIGITS` 6 and
+pyodbc is exact through it, which is the clearest evidence the number is a Connector/ODBC
++ SingleStore type-table artefact and not a server limit.
+
+### Two drivers work, and which one the entry uses
+
+SingleStore publishes a free ODBC driver of its own, a MariaDB Connector/ODBC fork, as a
+Linux tarball on GitHub releases. It needs no root — unpack it anywhere outside the repo:
+
+```sh
+mkdir -p ~/odbc-drivers/singlestore && cd ~/odbc-drivers/singlestore
+curl -sSLO https://github.com/memsql/singlestore-odbc-connector/releases/download/v1.2.2/singlestore-connector-odbc-1.2.2-ubuntu-amd64.tar.gz
+tar xzf singlestore-connector-odbc-1.2.2-ubuntu-amd64.tar.gz
+# -> singlestore-connector-odbc-1.2.2-ubuntu-amd64/libssodbcw.so  (Unicode)
+#    singlestore-connector-odbc-1.2.2-ubuntu-amd64/libssodbca.so  (ANSI)
+```
+
+It passes the entry too, with a connection string that needs neither `PLUGIN_DIR` nor the
+`LD_PRELOAD`:
+
+```sh
+SINGLESTORE_ODBC_DRIVER=~/odbc-drivers/singlestore/singlestore-connector-odbc-1.2.2-ubuntu-amd64/libssodbcw.so \
+SINGLESTORE_CONN='Driver={drv};Server=127.0.0.1;Port=13320;User=root;Password=adbc;' \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so ADBC_ODBC_DELEGATE=never \
+  .venv/bin/python tests/compat/test_matrix.py singlestore
+# singlestore PASS  (SingleStore (via ODBC) 09.01.0001)
+```
+
+Each has one thing the other does not:
+
+| | MySQL Connector/ODBC 9.4 | SingleStore ODBC 1.2.2 |
+|---|---|---|
+| `SQL_DBMS_NAME` / `SQL_DBMS_VER` | `MySQL` / `5.7.32` (the wire version) | `SingleStore` / `09.01.0001` (the real one) |
+| `PLUGIN_DIR=` | required (`mysql_native_password`) | not needed |
+| `LD_PRELOAD=libstdc++.so.6` under pyarrow | required | not needed |
+| `DATETIME(6)` described as | size 19, scale 0 | size 26, scale 6 |
+| `SQLGetTypeInfo` under `ANSI_QUOTES` | works | **fails, 42S22** |
+| already provisioned | yes, `$MYSQL_ODBC_DRIVER` | separate download |
+
+**The entry uses MySQL Connector/ODBC**, because it is what the eleven other MySQL-wire
+entries already use and what `private/dbs/mysql.env` already exports — adding SingleStore
+costs one `export SINGLESTORE_ODBC_DRIVER=$MYSQL_ODBC_DRIVER` line and no new driver — and
+because its `SQLGetTypeInfo` survives the `ANSI_QUOTES` the entry sets, so generated
+ingest DDL is spelled in the server's own type names.
+
+### The SingleStore driver's `SQLGetTypeInfo` breaks under `ANSI_QUOTES` (42S22)
+
+Worth recording precisely, because it is a real driver bug and the failure is silent
+through adbcBridge. Against SingleStore ODBC 1.2.2, `SQLGetTypeInfo` succeeds on a fresh
+connection and fails on the same connection once `ANSI_QUOTES` is in `sql_mode`:
+
+```
+SQLGetTypeInfo(SQL_ALL_TYPES) -> 42S22  [ss-1.2.2][9.1.1]Unknown column 'json'
+                                        in 'field list' (1054) (SQLGetTypeInfo)
+SQLGetTypeInfo(SQL_TYPE_TIMESTAMP) -> 42S22  … Unknown column 'datetime' …
+```
+
+The named column is always the first type name the call would have returned (`json` for
+`SQL_ALL_TYPES`, `datetime` for `SQL_TYPE_TIMESTAMP`), which says what the driver is
+doing: it builds its type table as a literal `SELECT` of double-quoted *strings*, and
+`ANSI_QUOTES` turns every one of them into an identifier. `SQLColumns`, `SQLTables` and
+ordinary queries are unaffected — only `SQLGetTypeInfo`.
+
+adbcBridge absorbs it rather than failing: `TypeNameOne` (`src/odbc_bind.c`) treats a
+`SQLGetTypeInfo` that does not succeed as "this driver has no such type" and falls
+through to the portable ANSI name, which is exactly the right thing to do here.
+The effect is visible in the ingest table's DDL and nowhere else — the same
+`adbc_ingest` payload, through the two drivers:
+
+```
+-- Connector/ODBC: driver's own type names
+`b` mediumtext …   `e` bit(1)
+-- SingleStore ODBC: portable fallback names (TEXT, BOOLEAN)
+`b` text …         `e` tinyint(1)
+```
+
+Both are valid SingleStore columns and both pass the read-back, so this is a note, not a
+tolerance flag.
+
+### Benchmark
+
+```
+ADBC_MATRIX_SUFFIX=_singlestore .venv/bin/python bench/matrix_bench.py \
+  --rows 10000 --fetch-rows 100000 --pyodbc-timeout 300 singlestore
+# fetch=1,259,422/s (pyodbc 733,295/s)  ingest=163,686/s array=159,329/s pyodbc=11,398/s
+```
+
+Ingest is the fastest of the MySQL-wire entries — 164k rows/s, against OceanBase's 82k
+and MySQL 8.4's own 8.5k through the same driver at the same 10,000 rows — and the
+multi-row `INSERT` the ingest
+path builds is what earns it: the same payload through pyodbc `executemany`, which sends
+one statement per row, runs at 11.4k.
+
+**Measure twice here.** SingleStore compiles each query shape to machine code the first
+time it sees it (the log lines are `RegisterAsyncLLVMCompile` / `TraceAsyncCompileCompletion`,
+about 100 ms apiece), and the compiled plan is cached for the ones after. A first run on
+a cold container measured `ingest=75,107/s array=109,123/s`, which reads as "parameter
+arrays are 45% faster"; the second run, with the plans cached, gave `163,686` and
+`159,329` — the two forms within 3% of each other. Parameter arrays are *not* faster
+here, so the default multi-row `INSERT` is already the right choice and
+`prefer_param_arrays` is not wanted; the first run was measuring the compiler.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down singlestore
+# or, if started standalone:
+docker rm -f adbcbridge-singlestore
 ```
