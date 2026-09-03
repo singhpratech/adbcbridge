@@ -1336,6 +1336,36 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       conn->reader_opts.ddl_string_as_max_varchar = true;
     }
   }
+  if (strstr((const char*)name, "cwbodbc")) {
+    // IBM i Access ODBC ("libcwbodbc.so") reaches only Db2 for i, which answers
+    // SQL_DBMS_NAME "DB2/400 SQL" -- checked anyway, so the quirk is keyed on the engine
+    // like the Informix one above and not on the library alone.
+    SQLCHAR dbms[64] = {0};
+    SQLSMALLINT dbms_len = 0;
+    if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DBMS_NAME, dbms, sizeof(dbms), &dbms_len)) &&
+        strncmp((const char*)dbms, "DB2/400", 7) == 0) {
+      // SQLGetTypeInfo(SQL_LONGVARCHAR) names CLOB here, and a CLOB column is the worst
+      // of both worlds on this driver: it cannot be array-bound for writing and it has no
+      // declared width to bind for reading, so every row costs a network round trip.
+      // 3,000 rows of (INTEGER, DOUBLE, <string>, DATE) against IBM i 7.5 over a 110 ms
+      // link went in at 8 rows/s and came back at 8 rows/s as CLOB(1M), against 1,070 and
+      // 1,636 as VARCHAR(8000) CCSID 1208 -- 130x and 200x.
+      //
+      // The width is not the widest VARCHAR (ddl_string_as_max_varchar, the Db2 route
+      // above) because neither end of that works here: VARCHAR(32739) is what
+      // SQLGetTypeInfo reports, but a table with one of those and three ordinary columns
+      // is refused outright (SQL0101, "SQL statement too long or complex" -- Db2 for i's
+      // row is at most 32,766 bytes), and a column that wide describes too wide to bind
+      // (max_bind_bytes), which puts the *read* back on SQLGetData row by row: measured
+      // 120 rows/s at VARCHAR(16000) and 62 at VARCHAR(32700).  8,000 keeps the bound
+      // block cursor, and four such columns still fit one row.
+      //
+      // CCSID 1208 is UTF-8.  Without it the column takes the job's CCSID, which on a
+      // stock IBM i is a single-byte EBCDIC one (273 on the server this was measured on),
+      // and every character outside it is stored as a substitution character.
+      conn->reader_opts.ddl_string_type_name = "VARCHAR(8000) CCSID 1208";
+    }
+  }
   if (sizeof(SQLWCHAR) >= 4 && strstr((const char*)name, "myodbc") != NULL) {
     // MySQL Connector/ODBC built for iODBC (its macOS 26.x package links libiodbcinst)
     // is inconsistent about iODBC's four-byte SQLWCHAR.  Reading, it writes UTF-16 code
