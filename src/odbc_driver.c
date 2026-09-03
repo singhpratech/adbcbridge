@@ -928,6 +928,18 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     //    INSERT as one row-store insert, which is the case arrays already beat.)
     conn->reader_opts.prefer_param_arrays = true;
   }
+  if (strstr((const char*)name, "kinetica")) {
+    // Kinetica has exactly one decimal type -- every DECIMAL(p, s) in DDL is stored as
+    // DECIMAL(18, 4) -- and its driver describes such a column as precision 38 scale 0,
+    // which would read the "12.3450" it hands over as a decimal128(38, 0) holding 12.
+    // Both halves of the real type are constants of the server, so name them.
+    conn->reader_opts.decimal_fixed_precision = 18;
+    conn->reader_opts.decimal_fixed_scale = 4;
+    // ... and its planner answers a provably false predicate from the empty pseudo-table
+    // SYSTEM.ITER, which cannot carry a BYTES column, so the zero-row SELECT that reads a
+    // table's columns off asks for no rows a way the planner does not fold.
+    conn->reader_opts.zero_row_suffix = "LIMIT 0";
+  }
   if (strstr((const char*)name, "psqlodbc")) {
     // psqlodbc is the driver for every PostgreSQL-wire server (PostgreSQL itself,
     // CockroachDB, YugabyteDB, TimescaleDB, QuestDB, ...), so its name says nothing
@@ -1742,7 +1754,10 @@ static AdbcStatusCode OdbcConnectionGetTableSchema(struct AdbcConnection* connec
   InternalAdbcStringBuilderAppend(&sb, "SELECT * FROM ");
   if (catalog && *catalog) InternalAdbcStringBuilderAppend(&sb, "%s%s%s.", (char*)q, catalog, (char*)q);
   if (db_schema && *db_schema) InternalAdbcStringBuilderAppend(&sb, "%s%s%s.", (char*)q, db_schema, (char*)q);
-  InternalAdbcStringBuilderAppend(&sb, "%s%s%s WHERE 1=0", (char*)q, table_name, (char*)q);
+  InternalAdbcStringBuilderAppend(&sb, "%s%s%s %s", (char*)q, table_name, (char*)q,
+                                  conn->reader_opts.zero_row_suffix
+                                      ? conn->reader_opts.zero_row_suffix
+                                      : "WHERE 1=0");
 
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,

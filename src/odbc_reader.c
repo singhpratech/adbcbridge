@@ -589,6 +589,12 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_NUMERIC:
       c->precision = (int32_t)c->column_size;
       c->scale = (int32_t)c->decimal_digits;
+      // A driver that misdescribes every decimal column reports a fixed, correct pair
+      // here instead; see decimal_fixed_precision in odbc_internal.h (Kinetica).
+      if (opts->decimal_fixed_precision > 0) {
+        c->precision = opts->decimal_fixed_precision;
+        c->scale = opts->decimal_fixed_scale;
+      }
       if (!opts->decimal_as_string && c->precision > 0 && c->precision <= 38 &&
           c->scale >= 0 && c->scale <= c->precision) {
         c->kind = FETCH_DECIMAL;

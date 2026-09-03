@@ -249,6 +249,17 @@ struct OdbcReaderOptions {
   // fetches min(batch_size, rowset_bytes / row_width) rows at a time instead.
   int64_t rowset_bytes;
   bool decimal_as_string;
+  // Driver quirk: the precision and scale SQLDescribeCol reports for a DECIMAL/NUMERIC
+  // column are not the column's, so use these instead.  Set only for a driver whose
+  // server has exactly one decimal type, since that is the only case where a fixed pair
+  // can be right: Kinetica's is DECIMAL(18, 4) -- every DECIMAL(p, s) in DDL is stored
+  // as that one -- while its driver describes such a column as precision 38 scale 0
+  // (and SQLColumns answers 18, 18).  Believing scale 0 turns the "12.3450" the driver
+  // hands over into a decimal128(38, 0) holding 12: silent truncation of every
+  // fractional digit, which is why this is corrected rather than tolerated.
+  // Zero (the default) leaves the described values alone.
+  int32_t decimal_fixed_precision;
+  int32_t decimal_fixed_scale;
   // Driver quirk: some drivers (DuckDB) write a whole internal chunk into bound
   // buffers regardless of SQL_ATTR_ROW_ARRAY_SIZE; allocate at least this many rows.
   int64_t min_buffer_rows;
@@ -300,6 +311,14 @@ struct OdbcReaderOptions {
   bool null_param_as_varchar;
   // Driver quirk: DDL type wrapper for nullable columns, e.g. "Nullable(%s)" (ClickHouse).
   const char* nullable_type_format;
+  // Server quirk: how to spell "return no rows" in the zero-row SELECT that
+  // GetTableSchema -- and GetObjects' describe fallback -- reads a table's columns off.
+  // NULL means the default, "WHERE 1=0".  Kinetica's planner constant-folds a provably
+  // false predicate and answers the query from its empty pseudo-table SYSTEM.ITER, which
+  // cannot carry a BYTES column: "Invalid attribute: BYTES(null) for table: SYSTEM.ITER
+  // ... Unknown function: BYTES", so GetTableSchema fails on any table holding binary.
+  // "LIMIT 0" is not folded that way and describes the real table.
+  const char* zero_row_suffix;
   // Driver quirk: the names SQLGetTypeInfo reports are not names the server accepts in
   // DDL, so bulk ingest spells its CREATE TABLE with portable SQL type names (BIGINT,
   // DOUBLE, BOOLEAN, ...) instead.  psqlodbc drives every PostgreSQL-wire

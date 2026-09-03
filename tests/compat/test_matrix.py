@@ -37,7 +37,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, TDENGINE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SPANNER_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MONGODBBI_ODBC_DRIVER
-    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SINGLESTORE_ODBC_DRIVER, HANA_ODBC_DRIVER, EXASOL_ODBC_DRIVER, ALTIBASE_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SINGLESTORE_ODBC_DRIVER, HANA_ODBC_DRIVER, EXASOL_ODBC_DRIVER, ALTIBASE_ODBC_DRIVER, KINETICA_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -1572,6 +1572,55 @@ DBS = {
              " WHERE TABLE_NAME = 'adbc_t'", (8,)),
             # A columnar scan with a pushed-down filter over the 100,000-row Parquet
             # table -- the engine's own data path, on a result the entry knows exactly.
+            ("SELECT COUNT(*), MIN(a), MAX(a) FROM adbc_big WHERE a >= 50000",
+             (50000, 50000, 99999)),
+        ]),
+    "kinetica": dict(
+        # Kinetica (Developer Edition 7.1.9), a vectorized analytic database whose SQL
+        # runs on GPU or, in this CPU build, on AVX-512 lanes.  Its own ODBC driver --
+        # libKineticaODBC.so, a Simba SDK build -- speaks the REST/SQL endpoint on 9191
+        # and ships inside the server image; see tests/compat/README.md.
+        #   read_only for the driver's reason alone, and it is a much starker one than
+        # the flightsql family's missing SQLBindParameter: this driver *accepts* every
+        # bind and then reads the wrong buffer.  Parameter N is executed with the value
+        # bound at parameter N+1 and the last parameter is sent as NULL, so a
+        # single-parameter INSERT stores NULL under SQL_SUCCESS and a wider one either
+        # writes shifted values or fails.  Nothing a caller binds can be trusted to
+        # arrive, so neither the parameterised INSERT the other entries load adbc_t with
+        # nor adbc_ingest can run.  SQLExecDirect of literal SQL is exact, so `setup`
+        # builds both tables and the whole read side runs unchanged.
+        env="KINETICA_ODBC_DRIVER",
+        conn="Driver={drv};URL=http://127.0.0.1:29191;UID=admin;PWD=admin;",
+        read_only=True,
+        params=False,  # binding is broken, not absent; the parameterised SELECT runs as a literal
+        # Kinetica has one DECIMAL: a fixed (18, 4).  DECIMAL(10,3) is accepted and
+        # silently widened, and the driver describes the stored column as (18, 4), so
+        # 12.345 arrives exact in a wider decimal128 -- the same shape as Dremio's
+        # precision-19 answer, and nothing is lost.
+        decimal_type="decimal128(18, 4)",
+        # Replayed on every connection (bench/matrix_bench.py opens several), so every
+        # statement is CREATE OR REPLACE: Kinetica's CTAS refuses IF NOT EXISTS ("IF NOT
+        # EXISTS option is not supported with CT AS statement"), and OR REPLACE is both
+        # accepted and cheap -- the 100,000-row rebuild below takes 70 ms.
+        setup=[
+            "CREATE OR REPLACE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50),"
+            " b BYTES, d DATE, ts DATETIME, n DECIMAL(10,3), bo BOOLEAN)",
+            # ROW1/ROW2 as literals.  X'0102' is Kinetica's binary literal -- valid in an
+            # INSERT into a BYTES column, though not as a bare projection.
+            "INSERT INTO adbc_t VALUES (1, 1.5, 'héllo \U0001f680', X'0102',"
+            " '2024-02-29', '2024-02-29 13:45:10.123456', 12.345, TRUE)",
+            "INSERT INTO adbc_t VALUES (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+            # adbc_big: generate_series() is Kinetica's row generator.
+            "CREATE OR REPLACE TABLE adbc_big AS SELECT generate_series AS a,"
+            " CONCAT('r', CAST(generate_series AS VARCHAR)) AS b"
+            " FROM generate_series(0, 99999)",
+        ],
+        big_rows=100000,
+        extra=[
+            # Kinetica's own catalog over the table `setup` built.
+            ("SELECT COUNT(*) FROM information_schema.COLUMNS"
+             " WHERE TABLE_NAME = 'adbc_t'", (8,)),
+            # A vectorized scan with a pushed-down filter over the 100,000-row table.
             ("SELECT COUNT(*), MIN(a), MAX(a) FROM adbc_big WHERE a >= 50000",
              (50000, 50000, 99999)),
         ]),

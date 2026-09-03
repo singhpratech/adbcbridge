@@ -725,3 +725,27 @@ services:
       DB_SIZE: "100"
     mem_limit: 2g
     ports: ["127.0.0.1:20300:20300"]
+  # Kinetica Developer Edition: a vectorized analytic database, driven by its own ODBC
+  # driver (libKineticaODBC.so, which ships inside this image -- see
+  # tests/compat/README.md).  In the "extra" profile, so a plain `up -d` leaves it alone;
+  # start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d kinetica
+  #
+  # GPUDB_START_ALL=1 is the setting that matters: the image's entrypoint starts only the
+  # host manager and the web interfaces by default and then sleeps, so without it the
+  # container comes up healthy with no database behind it and port 9191 never answers.
+  # (FULL_START=1 is the older spelling of the same switch.)  The CPU build needs no GPU
+  # and no licence key -- `curl http://127.0.0.1:29191/` answers "Kinetica is running!"
+  # about two minutes in, and the SQL engine is reachable with UID=admin;PWD=admin.
+  # 9191 is the REST/SQL endpoint the ODBC driver speaks; 8080 is GAdmin, the admin UI.
+  # The driver itself needs neither: its Linux client tarball is a file in the image
+  # (/opt/gpudb/downloads/linux-odbc-client.tgz), copied out with `docker run --entrypoint
+  # cat` before any server is started -- see tests/compat/README.md.
+  kinetica:
+    profiles: ["extra"]
+    image: kinetica/kinetica-intel:7.1.9
+    container_name: adbcbridge-kinetica
+    environment: { GPUDB_START_ALL: "1" }
+    shm_size: 1g
+    mem_limit: 10g
+    ports: ["127.0.0.1:29191:9191", "127.0.0.1:28080:8080"]
