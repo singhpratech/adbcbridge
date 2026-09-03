@@ -763,6 +763,48 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // driver's reported maximum for SQL_VARCHAR would not be.  See ddl_string_type_name.
     conn->reader_opts.ddl_string_type_name = "VARCHAR(8191)";
   }
+  if (strstr((const char*)name, "altibase")) {
+    // Altibase's own driver (SQL_DRIVER_NAME is the library's file name,
+    // "libaltibase_odbc-64bit-ul64.so") disagrees with itself about characters above the
+    // BMP, and the two paths are not interchangeable for a single value.  On a UTF8
+    // database opened with NLS_USE=UTF8:
+    //   * a SQL_C_WCHAR parameter is stored as CESU-8 -- the surrogate pair is written as
+    //     two three-byte sequences, so "héllo <U+1F680>" occupies 13 bytes and LENGTH()
+    //     counts 8 characters -- and a SQL_C_CHAR fetch of it hands those bytes back
+    //     verbatim, which is not valid UTF-8 (it starts 0xED) and cannot be put into an
+    //     Arrow string array at all.
+    //   * a SQL_C_CHAR parameter is passed through byte for byte (11 bytes, LENGTH() 10:
+    //     the server counts each UTF-8 byte of the astral character separately), and a
+    //     SQL_C_CHAR fetch returns exactly those bytes -- "héllo <U+1F680>" round-trips.
+    //     A SQL_C_WCHAR fetch of the same value yields four U+FFFD.
+    // So keep both ends of the value on the narrow path, as the Informix branch below
+    // does: wchar_as_utf8 for the fetch (VARCHAR and NVARCHAR alike) and narrow_params
+    // for the parameter.  Measured on Linux/unixODBC; the Windows block at the end of
+    // this function switches wchar_as_utf8 off there, as it does for every driver but
+    // Ignite, and narrow_params holds everywhere.
+    conn->reader_opts.wchar_as_utf8 = true;
+    conn->reader_opts.narrow_params = true;
+    // Altibase has no SQL_LONGVARCHAR and no SQL_WLONGVARCHAR in SQLGetTypeInfo at all
+    // (its large-object character type, CLOB, is numbered 40), so generated ingest DDL
+    // for an Arrow string column reaches SQL_VARCHAR -- and there the driver reports
+    // CREATE_PARAMS "precision" where ODBC's convention for a character type, and every
+    // other driver in the matrix, says "length".  Nothing then supplies a length and the
+    // column is created as a bare VARCHAR, which in Altibase means VARCHAR(1): the first
+    // string longer than one byte fails the INSERT with 22026, "Invalid data type
+    // length : B. (135273)".  Name the type outright instead, at the widest VARCHAR the
+    // server takes (32,000; 32,001 is refused, and the length is in bytes, not
+    // characters).  See ddl_string_type_name, which Firebird uses the same way.
+    conn->reader_opts.ddl_string_type_name = "VARCHAR(32000)";
+    // The third driver whose parameter arrays beat a multi-row INSERT (after maodbc and
+    // Vertica's): Altibase applies a bound array in one round trip, while a multi-row
+    // INSERT stays one statement per row-group.  20,000-row ingests here (DDL + data +
+    // commit): arrays 778-816k rows/s against 30k for the multi-row form -- and pyodbc's
+    // fast_executemany, which is the same ODBC parameter array, measures 974k rows/s
+    // against 42k without it, so it is the driver and not this binder.  Keep arrays
+    // ahead of the multi-row form; that form is still what runs when the caller turns
+    // array binding off.
+    conn->reader_opts.prefer_param_arrays = true;
+  }
   if (strstr((const char*)name, "ignite")) {
     // Apache Ignite's ODBC driver (SQL_DRIVER_NAME "Apache Ignite") has no wide SQL type
     // at all: SQLBindParameter answers HYC00 "Data type is not supported. [typeId=-9]"
