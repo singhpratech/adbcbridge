@@ -37,7 +37,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, TDENGINE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SPANNER_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MONGODBBI_ODBC_DRIVER
-    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SINGLESTORE_ODBC_DRIVER, HANA_ODBC_DRIVER, EXASOL_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SINGLESTORE_ODBC_DRIVER, HANA_ODBC_DRIVER, EXASOL_ODBC_DRIVER, ALTIBASE_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -709,6 +709,43 @@ DBS = {
         # Informix BOOLEAN has no DRDA counterpart; it is described as SMALLINT, so the
         # column reads back as int16 with 1 for true.  (The driver also has to send
         # boolean parameters as integers here -- see adbc.odbc's Informix quirk.)
+        bool_type="int16"),
+    "altibase": dict(
+        # Altibase is a hybrid in-memory/on-disk RDBMS with an Oracle-compatible dialect
+        # and an ODBC driver of its own -- libaltibase_odbc-64bit-ul64.so, which speaks
+        # Altibase's native protocol on 20300 and links against nothing but libc.  The
+        # "-ul64" in the name is the SQLLEN width the build assumes (8 bytes, which is
+        # unixODBC's on 64-bit Linux); the "-ul32" sibling in the same directory is the
+        # 4-byte one.  SQL_DBMS_NAME is "Altibase", SQL_DRIVER_NAME the file name.
+        env="ALTIBASE_ODBC_DRIVER",
+        conn="Driver={drv};Server=127.0.0.1;Port=20300;User=sys;Password=manager;NLS_USE=UTF8;",
+        # Altibase type names, three of which are not the SQL-standard spellings:
+        #   * DOUBLE, not DOUBLE PRECISION -- the two-word spelling is a parse error.
+        #   * BLOB is the byte type that works.  Altibase's dedicated byte types (BYTE,
+        #     VARBYTE, NIBBLE, BIT, VARBIT) all refuse a bound SQL_C_BINARY parameter
+        #     with SQLSTATE 22018 "Conversion not applicable. (135180)", so nothing can
+        #     be written to one through ODBC parameters; BLOB takes the same parameter
+        #     without complaint.  See ODBC_SQL_BLOB_ALTIBASE in src/odbc_reader.c for
+        #     the read half.
+        #   * DATE is Altibase's *timestamp*: it holds a time down to the microsecond and
+        #     the driver describes it SQL_TYPE_TIMESTAMP (93), so it carries both `d` and
+        #     `ts` and `d` reads back as timestamp[us] rather than date32 (as Oracle's
+        #     DATE does).  There is no date-only type.
+        # There is no BOOLEAN at all -- CREATE TABLE with one fails HY004 "Unable to
+        # create a column with the specified data type. (200744)" -- so `bo` is a
+        # SMALLINT and reads back as int16, as Informix's and Virtuoso's do.
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b BLOB, d DATE,"
+            " ts DATE, n DECIMAL(10,3), bo SMALLINT)",
+        # Altibase folds unquoted identifiers to upper case (SQL_IDENTIFIER_CASE is
+        # SQL_IC_UPPER) and keeps the case of double-quoted ones, which it does accept.
+        ident=str.upper,
+        # Its driver nonetheless answers SQL_IDENTIFIER_QUOTE_CHAR with a blank -- ODBC's
+        # "this DBMS does not support quoted identifiers" -- which OdbcQuoteChar in
+        # src/odbc_driver.c reads as "quote nothing", so adbc_ingest emits unquoted names
+        # and the server folds them.  This file's own SQL has to leave them unquoted too,
+        # exactly as the `ignite` entry does: a quoted "a" would be a different column
+        # from the A that ingest just created.
+        quote="",
         bool_type="int16"),
     "monetdb": dict(
         env="MONETDB_ODBC_DRIVER", conn="Driver={drv};Host=127.0.0.1;Port=15000;Database=adbc;Uid=monetdb;Pwd=adbc;",
@@ -1939,7 +1976,11 @@ def check_ingest(cur, cfg, ing_name):
     cur.execute("SELECT %s, %s, %s, %s FROM %s WHERE %s = 2"
                 % (qi(cfg, "a"), qi(cfg, "b"), qi(cfg, "c"), qi(cfg, "d"),
                    qi(cfg, ing_name), qi(cfg, "a")))
-    got = cur.fetch_arrow_table().to_pylist()
+    # Keys folded to lower case, as the adbc_t read-back in run() already does: an entry
+    # that quotes nothing (`quote=""`, for a driver reporting a blank
+    # SQL_IDENTIFIER_QUOTE_CHAR -- Altibase) sends unquoted column names, which a server
+    # that folds them answers with in upper case.
+    got = [{k.lower(): v for k, v in r.items()} for r in cur.fetch_arrow_table().to_pylist()]
     # The ingest DDL asks the driver for a date (or, where the server has no date type,
     # a timestamp) column; a server whose timestamp carries a zone -- psqlodbc's
     # SQL_TYPE_TIMESTAMP is "timestamptz" -- hands back an aware datetime in UTC.

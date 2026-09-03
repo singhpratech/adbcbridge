@@ -6109,6 +6109,93 @@ the licence itself reports `Expiration = unlimited`.
 Port 13320 keeps the MySQL wire clear of the other MySQL-wire entries (`dolt` already
 holds 13310); 18090 publishes SingleStore Studio, the bundled web UI, which the matrix
 never touches.
+## Altibase 7.3.0.1.4 (A+ Edition)
+
+[Altibase](https://github.com/ALTIBASE/altibase) is a hybrid in-memory/on-disk RDBMS with
+an Oracle-flavoured dialect. It is in this matrix for the same reason Vertica is: it has a
+first-party ODBC driver of its own, `libaltibase_odbc-64bit-ul64.so`, which speaks
+Altibase's native protocol on 20300. Nothing else can drive it.
+
+### Start the server — the free edition, not `altibase/altibase`
+
+`altibase/altibase` is the image the vendor's Docker Hub description points at, and it
+does not run without a licence. Its own text says so — *"This version has no license. You
+can apply for Altibase trial license ... To obtain a 90-day Trial License Key, please
+visit http://support.altibase.com/en/product"* — and the image ships a one-byte
+`$ALTIBASE_HOME/conf/license` that fails validation. The boot stops in
+`trc/altibase_boot.log` at:
+
+```
+  ==> Check License
+Enumerating authorization keys
+	MAC Address [  0] : [...]
+Corrupted license string!
+No valid license present!
+ERR-42000(errno=2)
+[FAILURE]
+```
+
+Deleting the file only changes the message (`No valid license present!` without the
+`Corrupted` lines); `bin/printkey` prints the authorization key the trial request wants.
+Tag `7.1` is blunter still and prints `No Altibase license / Register Altibase license /
+You can apply for a Altibase trial license` instead of booting at all.
+
+The same vendor publishes **`altibase/a_plus_edition`** — Altibase A+ Edition, the free,
+full-featured build — which carries no `conf/license` and needs none. That is what this
+entry runs:
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d altibase
+# or standalone:
+docker run -d --name adbcbridge-altibase --memory=2g \
+  -e MODE=foreground -e DB_CHARSET=UTF8 -e NATIONAL_CHARSET=UTF16 \
+  -e MEM_MAX_DB_SIZE=1G -e DB_SIZE=100 \
+  -p 127.0.0.1:20300:20300 altibase/a_plus_edition:latest
+```
+
+Two of those environment variables are the difference between a server and a shell:
+
+**`MODE=foreground`.** The image's default is `MODE=init`, whose entire body is
+`echo "Do nothing...just boot"` followed by an interactive shell — so a detached
+`docker run` with no `-it` prints that line and exits 0, with no database ever created.
+`foreground` is the branch that runs `CREATE DATABASE`, `startup service` and then holds
+the container open with `checkServer`.
+
+**`DB_CHARSET=UTF8`.** The image default is `KO16KSC5601` (Korean EUC), which is baked
+into the database at `CREATE DATABASE` time and cannot be changed afterwards. The
+workload's `héllo 🚀` needs UTF8. `NATIONAL_CHARSET` is already `UTF16` by default;
+setting it explicitly just makes the pair readable.
+
+`MEM_MAX_DB_SIZE` (default 4G) is the ceiling on the memory tablespace and `DB_SIZE`
+(default 10, in MB) its initial size; 1G/100 is ample for this workload and keeps the
+container inside a 2 GB cap. Wait for the log line, not for the port:
+
+```sh
+until docker logs adbcbridge-altibase 2>&1 | grep -q "Waiting Altibase-Process To Lock"; do sleep 3; done
+# ... TRANSITION TO PHASE : SERVICE
+#     [CM] Listener started : TCP on port 20300 [IPV4]
+#     --- STARTUP Process SUCCESS ---
+```
+
+That takes about a minute from a pulled image (~300 MB) and settles well under 1 GiB.
+
+### Get the ODBC driver
+
+There is no separate client download to fetch — the Altibase GitHub repository publishes
+no releases at all, and the driver is already inside the server image. Copy it out; it is
+a single file that links against nothing but libc (`ldd` lists only `libc.so.6` and the
+loader), so it needs no `LD_LIBRARY_PATH` entry and no `ALTIBASE_HOME`:
+
+```sh
+mkdir -p ~/odbc-drivers/altibase
+docker cp adbcbridge-altibase:/root/altibase_home/lib/libaltibase_odbc-64bit-ul64.so \
+  ~/odbc-drivers/altibase/
+export ALTIBASE_ODBC_DRIVER=~/odbc-drivers/altibase/libaltibase_odbc-64bit-ul64.so
+```
+
+The `-ul64` / `-ul32` suffix is the `SQLLEN` width the build assumes: `ul64` is the 8-byte
+one, which is unixODBC's on 64-bit Linux, and the one to take. Both files sit in
+`$ALTIBASE_HOME/lib` and are the same size, so it is easy to pick the wrong one.
 
 ### Run the entry
 
@@ -6731,4 +6818,134 @@ column unbound (Quirk 3).
 docker compose -f tests/compat/docker-compose.yml --profile extra down exasol
 # or, if started standalone:
 docker rm -f adbcbridge-exasol
+ALTIBASE_ODBC_DRIVER=~/odbc-drivers/altibase/libaltibase_odbc-64bit-ul64.so \
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py altibase
+# altibase  PASS  (Altibase (via ODBC) 7.3.0.1.4)
+```
+
+`SELECT * FROM v$version` says `7.3.0.0.8 A+ Edition`, built
+`X86_64_LINUX_redhat_Enterprise_release6.0-64bit-7.3.0.1.4-release-GCC4.6.3`;
+`SQL_DBMS_NAME` is `Altibase`, `SQL_DBMS_VER` `7.3.0.1.4`, and `SQL_DRIVER_NAME` is the
+library's own file name.
+
+### Types: no BOOLEAN, no VARBINARY, and DATE is the timestamp
+
+```
+i INTEGER, f DOUBLE, s VARCHAR(50), b BLOB, d DATE, ts DATE, n DECIMAL(10,3), bo SMALLINT
+```
+
+* **No `BOOLEAN`.** `CREATE TABLE t (x BOOLEAN)` fails `HY004`, *"Unable to create a column
+  with the specified data type. (200744)"*, and `BOOL` is not a type name either
+  (`Data type module (Name="BOOL") not found. (135176)`). `SMALLINT` is how a boolean is
+  spelled here, and `bo` reads back as int16 — the same shape as Informix and Virtuoso.
+  Altibase does have a `BIT` type, but it is a *bit string*, not a boolean.
+* **No `DOUBLE PRECISION`.** The two-word ISO spelling is a parse error; `DOUBLE` is the
+  type.
+* **No `VARBINARY`** (`Data type module (Name="VARBINARY") not found`), and `BINARY`,
+  which `SQLGetTypeInfo` does list at `SQL_BINARY`, is not creatable either (`HY004`).
+  Altibase's byte types are `BYTE(n)`, `VARBYTE(n)`, `NIBBLE(n)`, `BIT(n)`, `VARBIT(n)`
+  and `BLOB` — and of those only `BLOB` can be written through ODBC at all (see below),
+  which is why `b` is a `BLOB`.
+* **`DATE` is the timestamp.** It holds a time down to the microsecond, the driver
+  describes it `SQL_TYPE_TIMESTAMP` (93), and there is no date-only type — so one column
+  type carries both `d` and `ts`, and `d` reads back as `timestamp[us]` rather than
+  `date32`, exactly as Oracle's `DATE` does. Microseconds survive the round trip through
+  the bridge: `2024-02-29 13:45:10.123456` comes back intact.
+
+### Driver quirks
+
+**The wide and narrow paths disagree above the BMP, and not symmetrically.** On a UTF8
+database opened `NLS_USE=UTF8`, measured with pyodbc against `héllo 🚀`:
+
+| written as | stored | `LENGTH`/`LENGTHB` | read `SQL_C_CHAR` | read `SQL_C_WCHAR` |
+|---|---|---|---|---|
+| `SQL_C_WCHAR` | CESU-8 (the surrogate pair as two 3-byte sequences) | 8 / 13 | `68 c3a9 6c6c6f 20` **`eda0bd edba80`** — not valid UTF-8 | correct |
+| `SQL_C_CHAR` (UTF-8) | the bytes, passed through | 10 / 11 | correct, byte for byte | four U+FFFD |
+
+A value is therefore only correct when both ends take the same path, and only the narrow
+pair yields bytes an Arrow string array will accept — the wide-in/narrow-out combination is
+what made this entry's first run die on `'utf-8' codec can't decode byte 0xed in
+position 7`. The bridge keeps both ends narrow here (`wchar_as_utf8` + `narrow_params` in
+`OdbcDetectQuirks`), which is what the Informix branch does for a related reason. It holds
+for `NVARCHAR` as well as `VARCHAR`.
+
+**Byte types carry vendor type codes outside the ODBC range.** `SQLGetTypeInfo` reports
+`BYTE` 20001, `NIBBLE` 20002, `VARBYTE` 20003, `GEOMETRY` 10003, `BLOB` 30, `CLOB` 40 and
+`VARBIT` -100 — none of them ODBC numbers, and pyodbc refuses them outright
+(`ODBC SQL type 20003 is not yet supported`, `HY106`). Left unrecognised they fall through
+the reader's text default, where the driver hands the value back **hex-encoded** —
+`b"\x01\x02"` arrives as the four characters `0102` — which is precisely what IBM's CLI
+driver does with its own `SQL_BLOB` (-98). `BYTE`, `VARBYTE` and `BLOB` all return the
+value's own bytes when read as `SQL_C_BINARY`, so those three are now recognised
+(`ODBC_SQL_*_ALTIBASE` in `src/odbc_reader.c`). `NIBBLE` and `VARBIT` deliberately are
+not: read as `SQL_C_BINARY` they carry Altibase's internal framing rather than the value
+(`NIBBLE'01'` comes back `b"\x02\x01"`, a length byte first, and `VARBIT'0101'`
+`b"\x04\x00\x00\x00P"`), so for those the hex text the default path produces is the more
+faithful answer.
+
+**No byte type takes a bound parameter.** `BYTE`, `VARBYTE`, `NIBBLE`, `BIT` and `VARBIT`
+all refuse a `SQL_C_BINARY` parameter with
+
+```
+22018  Conversion not applicable. (135180)
+```
+
+before the value is looked at — so nothing can be *written* into one through ODBC
+parameters at all; only a literal (`VARBYTE'0001FF'`, or a plain `'0001FF'` string) gets
+data in. `BLOB` takes the same parameter without complaint, which settles the choice of
+type for `b`.
+
+**`SQLGetTypeInfo` says `precision` where ODBC says `length`.** Altibase has no
+`SQL_LONGVARCHAR` and no `SQL_WLONGVARCHAR` at all (its large-object character type, CLOB,
+is numbered 40), so generated ingest DDL for an Arrow string column reaches `SQL_VARCHAR`
+— and there the driver's `CREATE_PARAMS` column reads `precision`, not the `length` every
+other driver in this matrix reports for a character type. Nothing then supplies a length,
+the column is created as a bare `VARCHAR`, and in Altibase a bare `VARCHAR` is
+`VARCHAR(1)`:
+
+```
+22026  Invalid data type length : B. (135273)
+```
+
+on the first string longer than one byte. The bridge names the type outright instead,
+`VARCHAR(32000)` — the widest the server takes; `VARCHAR(32001)` is refused — by the same
+`ddl_string_type_name` route Firebird uses. Note the length is in **bytes**: three Greek
+letters do not fit a `VARCHAR(4)`.
+
+**`SQL_IDENTIFIER_QUOTE_CHAR` is a blank.** ODBC's way of saying "this DBMS does not
+support quoted identifiers" — which is not true of the server: `CREATE TABLE "MixedCase"
+("Col A" INTEGER)` works and keeps its case, while an unquoted name is folded to upper
+case (`SQL_IDENTIFIER_CASE` is `SQL_IC_UPPER`). Taking the driver at its word,
+`adbc_ingest` quotes nothing and the names it emits are folded, so the entry sets
+`quote=""` and leaves its own SQL unquoted too — exactly as the `ignite` entry does, for
+exactly the same reason.
+
+**Parameter arrays are one round trip, and beat a multi-row `INSERT` 26×.** 20,000-row
+ingests, DDL + data + commit:
+
+| path | rows/s |
+|---|---|
+| multi-row `INSERT ... VALUES (...),(...)` (`adbc.odbc.array_binding=false`) | 30,016 – 30,265 |
+| ODBC parameter arrays (`adbc.odbc.array_binding=true`) | 778,486 – 815,625 |
+| pyodbc `executemany`, `fast_executemany=False` | 42,190 |
+| pyodbc `executemany`, `fast_executemany=True` (the same arrays) | 974,135 |
+
+Multi-row `INSERT` is the bridge's default because it is faster on nearly every server
+measured; Altibase is the third driver to opt out of that with `prefer_param_arrays`,
+after MariaDB Connector/ODBC and Vertica's client. Fetch runs at 2.0–2.3M rows/s (pyodbc
+0.62–0.70M).
+
+### Other things that are simply fine
+
+Multi-row `VALUES`, `SELECT 1` with and without `FROM dual`, `CAST`, `SQLColumns` (schema
+`SYS`, upper-case names, `ORDINAL_POSITION` populated), `SQLGetTypeInfo`, `DECIMAL(10,3)`
+round-tripping exactly, and a NULL in every column. `SQL_MAX_IDENTIFIER_LEN` is 40.
+
+### Stop it
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down altibase
+# or, if started standalone:
+docker rm -f adbcbridge-altibase
 ```

@@ -700,3 +700,28 @@ services:
     shm_size: 2gb
     mem_limit: 6g
     ports: ["127.0.0.1:18563:8563"]
+  # Altibase A+ Edition: a hybrid in-memory/on-disk RDBMS with a first-party ODBC driver
+  # (libaltibase_odbc-64bit-ul64.so, lifted out of this image with `docker cp`).  In the
+  # "extra" profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d altibase
+  # This is deliberately not `altibase/altibase`, whose own Docker Hub description says
+  # "This version has no license": that image ships a one-byte conf/license, the boot
+  # stops at "Check License" with "No valid license present!" (ERR-42000), and a 90-day
+  # trial key is a registration away.  a_plus_edition is the same vendor's free build and
+  # needs no licence at all.  MODE=foreground is required -- the image default MODE=init
+  # only prints "Do nothing...just boot" and exits -- and DB_CHARSET must be set before
+  # the first boot, because it is fixed at CREATE DATABASE time and the default is
+  # KO16KSC5601 (Korean EUC), which cannot hold the workload's emoji.  MEM_MAX_DB_SIZE
+  # caps the memory tablespace (default 4G) and DB_SIZE is its initial size in MB.
+  # See tests/compat/README.md.
+  altibase:
+    profiles: ["extra"]
+    image: altibase/a_plus_edition:latest
+    environment:
+      MODE: foreground
+      DB_CHARSET: UTF8
+      NATIONAL_CHARSET: UTF16
+      MEM_MAX_DB_SIZE: 1G
+      DB_SIZE: "100"
+    mem_limit: 2g
+    ports: ["127.0.0.1:20300:20300"]

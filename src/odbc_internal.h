@@ -527,10 +527,11 @@ struct OdbcReaderOptions {
   const char* multirow_union_from;
   // Driver quirk: keep ODBC parameter arrays ahead of multi-row INSERT batching for bulk
   // ingest.  Multi-row INSERT is the default because it was faster on every server
-  // measured (see ExecuteRows), including most of the ones whose arrays work.  Two
+  // measured (see ExecuteRows), including most of the ones whose arrays work.  Three
   // drivers are the exception and are all that set this: MariaDB Connector/ODBC, which
-  // turns a bound array into one COM_STMT_BULK_EXECUTE, and Vertica's own client driver,
-  // which turns one into a native bulk load.
+  // turns a bound array into one COM_STMT_BULK_EXECUTE, Vertica's own client driver,
+  // which turns one into a native bulk load, and Altibase's, which applies the array in
+  // a single round trip (30k rows/s multi-row against ~800k as an array).
   bool prefer_param_arrays;
   // Server quirk: bulk ingest may send a whole batch as one array parameter per column
   // and let the server expand it --

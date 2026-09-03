@@ -429,6 +429,19 @@ static inline bool TruncationRepairable(const struct OdbcReaderOptions* opts) {
 // column falls through to the reader's text default, where the driver hands the bytes
 // back hex-encoded ("0102" for b"\x01\x02") instead of as bytes.
 #define ODBC_SQL_BLOB_IBM (-98)
+// Altibase's driver does the same, for four types at once: its byte types are numbered
+// well outside the ODBC range (BYTE 20001, NIBBLE 20002, VARBYTE 20003, VARBIT -100) and
+// its large-object types have codes of their own too (BLOB 30, CLOB 40).  Left
+// unrecognised, BYTE, VARBYTE and BLOB fall through to the reader's text default and the
+// driver hex-encodes them there ("0102" for b"\x01\x02"), exactly as the IBM CLI
+// driver's SQL_BLOB does; read as SQL_C_BINARY all three hand back the value's own bytes.
+// NIBBLE and VARBIT are deliberately not here: read as SQL_C_BINARY they carry Altibase's
+// internal framing rather than the value (NIBBLE'01' comes back b"\x02\x01", a length
+// byte first, and VARBIT'0101' b"\x04\x00\x00\x00P"), so for those the hex text the
+// default path produces is the more faithful answer.
+#define ODBC_SQL_BLOB_ALTIBASE (30)
+#define ODBC_SQL_BYTE_ALTIBASE (20001)
+#define ODBC_SQL_VARBYTE_ALTIBASE (20003)
 
 static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions* opts) {
   // SQL_LONGVARCHAR / SQL_WLONGVARCHAR / SQL_LONGVARBINARY name a type with no length at
@@ -437,7 +450,8 @@ static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions*
   const bool no_declared_length = c->sql_type == SQL_LONGVARCHAR ||
                                   c->sql_type == SQL_WLONGVARCHAR ||
                                   c->sql_type == SQL_LONGVARBINARY ||
-                                  c->sql_type == ODBC_SQL_BLOB_IBM;
+                                  c->sql_type == ODBC_SQL_BLOB_IBM ||
+                                  c->sql_type == ODBC_SQL_BLOB_ALTIBASE;
   const bool repairable = TruncationRepairable(opts) && opts->long_bind_bytes > 0;
   if (c->column_size == 0) {
     // No width to bind against.  For one of the no-length types that is not a different
@@ -665,6 +679,9 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_VARBINARY:
     case SQL_LONGVARBINARY:
     case ODBC_SQL_BLOB_IBM:
+    case ODBC_SQL_BLOB_ALTIBASE:
+    case ODBC_SQL_BYTE_ALTIBASE:
+    case ODBC_SQL_VARBYTE_ALTIBASE:
       c->kind = FETCH_BINARY; c->c_type = SQL_C_BINARY;
       c->elem_size = (SQLLEN)c->column_size;
       ApplyBindWidth(c, opts);
