@@ -1192,6 +1192,40 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // See ddl_string_type_name.
     conn->reader_opts.ddl_string_type_name = "NVARCHAR(MAX)";
   }
+  if (strstr((const char*)name, "exaodbc")) {
+    // Exasol's own driver (SQL_DRIVER_NAME "libexaodbc.so", SQL_DBMS_NAME "EXASolution").
+    // Exasol has no binary column type -- CREATE TABLE ... BLOB is 0A000, "Feature not
+    // supported: data type BLOB", and VARBINARY/BINARY/RAW are not words its parser
+    // knows -- and the driver refuses the matching C type outright: SQLBindParameter
+    // with SQL_C_BINARY answers HY003, "Invalid application buffer type: SQL_C_BINARY",
+    // for any target column.  Bound as SQL_C_CHAR into a VARCHAR the same bytes store
+    // and read back byte for byte, so that is the route an Arrow binary column takes
+    // here.  See binary_param_as_varchar.
+    conn->reader_opts.binary_param_as_varchar = true;
+    // A NULL parameter described as SQL_DECIMAL cannot be bound with SQL_C_DEFAULT: the
+    // driver answers SQLExecute with SI002, "C-Type not supported", and HY010, "Error
+    // creating prepared statement header".  Exasol has no narrow integer type -- INT and
+    // BIGINT are aliases of DECIMAL -- so SQLDescribeParam reports SQL_DECIMAL for every
+    // numeric parameter and a NULL in any of them hits it.  See null_decimal_param_as_char.
+    conn->reader_opts.null_decimal_param_as_char = true;
+    // SQL_GETDATA_EXTENSIONS is 0xf -- SQL_GD_ANY_COLUMN | ANY_ORDER | BLOCK | BOUND --
+    // and the block-cursor claim holds only for a value the bound buffer already fitted.
+    // For the one case getdata_repair exists for, a value the buffer *clipped*, it does
+    // not: measured on a five-row rowset with a 32-byte bound buffer and one 100-character
+    // value, SQLSetPos(SQL_POSITION) succeeds on every row, SQLGetData re-reads the short
+    // rows correctly, and on the clipped row it returns SQL_NO_DATA with no diagnostic at
+    // all -- the driver counts the truncated bound fetch as having delivered the column,
+    // so the "read the rest" call finds nothing left.  It then leaves the cursor in that
+    // state: the next short row answers SQL_NO_DATA too.  A clipped value is therefore
+    // unrecoverable and a long column has to stay unbound.  (SQL_FORWARD_ONLY_CURSOR_
+    // ATTRIBUTES1 is 0x1, SQL_CA1_NEXT alone, so refetch_repair is no way round it
+    // either.)  It costs real speed rather than being a corner case: Exasol's VARCHAR
+    // runs to 2,000,000 characters and SQLGetTypeInfo(SQL_LONGVARCHAR) names exactly
+    // that, which is the type generated ingest DDL gives an Arrow string column, so the
+    // common case is a table with an unbindable text column -- 1.5M rows/s against the
+    // 3.3M/s the (wrong) bound read managed.  Same shape as DuckDB's above.
+    conn->reader_opts.getdata_repair = false;
+  }
   if (strstr((const char*)name, "db2")) {
     // IBM's CLI driver ("libdb2.a") speaks DRDA to Db2 *and* to Informix, whose DRDA
     // alias is a second listener on the same server, so the driver name says nothing

@@ -37,7 +37,7 @@ Each database is enabled by an environment variable holding the path to its ODBC
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, TDENGINE_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SPANNER_ODBC_DRIVER
     VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, MONGODBBI_ODBC_DRIVER
-    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SINGLESTORE_ODBC_DRIVER, HANA_ODBC_DRIVER
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, SINGLESTORE_ODBC_DRIVER, HANA_ODBC_DRIVER, EXASOL_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
@@ -743,6 +743,59 @@ DBS = {
             " d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
         # HANA folds unquoted identifiers to upper case (SQL_IDENTIFIER_CASE = SQL_IC_UPPER).
         ident=str.upper),
+    "exasol": dict(
+        # Exasol is an in-memory columnar analytics warehouse reached over its own
+        # protocol on 8563, so its own ODBC driver drives it (libexaodbc.so,
+        # SQL_DRIVER_NAME "libexaodbc.so", SQL_DBMS_NAME "EXASolution").  The connection
+        # string is all Exasol spellings: EXAHOST carries host *and* port, and
+        # SSLCertificate=SSL_VERIFY_NONE accepts the self-signed certificate the
+        # container generates at first boot (Exasol 8 speaks TLS by default).
+        env="EXASOL_ODBC_DRIVER",
+        conn="Driver={drv};EXAHOST=127.0.0.1:18563;EXAUID=sys;EXAPWD=exasol;"
+             "SSLCertificate=SSL_VERIFY_NONE;",
+        # Every object lives in a schema and a fresh database has none, so the session
+        # makes one and opens it; without an open schema an unqualified CREATE TABLE is
+        # "no schema opened".  Replayed per connection, hence IF NOT EXISTS.
+        setup=["CREATE SCHEMA IF NOT EXISTS adbc", "OPEN SCHEMA adbc"],
+        # `b` is VARCHAR, not a binary type: Exasol has none at all.  BLOB is 0A000
+        # ("Feature not supported: data type BLOB") and VARBINARY/BINARY/RAW are not
+        # words its parser knows, so the bytes land in a character column -- which the
+        # driver only accepts as SQL_C_CHAR; see binary_param_as_varchar in
+        # src/odbc_internal.h.  TIMESTAMP defaults to millisecond precision here, so the
+        # column is declared TIMESTAMP(6) to keep ROW1's microseconds.
+        ddl="CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARCHAR(50),"
+            " d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
+        # Unquoted identifiers fold to upper case (SQLGetInfo SQL_IDENTIFIER_CASE is
+        # SQL_IC_UPPER), so the catalog calls have to ask for the name the way the
+        # server stored it.  adbc_ingest quotes its names, so those stay lower case.
+        ident=str.upper,
+        # Exasol has no narrow integer type: INT, INTEGER, SMALLINT and BIGINT are all
+        # aliases of DECIMAL(18,0)/DECIMAL(36,0), so `i` is described as SQL_DECIMAL and
+        # reads back as a decimal128, not an int64.  ROW1's 1 still compares equal.
+        # SQLGetTypeInfo(SQL_LONGVARCHAR) names LONG VARCHAR, which *is* VARCHAR(2000000)
+        # here -- an ordinary sortable column, unlike Db2's -- so ingest's generated
+        # text column takes ORDER BY, DISTINCT and GROUP BY: text_sortable.
+        text_sortable=True,
+        # That same column is 2,000,000 characters wide, so the reader has to bind it
+        # narrow and repair what it clips -- and this driver's SQL_GD_BLOCK claim does
+        # not hold for a clipped value (it answers SQL_NO_DATA and poisons the cursor),
+        # which is what getdata_repair is off for here.  3,000 rows, every 250th of them
+        # 9,010 characters, crosses three 1,024-row batches and covers that path.
+        wide_text_rows=3000,
+        extra=[
+            # Exasol's own catalog, over the table the workload just built.
+            # UPPER(): the workload creates adbc_t unquoted, so the catalog holds the
+            # upper-cased name, suffix and all.
+            ("SELECT COUNT(*) FROM EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = 'ADBC'"
+             " AND COLUMN_TABLE = UPPER('adbc_t{sfx}')", (8,)),
+            # A columnar aggregate over the ingested table, the engine's own data path
+            # on a result the entry knows exactly.  check_wide_text() left it holding
+            # wide_text_rows rows, one in 250 of them 9,010 characters wide; MAX(LENGTH)
+            # says the server stored those whole, which is the half of the wide-text
+            # round trip the reader cannot vouch for on its own.
+            ('SELECT COUNT(*), MIN("a"), MAX("a"), MAX(LENGTH("b")) FROM "adbc_ing{sfx}"',
+             (3000, 0, 2999, 9010)),
+        ]),
     "cockroachdb": dict(
         # Wire-compatible with PostgreSQL, so it uses psqlodbc; INTEGER is 64-bit here.
         # The PRIMARY KEY is required, not decorative: a CockroachDB table declared without

@@ -6494,3 +6494,241 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down hana
 
 The container keeps its database in the image's own volume, so a `down` and a fresh `up`
 replays the same 158 s bootstrap.
+
+## Exasol 2025.1.14
+
+[Exasol](https://www.exasol.com/) is an in-memory, columnar MPP analytics database. It has
+no PostgreSQL or MySQL wire underneath: the single SQL port, 8563, speaks Exasol's own
+protocol, so it is driven by Exasol's own ODBC client — `libexaodbc.so`,
+`SQL_DRIVER_NAME` "libexaodbc.so", `SQL_DBMS_NAME` "EXASolution".
+
+### Driver
+
+A free download, no account needed. The tarball unpacks anywhere and needs no `config_odbc`
+run: the entry points `Driver=` straight at the library.
+
+```sh
+mkdir -p ~/odbc-drivers/exasol && cd ~/odbc-drivers/exasol
+curl -LO https://x-up.s3.amazonaws.com/7.x/25.2.1/Exasol_ODBC-25.2.1-Linux_x86_64.tar.gz
+tar xzf Exasol_ODBC-25.2.1-Linux_x86_64.tar.gz
+export EXASOL_ODBC_DRIVER=$PWD/Exasol_ODBC-25.2.1-Linux_x86_64/lib/libexaodbc.so
+```
+
+(The download portal is <https://downloads.exasol.com/clients-and-drivers/odbc>; the S3
+URL above is the direct link it hands out. The 7.x path in it is historical — 25.2.1 is
+the current client and is what Exasol 8 / 2025.1 ships against.) The `lib` directory also
+holds `libexacli.so`, which `libexaodbc.so` loads as a sibling, so keep the two together
+rather than copying the driver out on its own.
+
+### Start the server
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d exasol
+# or standalone:
+docker run -d --name adbcbridge-exasol --privileged --shm-size=2g \
+  --stop-timeout 120 -p 127.0.0.1:18563:8563 exasol/docker-db:latest
+```
+
+**`--privileged` is not a convenience.** ExaClusterOS runs its own supervisor inside the
+container and manages block devices, loop mounts and kernel parameters for its data and
+archive volumes; without it the boot stops well before the SQL listener exists. The image
+is ~10 GB on disk and the running container wants ~4 GB.
+
+Wait for the log line rather than for the port — first boot formats the volumes and
+generates a self-signed TLS certificate, which takes a few minutes:
+
+```sh
+until docker logs adbcbridge-exasol 2>&1 | grep -q "stage6: All stages finished"; do sleep 5; done
+```
+
+Login is the image's built-in `sys` / `exasol`.
+
+### Run the entry
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+ADBC_MATRIX_SUFFIX=_exasol \
+  .venv/bin/python tests/compat/test_matrix.py exasol
+# exasol    PASS  (EXASolution (via ODBC) 2025.01.0014)
+```
+
+Two things in the connection string are Exasol spellings rather than the usual ODBC ones.
+`EXAHOST` carries host **and** port together (`EXAHOST=127.0.0.1:18563`; there is no
+separate `Port=`), and `SSLCertificate=SSL_VERIFY_NONE` accepts the self-signed
+certificate — Exasol 8 speaks TLS by default and the container generates its own
+certificate at first boot, so without it the connect fails on verification.
+
+A fresh Exasol has no schema at all, and every object lives in one, so the entry's `setup`
+creates and opens one:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS adbc;
+OPEN SCHEMA adbc;
+```
+
+Without an open schema an unqualified `CREATE TABLE` is refused with "no schema opened".
+`EXASCHEMA=adbc` in the connection string does the same thing, but only once the schema
+exists — against a fresh database it fails the *connect*: `28000`, "Connection exception -
+schema adbc not found" — so it cannot bootstrap the first run.
+
+### Quirk 1: there is no binary type, and no `SQL_C_BINARY` either
+
+Exasol has no binary column type. `BLOB` is recognised and refused:
+
+```
+[0A000] [Exasol][Exasol Driver]Feature not supported: data type BLOB
+        (Session: ...) (-466560) (SQLExecDirectW)
+```
+
+and `VARBINARY(10)`, `BINARY(10)`, `RAW(10)` and `BYTEA` are not words its parser knows at
+all (`42000`, "syntax error, unexpected IDENTIFIER_PART_"). So the workload's `b` column is
+a `VARCHAR(50)` here, as it is for CrateDB.
+
+That alone would be a tolerance flag, not a quirk. The quirk is that the *driver* refuses
+the C type outright, whatever the target column is:
+
+```
+[HY003] [Exasol][Exasol Driver]Invalid application buffer type: SQL_C_BINARY
+        (-30139779) (SQLBindParameter)
+```
+
+— measured with plain pyodbc against a `VARCHAR(50)` column and again against a
+`HASHTYPE` one. `SQLBindParameter` itself fails, so an Arrow binary column could not reach
+this server by any route. Bound as `SQL_C_CHAR` into a `VARCHAR` the same bytes store and
+read back byte for byte (`b"\x01\x02"` → `"\x01\x02"`), which is what a server with no
+binary type can offer, so that is the route the bridge now takes:
+`binary_param_as_varchar` in `src/odbc_internal.h`, the binary half of the existing
+`temporal_binary_param_as_varchar` without its date and timestamp changes — Exasol's
+temporal parameters are fine.
+
+### Quirk 2: a NULL `DECIMAL` parameter cannot be `SQL_C_DEFAULT`
+
+The bridge binds a NULL parameter the way pyodbc does: ask `SQLDescribeParam` what the
+server wants, then bind a NULL pointer with `SQL_C_DEFAULT` — "whatever C type this SQL
+type defaults to". Every other driver in this matrix accepts that; the one exception
+already in `NullParamCType` is `SQL_BIGINT` on Firebird's OdbcFb. Exasol's answers:
+
+```
+[SI002]  (-47869058) [Exasol][Exasol Driver]C-Type not supported.
+[HY010] (-30139812) [Exasol][Exasol Driver]Error creating prepared statement header.
+```
+
+at `SQLExecute`, and the whole statement fails, not just the parameter. Measured with a raw
+unixODBC probe, one NULL parameter per statement, `SQLDescribeParam` asked first exactly as
+the bridge does:
+
+| column type | described as | `SQL_C_DEFAULT` | `SQL_C_CHAR` |
+|---|---|---|---|
+| `DECIMAL(10,3)` | `SQL_DECIMAL` (12, 3) | `SI002` | OK |
+| `INT` | `SQL_DECIMAL` (20, 0) | `SI002` | OK |
+| `VARCHAR(50)` | `SQL_VARCHAR` | OK | OK |
+| `DATE` | `SQL_TYPE_DATE` | OK | OK |
+| `TIMESTAMP(6)` | `SQL_TYPE_TIMESTAMP` | OK | OK |
+| `BOOLEAN` | `SQL_BIT` | OK | OK |
+| `DOUBLE` | `SQL_DOUBLE` | OK | OK |
+
+It is `SQL_DECIMAL` alone — and that is much wider than it sounds, because **Exasol has no
+narrow integer type**: `INT`, `INTEGER`, `SMALLINT` and `BIGINT` are all aliases of
+`DECIMAL(18,0)` / `DECIMAL(36,0)`, and `SQLDescribeParam` reports `SQL_DECIMAL` for every
+one of them. So a NULL in *any* numeric column took this path, and the eight-column
+workload `INSERT` failed on its all-NULL second row. `null_decimal_param_as_char` names
+`SQL_C_CHAR` for a NULL whose SQL type is `SQL_DECIMAL` or `SQL_NUMERIC`; the shape is the
+one `NullParamCType` already had for `SQL_BIGINT` on Firebird.
+
+This one only bites on the row-at-a-time path. The parameter-array path renders a decimal
+as text and never asks for `SQL_C_DEFAULT`, which is why an eight-column insert failed
+while the same NULL in a single-column table went through: the binary column is what
+forces the batch off arrays and onto rows.
+
+### Quirk 3: `SQL_GD_BLOCK` is claimed but does not cover a clipped value
+
+`SQL_GETDATA_EXTENSIONS` is `0xf` — `SQL_GD_ANY_COLUMN | ANY_ORDER | BLOCK | BOUND`. On the
+strength of that the reader binds a wide text column at `adbc.odbc.long_bind_bytes`
+(2 KiB) and repairs the values that come back truncated with `SQLSetPos` +
+`SQLGetData`, instead of leaving the column unbound and collapsing the result set to a
+one-row rowset.
+
+The claim holds only for values the bound buffer already fitted. Measured on a five-row
+rowset with a 32-byte bound buffer, one row carrying a 100-character value:
+
+```
+row 1 bound='v0'                   indicator=2
+row 3 bound='W...................' indicator=100     <- clipped
+SQLSetPos(2) rc=0  SQLGetData rc=0            value='v1'
+SQLSetPos(3) rc=0  SQLGetData rc=SQL_NO_DATA  value=''   <- the clipped row
+SQLSetPos(4) rc=0  SQLGetData rc=SQL_NO_DATA  value=''   <- and the cursor stays there
+```
+
+`SQLSetPos` succeeds on every row and `SQLGetData` re-reads the short ones correctly; on the
+clipped row it returns `SQL_NO_DATA` with no diagnostic at all — the driver counts the
+truncated bound fetch as having delivered the column, so the call that asks for the rest
+finds nothing left — and it leaves the cursor in that state, so the *next* short row
+answers `SQL_NO_DATA` too. Through the bridge that surfaced as
+
+```
+[ODBC] SQLGetData returned no data for column b after SQLSetPos positioned on row 251
+of a rowset: this driver's SQL_GETDATA_EXTENSIONS overstates what it supports.
+```
+
+on the 3,000-row wide-text ingest, whose every 250th value is 9,010 characters.
+`SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1` is `0x1` — `SQL_CA1_NEXT` alone — so re-fetching the
+rowset a row at a time is not available either. `getdata_repair` is therefore off for this
+driver and a long column stays unbound, the same conclusion DuckDB's ODBC reaches for a
+different reason.
+
+It costs measurable speed rather than being a corner case.
+`SQLGetTypeInfo(SQL_LONGVARCHAR)` names `LONG VARCHAR`, which *is* `VARCHAR(2000000)` here
+(the catalog reports the column as `VARCHAR`, `column_size` 2,000,000), and that is the
+type generated ingest DDL gives an Arrow string column — so the ordinary ingested table has
+an unbindable text column. Fetch is **1.54M rows/s** with the quirk on against **3.32M/s**
+with it off, and the 3.32M was reading values wrong.
+
+`getdata_bound` stays **on**: `SQLGetData` on a bound column of a single-row cursor is
+fine, and turning it off as well measured no better (1.48M rows/s against 1.54M).
+
+### Type-system notes (tolerance flags, not quirks)
+
+* **`i` reads back `decimal128(18, 0)`.** `INT` *is* `DECIMAL(18,0)`, so `SQLColumns` and
+  the result-set metadata both describe it `SQL_DECIMAL`, precision 18, scale 0. The value
+  is exact and compares equal to the integer the workload wrote.
+* **`TIMESTAMP` defaults to milliseconds.** A bare `TIMESTAMP` column stores
+  `13:45:10.123456` as `.123`; the entry declares `TIMESTAMP(6)`, which keeps all six
+  digits (`TIMESTAMP(9)` is also accepted).
+* **Unquoted identifiers fold to upper case** (`SQL_IDENTIFIER_CASE` is `SQL_IC_UPPER`,
+  `SQL_QUOTED_IDENTIFIER_CASE` is `SQL_IC_SENSITIVE`), so the entry's `ident=str.upper`
+  asks `GetObjects` and `GetTableSchema` for the name the server stored. `adbc_ingest`
+  quotes the names it creates, so those stay exactly as written.
+* **`text_sortable=True`.** `LONG VARCHAR` is an ordinary `VARCHAR(2000000)` here, not Db2's
+  unsortable type: `ORDER BY`, `DISTINCT` and `GROUP BY` on the ingested text column all
+  work, so `ddl_string_as_max_varchar` is not wanted.
+
+Everything else runs on the generic path first time: the emoji round-trip (parameter *and*
+statement literal), `DECIMAL(10,3)`, the all-NULL row, affected-row counts,
+`GetObjects`/`GetTableSchema`, the 5,000-row batched ingest and read, and the 3,000-row
+wide-text ingest whose 9,010-character values come back whole — the entry's second `extra`
+step checks `MAX(LENGTH(b))` server-side, which is the half of that round trip the reader
+cannot vouch for on its own.
+
+### Benchmark
+
+```
+ADBC_MATRIX_SUFFIX=_exasol .venv/bin/python bench/matrix_bench.py \
+  --rows 10000 --fetch-rows 100000 --pyodbc-timeout 300 exasol
+# fetch=1,535,643/s (pyodbc 389,562/s)  ingest=10,018/s array=10,226/s pyodbc=16,946/s
+```
+
+Ingest is the flat spot, and unusually pyodbc's `executemany` is ahead of both bridge
+paths (16.9k against 10.0k). Parameter arrays buy nothing here (10.2k), so the multi-row
+`INSERT` the bridge prefers is not what is holding it back; Exasol is a columnar store
+whose write path is built for bulk `IMPORT` rather than for `INSERT` statements, and every
+one of these arrives as a statement to parse and plan. Reads are the other side of the
+same design: 1.54M rows/s, 3.9× pyodbc on the same table, and that is *with* the wide text
+column unbound (Quirk 3).
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down exasol
+# or, if started standalone:
+docker rm -f adbcbridge-exasol
+```
