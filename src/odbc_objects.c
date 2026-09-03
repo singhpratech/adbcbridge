@@ -205,7 +205,10 @@ static bool DescribeTableStmt(struct OdbcConnection* conn, const struct TableRow
     if (level <= 1 && have_sch) {
       InternalAdbcStringBuilderAppend(&sb, "%s%s%s.", (char*)q, t->schema, (char*)q);
     }
-    InternalAdbcStringBuilderAppend(&sb, "%s%s%s WHERE 1=0", (char*)q, t->table, (char*)q);
+    InternalAdbcStringBuilderAppend(&sb, "%s%s%s %s", (char*)q, t->table, (char*)q,
+                                    conn->reader_opts.zero_row_suffix
+                                        ? conn->reader_opts.zero_row_suffix
+                                        : "WHERE 1=0");
     SQLRETURN ret = OdbcExecDirectSql(hstmt, sb.buffer, &conn->reader_opts);
     InternalAdbcStringBuilderReset(&sb);
     if (SQL_SUCCEEDED(ret)) return true;

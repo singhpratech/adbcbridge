@@ -6949,3 +6949,266 @@ docker compose -f tests/compat/docker-compose.yml --profile extra down altibase
 # or, if started standalone:
 docker rm -f adbcbridge-altibase
 ```
+
+## Kinetica 7.1.9 (Developer Edition)
+
+Kinetica is a vectorized analytic database — the same engine runs on GPU lanes or, in the
+CPU build used here, on the host's vector units. It is in this matrix for its own ODBC
+driver, `libKineticaODBC.so`, a Simba Engine SDK build that speaks the server's REST/SQL
+endpoint on 9191. That driver has the sharpest parameter bug anything in this matrix has
+turned up, and it is the reason the entry is read-only; see below.
+
+Server:
+
+```sh
+docker run -d --name adbcbridge-kinetica -e GPUDB_START_ALL=1 --memory=10g --shm-size=1g \
+  -p 127.0.0.1:29191:9191 -p 127.0.0.1:28080:8080 kinetica/kinetica-intel:7.1.9
+```
+
+(or `docker compose -f tests/compat/docker-compose.yml --profile extra up -d kinetica`;
+it is in the `extra` profile, so a plain `up -d` leaves it alone.) It takes about two
+minutes — `curl -s http://127.0.0.1:29191/` answers `Kinetica is running!` and
+`docker logs` walks through *Host Manager*, *Stats*, *Tomcat*, *Workbench*, *Rank status*.
+The image is 4.7 GB; the whole stack — database, Tomcat/GAdmin, Grafana, Loki, Prometheus —
+settles around 2.0 GiB resident once idle, and `--memory=10g` leaves room for the working
+set of a query.
+
+**`GPUDB_START_ALL=1` is not optional.** `/opt/gpudb-docker-start.sh` starts the host
+manager and the web interfaces and then sleeps forever; the database itself is behind
+`GPUDB_START_ALL` (`FULL_START` is the older spelling of the same variable). Without it
+the container is healthy, GAdmin answers on 8080, and 9191 never opens.
+
+There is **no licence key**: the CPU image runs the free Developer Edition as it ships,
+`require_authentication = false` and `enable_authorization = false` in
+`/opt/gpudb/core/etc/gpudb.conf`, no registration and no key file. `kinetica-intel:7.1.9`
+is the newest tag that repository has (April 2024); `latest` does not exist there, so the
+tag has to be spelled out. `MINIMUM_GPU_MEMORY` and the `nvidia-smi` block in the start
+script never run here: the CPU image ships no `nvidia-smi`, so the script's
+`which nvidia-smi` guard skips the whole GPU section.
+
+### The driver is inside the server image
+
+There is no separate download to find and no account to make: the Linux ODBC client is a
+tarball the server ships, at `/opt/gpudb/downloads/linux-odbc-client.tgz` and again at
+`/opt/gpudb/connectors/odbc/linux-odbc-client.tgz`. (GAdmin on 8080 serves the same file
+under **Support → Drivers**, but that page is behind the GAdmin login, and no unauthenticated
+path to it answers.) Copy it out of the image without even starting a server:
+
+```sh
+mkdir -p ~/odbc-drivers/kinetica && cd ~/odbc-drivers/kinetica
+docker run --rm --entrypoint cat kinetica/kinetica-intel:7.1.9 \
+  /opt/gpudb/downloads/linux-odbc-client.tgz > linux-odbc-client.tgz
+tar xzf linux-odbc-client.tgz     # -> libKineticaODBC.so, kineticaODBC.ini, en-US/
+```
+
+`libKineticaODBC.so` links only against the system `libstdc++`/`libm`/`libpthread` —
+boost, OpenSSL and its HTTP client are all static — so it needs no `LD_LIBRARY_PATH`
+entry and no bundled libcurl.
+
+Like Vertica's driver it will not work properly until it finds an **ini of its own**,
+`kineticaODBC.ini`, but it locates it without an environment variable: the first place it
+looks is *the directory the driver library is in*, which is where the tarball already puts
+it. Only two lines need changing, both paths that point into `/opt/gpudb` on a server
+install:
+
+```sh
+sed -i "s|^ErrorMessagesPath=.*|ErrorMessagesPath=$HOME/odbc-drivers/kinetica|; \
+        s|^LogPath=.*|LogPath=$HOME/odbc-drivers/kinetica/logs|" kineticaODBC.ini
+mkdir -p logs
+export KINETICA_ODBC_DRIVER=$HOME/odbc-drivers/kinetica/libKineticaODBC.so
+```
+
+`ErrorMessagesPath` points at the directory *containing* `en-US/`, not at `en-US` itself.
+The shipped file already has `DriverManagerEncoding=UTF-16`, which is the right value for
+unixODBC's 2-byte `SQLWCHAR` (the commented-out `UTF-32` above it is the iODBC one), so
+unlike Vertica there is nothing to fix there — `héllo 🚀` round-trips including the
+astral-plane emoji.
+
+Run the entry:
+
+```sh
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py kinetica
+# kinetica  PASS  (Kinetica (via ODBC) 7.1.9.33.20240329114503)
+```
+
+The driver answers both `SQL_DRIVER_NAME` and `SQL_DBMS_NAME` `Kinetica`, which is what
+the two quirks below key on. `UID=admin;PWD=admin` is what the entry connects with, and
+the exact spelling matters: with authentication disabled, omitting `UID` and `PWD`
+entirely connects, and so does `admin`/`admin`, but a **non-empty user with an empty
+password** — `UID=admin;PWD=;`, or `UID=admin;` with no `PWD` at all — is refused:
+
+```
+HY000 (1010) Error occurred while trying to connect: GPUdb unavailable ...
+  original exception: Insufficient credentials; URL: http://127.0.0.1:29191/show/system/properties
+```
+
+### Driver bug: every bound parameter is executed one position to the right
+
+This is the entry's whole story. The Flight SQL driver at least says no —
+`SQLBindParameter` answers `HYC00 Unsupported function` and the caller knows where it
+stands. Kinetica's driver says yes to every bind and then reads the wrong buffer:
+**parameter *N* is executed with the value bound at parameter *N+1*, and the last
+parameter is sent as NULL.** With three `SQL_C_CHAR` parameters `'11'`, `'22'`, `'33'`
+bound into a three-column table through unixODBC directly — no pyodbc, no driver manager
+tricks beyond the standard one — `SQLExecute` returns `SQL_SUCCESS` and the row lands as
+
+```
+a = 22   b = 33   c = NULL
+```
+
+The consequences at other widths are all the same bug:
+
+| parameters | what happens |
+|---|---|
+| 1 | the value is dropped and NULL is stored, under `SQL_SUCCESS` with an empty diagnostic queue |
+| 3 | values shifted one column left, last column NULL — silently |
+| 8 (the workload's row) | `HY000 (1040) Driver Error: type: %d` — an unformatted `printf` template, reached by walking off the end of the parameter array |
+
+Mixing C types shows the same shift with a message that names it. Binding parameter 1 as
+`SQL_C_LONG`→`SQL_INTEGER` holding `42` and parameter 2 as `SQL_C_CHAR`→`SQL_VARCHAR`
+holding `"hello"`, into `(i INTEGER, s VARCHAR(20))`:
+
+```
+SQLPrepare rc 0    SQLNumParams n = 2
+SQLDescribeParam(1) rc 0 type=12 size=1024      <- SQL_VARCHAR, for an INTEGER column
+SQLDescribeParam(2) rc 0 type=12 size=1024
+SQLBindParameter(1) rc 0   SQLBindParameter(2) rc 0
+SQLExecute rc -1
+  HY000 1040 [Kinetica][KineticaODBC] (1040) Driver Error: stod; Setting column 'i' with value: 'hello'
+```
+
+— parameter 2's text arriving at column 1, and `stod` because the driver converts every
+parameter from text whatever `ValueType` said. `SQLDescribeParam` is wrong in its own
+right: it reports `SQL_VARCHAR(1024)` for every parameter of every statement, whatever the
+target column's type is. A single string parameter is worse still — `SELECT ?` bound to
+`"x"` **segfaults the process**, and bound to the integer `7` returns the one-character
+string `"\x07"`, the low byte of the little-endian `SQLINTEGER` read as a C string.
+
+So no parameter can be trusted to arrive, which rules out both the parameterised `INSERT`
+the other entries load `adbc_t` with and `adbc_ingest`, and the entry is `read_only=True`
+and `params=False`. **Kinetica itself is not the problem**: `SQLExecDirect` of literal SQL
+is exact, and `setup` builds both tables that way, so the entire read side runs unchanged.
+`CREATE OR REPLACE TABLE` makes `setup` idempotent — it is replayed on every connection —
+and `generate_series()` is Kinetica's row generator, so `adbc_big` is one `CTAS` that
+writes 100,000 rows in 70 ms. One Kinetica-ism in the literals: `X'0102'` is the binary
+literal and is fine *inside an `INSERT`* into a `BYTES` column, but `SELECT X'0102'` on its
+own is rejected (`Invalid expression('X'0102''), unparseable token`).
+
+### Bridge quirk 1: the driver misdescribes every `DECIMAL`, three different ways
+
+Kinetica has exactly one decimal type. `DECIMAL(10,3)`, `NUMERIC(10,3)` and
+`DECIMAL(18,4)` in DDL are all stored as the same thing, and `SHOW CREATE TABLE` says
+which:
+
+```
+"n" DECIMAL (18, 4)
+```
+
+The driver then describes that column as three mutually inconsistent shapes:
+
+| call | precision | scale |
+|---|---:|---:|
+| `SQLDescribeCol` | 38 | 0 |
+| `SQLColumns` | 18 | 18 |
+| `SQLGetTypeInfo` (`DECIMAL`) | 38 | — |
+
+None is the column's. The reader takes its precision and scale from `SQLDescribeCol`, so
+believing scale 0 turned the `12.3450` the driver hands over into a `decimal128(38, 0)`
+holding **`12`** — every fractional digit gone, silently, under `SQL_SUCCESS`. That is
+data loss rather than an inconvenience, so `OdbcDetectQuirks` sets
+`decimal_fixed_precision` / `decimal_fixed_scale` to 18 and 4 for this driver: both halves
+are constants of the server, not of the column, which is the only reason a fixed pair can
+be right. `12.345` then arrives exact in a `decimal128(18, 4)` — numerically equal to the
+declared `DECIMAL(10,3)` value, in a wider type, the same shape the `dremio` entry's
+precision-19 answer has.
+
+(The other way out would have been `adbc.odbc.decimal_as_string`, which reads the column
+as its text. That is what the `flightsql` entry does — but there the driver reports scale
+0 for a column that *is* scale 0-described-as-such, and the text is all there is. Here the
+right precision and scale exist and are knowable, so naming them keeps the decimal a
+decimal.)
+
+### Bridge quirk 2: `WHERE 1=0` cannot describe a table with a `BYTES` column
+
+`GetTableSchema`, and the `GetObjects` fallback for a driver whose `SQLColumns` fails, read
+a table's columns off `SELECT * FROM <table> WHERE 1=0`. Against Kinetica that fails for
+any table holding binary:
+
+```
+SELECT * FROM "ki_home"."adbc_t" WHERE 1=0
+  HY000 (1050) [GPUdb]executeSql: Invalid attribute: BYTES(null) for table: SYSTEM.ITER
+    reason: Invalid expression('BYTES(null)'), Unknown function: BYTES
+```
+
+This is the server, not the driver. Kinetica's planner constant-folds a provably false
+predicate and answers the query from `SYSTEM.ITER`, an empty pseudo-table, and a `BYTES`
+column cannot be projected from it. Every spelling of "false" folds the same way —
+`WHERE 1 = 2`, `WHERE i IS NULL AND i IS NOT NULL`, qualified or not — and dropping the
+binary column is what makes it pass (`SELECT i FROM adbc_t WHERE 1=0` is fine). `LIMIT 0`
+is *not* folded that way and describes the real table, so `reader_opts.zero_row_suffix`
+holds the spelling and Kinetica sets it to `LIMIT 0`. Everywhere else it is unset and the
+`WHERE 1=0` that was always there is what runs.
+
+### The entry's tolerances
+
+| flag | why |
+|---|---|
+| `read_only=True` | bound parameters are executed one position to the right (above), so neither the parameterised `INSERT` nor `adbc_ingest` can put a correct row in. `setup` builds `adbc_t` and `adbc_big` with literal SQL instead. |
+| `params=False` | same bug: the parameterised `SELECT ... WHERE i = ?` matches nothing, because the one parameter is sent as NULL. It runs with a literal. |
+| `decimal_type="decimal128(18, 4)"` | Kinetica's one decimal type, restored by the quirk above; `12.345` is exact in it. |
+
+Everything else in the workload runs unchanged: `INTEGER` as int32, `DOUBLE`, `VARCHAR`
+(including `"héllo 🚀"` — the driver describes it `SQL_VARCHAR`, so the reader is on its
+narrow UTF-8 path and the emoji survives), `BYTES` as bytes, `DATE`, `DATETIME`,
+`BOOLEAN`, the all-NULL row, the 100,000-row batched read, `GetObjects`, `GetTableSchema`
+and the error text (`SqlEngine: Object 'adbc_no_such_table' not found`).
+
+### Other things worth knowing about this driver and server
+
+* **`SQL_TXN_CAPABLE` = 0.** No transactions at all; the reader turns its commit/rollback
+  handling off from the driver's own answer, so no quirk is needed.
+* **`SQLGetTypeInfo` names the temporal types `TYPE_DATE`, `TYPE_TIME` and
+  `TYPE_TIMESTAMP`** — the ODBC C *constant* names, not names any DDL accepts. Nothing in
+  this entry generates DDL (it is read-only), but a caller reaching bulk ingest here would
+  need `ansi_ddl_type_names`. `SQLColumns` repeats the same names in `TYPE_NAME`.
+* **`DATETIME` is millisecond precision.** `13:45:10.123456` reads back `.123000`, which
+  the workload's `ts_us` default already allows.
+* **`SELECT VERSION()` answers `PostgreSQL 9.5 (Debian 9.0-1.pgdg90+1) ...`** — a
+  hard-coded banner from the SQL engine's PostgreSQL-derived catalog layer, on a server
+  that is not PostgreSQL and has none of its wire protocol. `SELECT CURRENT_SCHEMA` gives
+  the real answer, `ki_home`, which is also the default schema and the one `SQLColumns`
+  reports; the catalog is named `Kinetica`. (`SHOW SCHEMAS` is not a Kinetica statement —
+  it is parsed as `SELECT ... FROM ki_home.SCHEMAS` and fails.)
+* **`GETDATA_EXTENSIONS` = 15** (`SQL_GD_ANY_COLUMN | SQL_GD_ANY_ORDER | SQL_GD_BLOCK |
+  SQL_GD_BOUND`), so wide columns are bound and truncated values repaired in place.
+* **`SQL_MAX_STATEMENT_LEN` = 0** (the driver will not say), so a multi-row INSERT batch
+  size would be settled by probing, as on most drivers.
+* **A `BYTES` column is described `SQL_BINARY` with a column size of 1,000,000,000.** The
+  reader's `long_bind_bytes` cap is what keeps that from becoming a gigabyte of rowset;
+  the values come back whole through the `getdata_repair` path.
+* **Identifiers** quote with `"` and may hold only `A-Za-z0-9_` plus `.:{}[]` —
+  `CREATE TABLE "adbc_q2" ("A b" INTEGER)` is refused by the server (*Column name contains
+  invalid characters*), quoted or not.
+
+### Benchmark
+
+100,000-row fetch (`bench/matrix_bench.py --rows 10000 --fetch-rows 100000 kinetica`):
+
+```
+fetch=579,007/s   (pyodbc 383,298/s)
+```
+
+1.5× pyodbc on the same query through the same driver. There is no ingest number: nothing
+can be written through this driver by binding parameters, which is what `adbc_ingest` does.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down kinetica
+# or, if started standalone:
+docker rm -f adbcbridge-kinetica
+```
+
+The database lives in the container's own `/opt/gpudb/persist` volume, so removing the
+container removes it and the next one starts empty; `setup` rebuilds both tables anyway.
