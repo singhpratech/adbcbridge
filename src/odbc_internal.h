@@ -358,6 +358,29 @@ struct OdbcReaderOptions {
   // servers accept and coerce -- the same trick the sub-second TIME path in
   // SlotFromArrowValue() already uses for every driver.
   bool temporal_binary_param_as_varchar;
+  // Driver quirk: bind binary parameters as SQL_VARCHAR text -- the binary half of
+  // temporal_binary_param_as_varchar above, without touching dates and timestamps.
+  //
+  // Exasol has no binary column type at all (BLOB is 0A000 "Feature not supported: data
+  // type BLOB", and VARBINARY/BINARY/RAW are not words its parser knows), and its ODBC
+  // driver refuses the C type outright: SQLBindParameter with SQL_C_BINARY answers
+  // HY003, "Invalid application buffer type: SQL_C_BINARY", whatever the target column
+  // is.  So an Arrow binary column cannot reach that server by the ordinary route at
+  // all.  Sent as SQL_C_CHAR into a VARCHAR the same bytes store and read back byte for
+  // byte, which is what a server with no binary type can offer.  Its dates, timestamps
+  // and VARBINARY-less type system are otherwise fine, so nothing else changes.
+  bool binary_param_as_varchar;
+  // Driver quirk: a NULL parameter whose SQL type is SQL_DECIMAL or SQL_NUMERIC cannot be
+  // bound with SQL_C_DEFAULT; name SQL_C_CHAR for it instead.  See NullParamCType.
+  //
+  // Exasol's driver answers SQLExecute with SI002, "C-Type not supported", followed by
+  // HY010, "Error creating prepared statement header", for exactly that pair -- so the
+  // whole statement fails, not just the parameter.  It matters more here than the name
+  // suggests: Exasol has no narrow integer type, INT/INTEGER/BIGINT are all aliases of
+  // DECIMAL, and SQLDescribeParam (which the NULL path asks first, and believes) reports
+  // SQL_DECIMAL for every one of them.  So a NULL in any numeric column takes this
+  // route.  Binding the same NULL as SQL_C_CHAR with a NULL data pointer is accepted.
+  bool null_decimal_param_as_char;
   // Driver quirk: the ODBC driver was compiled with a 32-bit SQLLEN/SQLULEN while the
   // driver manager and this driver use 64-bit ones.  IBM's freely downloadable Db2
   // "clidriver" ships exactly such a libdb2.so on 64-bit Linux (the 64-bit-SQLLEN build

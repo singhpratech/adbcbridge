@@ -679,3 +679,24 @@ services:
       nofile: { soft: 1048576, hard: 1048576 }
     mem_limit: 12g
     ports: ["127.0.0.1:39013:39013", "127.0.0.1:39017:39017"]
+  # Exasol: an in-memory columnar analytics warehouse, driven by its own ODBC driver
+  # (libexaodbc.so -- see tests/compat/README.md for the free download).  In the "extra"
+  # profile, so a plain `up -d` leaves it alone; start it with
+  #   docker compose -f tests/compat/docker-compose.yml --profile extra up -d exasol
+  # privileged: true is not optional.  ExaClusterOS runs its own supervisor inside the
+  # container and manages block devices, loop mounts and kernel parameters for the data
+  # and archive volumes; without it the boot stops before the SQL listener exists.  The
+  # image also wants ~4 GB and a couple of GB of shared memory for the in-memory store.
+  # The single SQL port is 8563, published on 18563; first boot takes a few minutes
+  # (it formats its volumes and generates a self-signed TLS certificate), so wait for
+  #   docker logs adbcbridge-exasol 2>&1 | grep -q "stage6: All stages finished"
+  # rather than for the port.  Login is the built-in sys/exasol.
+  exasol:
+    profiles: ["extra"]
+    image: exasol/docker-db:latest
+    container_name: adbcbridge-exasol
+    privileged: true
+    stop_grace_period: 120s
+    shm_size: 2gb
+    mem_limit: 6g
+    ports: ["127.0.0.1:18563:8563"]

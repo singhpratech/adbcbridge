@@ -367,8 +367,12 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
       // temporal_binary_param_as_varchar: the bytes go across as a character
       // parameter, so the driver quotes them as an ordinary string literal instead
       // of a `_binary'...'` introducer the server cannot parse.
-      p->c_type = opts->temporal_binary_param_as_varchar ? SQL_C_CHAR : SQL_C_BINARY;
-      if (opts->temporal_binary_param_as_varchar) {
+      // binary_param_as_varchar: the same route, for a driver that has no SQL_C_BINARY
+      // at all (Exasol answers SQLBindParameter with HY003 for it).
+      const bool binary_as_text =
+          opts->temporal_binary_param_as_varchar || opts->binary_param_as_varchar;
+      p->c_type = binary_as_text ? SQL_C_CHAR : SQL_C_BINARY;
+      if (binary_as_text) {
         p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARCHAR : SQL_VARCHAR;
       } else {
         p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARBINARY : SQL_VARBINARY;
@@ -771,7 +775,8 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       // SQL_C_CHAR array is transcoded from the driver's narrow charset and
       // mangles anything outside it (SQL Server stored "hello ?" for an emoji).
       // Drivers whose SQLWCHAR is not UTF-16 keep the narrow, UTF-8 path.
-      if (binary && opts->temporal_binary_param_as_varchar) {  // see DATE32 above
+      if (binary && (opts->temporal_binary_param_as_varchar ||
+                     opts->binary_param_as_varchar)) {  // see DATE32 above
         *supported = false;
         return;
       }
@@ -1310,6 +1315,12 @@ cleanup:
 static SQLSMALLINT NullParamCType(SQLSMALLINT sql_type, const struct OdbcReaderOptions* opts) {
   // bigint_param_as_string means the driver has no SQL_C_SBIGINT at all (Oracle).
   if (sql_type == SQL_BIGINT && !opts->bigint_param_as_string) return SQL_C_SBIGINT;
+  // null_decimal_param_as_char: the second exception, and the same shape as the first --
+  // a driver that has no SQL_C_DEFAULT for one SQL type.  See the flag in
+  // odbc_internal.h; SQL_C_CHAR with a NULL pointer is what it does take there.
+  if (opts->null_decimal_param_as_char && (sql_type == SQL_DECIMAL || sql_type == SQL_NUMERIC)) {
+    return SQL_C_CHAR;
+  }
   return SQL_C_DEFAULT;
 }
 
