@@ -7212,3 +7212,287 @@ docker rm -f adbcbridge-kinetica
 
 The database lives in the container's own `/opt/gpudb/persist` volume, so removing the
 container removes it and the next one starts empty; `setup` rebuilds both tables anyway.
+
+## Actian Ingres 10.1 (open-source edition)
+
+Ingres is one of the last databases here with an ODBC driver of its own that speaks the
+server's native protocol: `libiiodbcdriver.1.so` over **Ingres/Net** on TCP port
+21064 — "port II", the port name an installation whose `II_INSTALLATION` is `II` gets.
+It is also the hardest entry in the matrix to stand up, for reasons that are worth
+reading before starting: the driver cannot be used through unixODBC as it ships, and the
+one image that carries a licence-free server is not built to be started by hand.
+
+### The server: which image
+
+**Not** `actian/ingres`. Actian's own image (`actian/ingres:ii12.1.0`, the current
+release) is a complete Ingres 12.1, but it stops on start-up without a licence:
+
+```
+----------------Checking for valid license-----------------
+*** No valid license found ***
+...
+This docker image contains a version of Actian Ingres which requires a license key file
+(license.xml) ... placed in a directory mounted in the container as /Secrets/license
+----Actian Ingres Container Stopped (no valid license)-----
+```
+
+`LICENSE_AGREEMENT_ACCEPTED=true` gets past the agreement prompt and no further; the key
+itself comes from Actian sales or ESD, both behind an account. So that route is closed.
+
+What is open is the **open-source Ingres**, which is what this entry runs: the GPL
+`ingres-10.1.0-00-NPTL` source kit, built (`INGRES_INSTALL_PRODUCTS=tm,dbms,net,ome,das,odbc`)
+and baked into the community image `iidbdb/ingres:latest` at `/opt/Ingres-golden/II`.
+It pulls without a login and carries the server, the client tools (`sql`, `netutil`) and
+the ODBC driver in one 198 MB image.
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra up -d ingres
+tests/compat/fixtures/setup_ingres.sh
+# adbcbridge-ingres: ready (database adbc, Ingres/Net on 21064, net user <you>)
+```
+
+The image's own entrypoint is a one-off data-migration driver that exits unless a
+`/restore/<month>/copy.in` of its author's making is mounted, so the compose service
+overrides it with `sleep infinity` and `setup_ingres.sh` does the start. The script's
+header comments carry the detail; the four things it has to do that are not obvious:
+
+* **`hostname: 1f0fb1d47e65`** on the compose service. An Ingres installation's
+  configuration is keyed on the host name it was configured under — `ii.<host>.dbms.*`,
+  `ii.<host>.gcc.*`, and so on through 592 lines of `config.dat` — and the baked install
+  was set up inside a container called `1f0fb1d47e65`. Under any other name every lookup
+  misses. (The client below is pointed at the same name with `II_HOSTNAME`.)
+* **`date_alias = ansidate`, set before the DBMS starts.** It is a start-up parameter. On
+  the image's default (`ingresdate`) the `ANSIDATE` the entry's DDL asks for is created as
+  `INGRESDATE`, Ingres' own date-*and-time* type, which the driver describes
+  `SQL_TYPE_TIMESTAMP` and whose NULL comes back as the "empty date" — year 0, which
+  pyodbc reports as `ValueError: year 0 is out of range`.
+* **`createdb -n adbc`.** `-n` makes it a Unicode-enabled database. Without it a plain
+  `NVARCHAR` column cannot even be created (*national character data types require `-n`
+  or `-i` option with CREATEDB*), and a `VARCHAR` will not hold the workload's
+  `héllo 🚀`.
+* **An Ingres user named after the local account the client runs as.** The vnode login
+  authenticates the *connection*; the session still runs as the caller's own OS user
+  name, and an installation rejects a name it has no `iiuser` row for:
+
+  ```
+  E_US18FF User authorization check failed.
+      Your user identifier was not known to this installation.
+  ```
+
+  Hence `setup_ingres.sh [container] [net-user]`, defaulting to `id -un`.
+
+One thing the script deliberately does **not** do is `alter user ingres with
+password='...'`, which the Actian image's bootstrap does. On this build it locks the DBA
+out of the instance: afterwards even a local `sql iidbdb` inside the container fails
+`E_US18FF`, and the only way back is a fresh container. Ingres/Net wants an *OS* password
+anyway, which is why the script sets one with `chpasswd` and makes `ingvalidpw` setuid
+root (the image ships it 0755, owned by `ingres`, so authentication would fail for every
+remote connect).
+
+### The client side: an Ingres client installation on the host
+
+The ODBC driver is not a standalone library. It reaches the server through Ingres' GCF
+layer, which needs `II_SYSTEM` — message catalogues, `config.dat`, `symbol.tbl` — and a
+local **Name Server** and **Communications Server** running as the user. Copy the
+installation out of the container and trim the server-side data directories:
+
+```sh
+mkdir -p ~/odbc-drivers/ingres
+docker cp adbcbridge-ingres:/opt/Ingres-golden/II ~/odbc-drivers/ingres/II
+(cd ~/odbc-drivers/ingres/II/ingres && rm -rf data ckp jnl dmp log work)   # 736M -> 178M
+```
+
+Then point it at its new home. `.ingIIsh` and `.ingIIcsh` are shell scripts and take a
+plain `sed`; **`files/symbol.tbl` does not** — it is a fixed-record file, 16 records of
+255 bytes, and a `sed` that changes a line's length gets you `Trashed symbol table
+.../symbol.tbl` from every Ingres binary, followed by `E_CL1F05 The environment variable,
+II_TIMEZONE_NAME, is undefined`. Rewrite it padding each record back to 255 bytes (the
+eight values that carry the old path are `ING_ABFDIR`, `II_CONFIG`, `II_DATABASE`,
+`II_CHECKPOINT`, `II_JOURNAL`, `II_DUMP`, `II_WORK` and `II_SHADOW_PWD`).
+
+```sh
+export II_SYSTEM=$HOME/odbc-drivers/ingres/II
+export II_HOSTNAME=1f0fb1d47e65          # the name the copied config is keyed on
+export LD_LIBRARY_PATH=$II_SYSTEM/ingres/lib:$LD_LIBRARY_PATH
+export PATH=$II_SYSTEM/ingres/bin:$II_SYSTEM/ingres/utility:$PATH
+
+ingstart -iigcn                          # local Name Server
+iisetres 'ii.1f0fb1d47e65.gcc.*.tcp_ip.port' 21164   # not 21064: the server has that
+ingstart -iigcc                          # local Communications Server
+
+netutil -file /dev/stdin <<EOF
+create global connection adbcing 127.0.0.1 tcp_ip 21064
+create global login adbcing ingres adbc
+EOF
+sql adbcing::adbc <<'SQL'
+select dbmsinfo('_version');\g
+SQL
+# | II 10.1.0 (a64.lnx/00)NPTL |
+```
+
+Both daemons are needed. Without the Name Server the connect is
+`E_GCfe05 Unable to make outgoing connection`; without the Communications Server it is
+`E_GC0137_GCN_NO_GCC`, "no Communication Servers (for the specified vnode) are running in
+this installation" — a client's own GCC is what carries an outbound Ingres/Net session.
+Its listening port has to be moved off 21064 because the server's is published there on
+the loopback; any free port will do, it never accepts a connection.
+
+### Driver quirk: four-byte `SQLWCHAR`, so unixODBC cannot use the driver at all
+
+`libiiodbcdriver.1.so` implements its wide entry points — `SQLConnectW`,
+`SQLDriverConnectW`, `SQLExecDirectW` and the rest — against a **four-byte `SQLWCHAR`**,
+the platform `wchar_t` (the DataDirect/iODBC convention). unixODBC's `SQLWCHAR` is two
+bytes, and it decides a driver is a Unicode driver purely by finding `SQLConnectW` in it,
+after which *every* call an application makes is converted to UCS-2 and handed to those
+entry points. The driver reads the first character and stops at the following zero byte,
+so a connection string arrives as `"D"` and the connect fails:
+
+```
+08004  786744  E_GC0138_GCN_NO_SERVER  User provided a server class as part of the
+       database name (dbname/class), but no servers of that class ... are running in
+       the target installation
+```
+
+— an empty vnode and an empty database, leaving just the `/INGRES` server class, which it
+then looks for in the *local* (client-only) installation. Calling the same
+`SQLDriverConnectW` by hand with a UTF-32 string connects and returns a UTF-32
+out-connection-string, which is the proof of the width. `FakeUnicode=1` in `odbcinst.ini`
+does not help (unixODBC still reports `UNICODE Using encoding ASCII 'UTF-8' and UNICODE
+'UCS-2LE'`), and there is no Ingres-side switch: `odbcmgr.dat` takes only `unixODBC` or
+`CAI/PT`, and the driver reads no environment variable for it.
+
+The driver's **narrow** entry points are correct and complete — a direct
+`SQLDriverConnect` connects, executes and fetches byte-exact. So this entry loads it
+behind an ANSI-only forwarding library,
+[`fixtures/ingres_ansi_shim.c`](fixtures/ingres_ansi_shim.c): 72 stubs, one per exported
+non-`W` `SQL*` symbol, each a single PC-relative indirect jump to the real function, so
+any signature forwards unchanged. With no `SQLConnectW` to find, unixODBC classifies the
+shim as an ANSI driver and does the UCS-2 ↔ UTF-8 conversion itself.
+
+```sh
+gcc -shared -fPIC -O2 -o ~/odbc-drivers/ingres/libingres_ansi.so \
+    tests/compat/fixtures/ingres_ansi_shim.c -ldl
+```
+
+The generated file is checked in; to regenerate it for another Ingres build, list the
+symbols with `nm -D --defined-only libiiodbcdriver.1.so | awk '$2=="T"{print $3}' |
+grep '^SQL' | grep -v 'W$'` and emit one stub each. x86-64 System V only.
+
+### Driver quirk: `Driver=` is `strcpy`'d into a 32-byte buffer
+
+The second reason the connection string is shaped the way it is. `ConDriverInfo()` copies
+the driver's name straight into a 32-byte stack buffer, so any real path kills the
+process:
+
+```
+*** buffer overflow detected ***: terminated
+#8  __strcpy_chk (dest=0x7fff…, src=0x… "/home/…/odbc-drivers", destlen=32)
+#9  ConDriverInfo () from …/libiiodbcdriver.1.so
+#10 IIODsqdr_SQLDriverConnect_InternalCall ()
+```
+
+A name shorter than 32 characters fits, so register the shim in an `odbcinst.ini` and use
+that name. `INGRES_ODBC_DRIVER` therefore holds a **driver name**, not a path — the same
+shape the Windows notes elsewhere in this file use.
+
+```sh
+cat > ~/odbc-drivers/ingres/odbcinst.ini <<EOF
+[Ingres]
+Description=Ingres 10.1 ODBC driver, ANSI entry points only
+Driver=$HOME/odbc-drivers/ingres/libingres_ansi.so
+FileUsage=0
+DriverODBCVer=03.51
+EOF
+```
+
+### Run the entry
+
+```sh
+export II_SYSTEM=$HOME/odbc-drivers/ingres/II
+export II_HOSTNAME=1f0fb1d47e65
+export LD_LIBRARY_PATH=$II_SYSTEM/ingres/lib:$LD_LIBRARY_PATH
+export ODBCSYSINI=$HOME/odbc-drivers/ingres
+export INGRES_ODBC_DRIVER=Ingres
+ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so python tests/compat/test_matrix.py ingres
+# ingres    PASS  (INGRES (via ODBC) 10.00.0000)
+```
+
+`SQL_DRIVER_NAME` is `iiodbcdriver.1.so` (the real driver's, not the shim's — the shim
+forwards `SQLGetInfo`), which is what the two bridge quirks below key on;
+`SQL_DBMS_NAME` is `INGRES` and `SQL_DBMS_VER` `10.00.0000`, while the server itself says
+`II 10.1.0 (a64.lnx/00)NPTL`.
+
+### Bridge quirks
+
+* **32-bit `SQLLEN`.** The driver is built with a four-byte `SQLLEN`/`SQLULEN` on 64-bit
+  Linux, exactly as IBM's Db2 clidriver is, so every indicator it writes is half as wide
+  as the caller's storage. The symptom is a NULL row reading back as the row before it: a
+  NULL `VARCHAR` came back as row 1's text padded out to the bound width, a NULL `FLOAT8`
+  as `1e-323`, a NULL `ANSIDATE` as year 0. `iiodbcdriver` is now the third name in the
+  `sqllen_32bit` autodetection (after `db2` and `mdbtools`); `adbc.odbc.sqllen_32bit`
+  overrides it either way.
+* **No usable `SQL_C_WCHAR` parameters.** A wide parameter is read as UCS-2 with each
+  16-bit unit treated as a code point, so a surrogate pair is rejected rather than
+  combined and the workload's emoji fails the INSERT outright:
+
+  ```
+  5000B  151574  Unicode code point 0000D83D cannot be mapped to local character set.
+  ```
+
+  (`0xD83D` being the high surrogate of U+1F680.) The narrow path is UTF-8 and stores and
+  reads the same string back unchanged against the `-n` database, so character parameters
+  take it — `wchar_as_utf8`, as for Firebird, Virtuoso and Informix.
+
+### Entry notes
+
+* The types are Ingres' own names: `FLOAT8` is its 8-byte float (`FLOAT` alone takes a
+  precision), `BYTE VARYING(n)` is the variable-length byte string (there is no
+  `VARBINARY`), `ANSIDATE` is the date-only type. `DECIMAL(10,3)` and `BOOLEAN` are
+  native and need no tolerance flag, and with `date_alias = ansidate` and a `-n` database
+  the entry needs none at all.
+* **Ingres SQL has no multi-row `VALUES`.** `INSERT INTO t VALUES (1),(2)` is a syntax
+  error (*line 1, Syntax error on ','*, 2503), which is adbcBridge's default bulk-ingest
+  form. No quirk is needed — the ingest path falls back to parameter arrays by itself,
+  and the driver reports `SQL_PARAM_ARRAY_ROW_COUNTS = SQL_PARC_BATCH` for them — but it
+  is worth knowing that the array path is the only one here.
+* `SQL_TXN_CAPABLE` = 2 and commit/rollback behave; `SQL_GETDATA_EXTENSIONS` = 11
+  (`SQL_GD_ANY_COLUMN | SQL_GD_ANY_ORDER | SQL_GD_BOUND`), no `SQL_GD_BLOCK`, so wide
+  columns are repaired by re-fetch rather than in place. `SQL_MAX_STATEMENT_LEN` = 0.
+* Delimited identifiers work and preserve case (`"a b"`, `"MiXeD"`); unquoted names fold
+  to lower case, so no `ident=`.
+* **Transaction log.** A single transaction cannot outgrow the log's force-abort limit,
+  and `adbc_ingest` is one transaction: 100,000 rows of the benchmark's four-column table
+  ends in
+
+  ```
+  40001  4706  Your transaction has been externally aborted.
+  E_QE0024_TRANSACTION_ABORTED  The transaction log file is full.
+  ```
+
+  with `E_DM010C_TRAN_ABORTED ... to release transaction log space` in the server's
+  `errlog.log`. 50,000 rows fit in the image's 500 MB log, which is what the benchmark
+  below uses.
+
+### Benchmark
+
+10,000-row ingest, 50,000-row fetch:
+
+```
+fetch=393,125/s (pyodbc 345,023/s)  ingest=1,073/s array=1,313/s pyodbc=2,434/s
+```
+
+The fetch is ordinary; the ingest is the slowest in the matrix, and it is the server, not
+the bridge — pyodbc's `executemany` over the same driver is in the same order of magnitude
+(2.4k rows/s), Ingres has no bulk-load path through ODBC, and every row is a round trip
+over Ingres/Net into a row store.
+
+### Clean up
+
+```sh
+docker compose -f tests/compat/docker-compose.yml --profile extra down ingres
+```
+
+The database lives in the container's own filesystem, so removing the container removes
+it and `setup_ingres.sh` starts over on the next one. The host-side client installation
+under `~/odbc-drivers/ingres` is independent of it; `ingstop` there stops the two local
+daemons.
