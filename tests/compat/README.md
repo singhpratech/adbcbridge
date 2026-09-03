@@ -126,6 +126,200 @@ $env:DB2_ODBC_DRIVER = "IBM DB2 ODBC DRIVER"
 $env:DB2_CONN = "Driver={drv};Database=adbc;Hostname=127.0.0.1;Port=50000;Protocol=TCPIP;Uid=db2inst1;Pwd=Adbc2026;Authentication=SERVER;"
 ```
 
+## IBM Db2 for i 7.5 (PUB400.COM)
+
+Db2 for i is the database built into IBM i (OS/400, i5/OS) — a different engine from the
+`db2` entry above, reached by a different driver over a different wire. There is no
+container for it and no emulator: IBM i runs on Power hardware, so this entry is a
+**hosted** one, pointed at [PUB400.COM](https://pub400.com), the free public IBM i that
+RZKH GmbH has run for a quarter of a century. It is a shared community machine, so the
+entry keeps `big_rows` at 3,000, opens one connection at a time and drops its tables.
+
+Sign up at <https://pub400.com/cgi/signup.nd/start> for an account of your own; ours is
+never in the repository. The entry reads three variables:
+
+```sh
+export PUB400_HOST=pub400.com
+export PUB400_USER=<YOURUSER>          # the profile name PUB400 mails you
+export PUB400_PASSWORD=<YOURPASSWORD>
+```
+
+They are read at import time and interpolated into the entry's connection string, so keep
+them out of the shell history and out of the repository (`IBMI_CONN` overrides the whole
+string if you would rather build it yourself).
+
+### Get the ODBC driver without root
+
+IBM publishes the **IBM i Access ODBC Driver** for Linux with no account and no
+registration, as a `.deb` (and an `.rpm`) on `public.dhe.ibm.com`:
+
+```sh
+mkdir -p /tmp/dbs/ibmi && cd /tmp/dbs/ibmi
+curl -sSLO https://public.dhe.ibm.com/software/ibmi/products/odbc/debs/dists/1.1.0/main/binary-amd64/ibm-iaccess-1.1.0.29-1.0.amd64.deb
+dpkg-deb -x ibm-iaccess-1.1.0.29-1.0.amd64.deb root
+# -> root/opt/ibm/iaccess/{lib64,mri29xx,conv_tables,etc,include,doc}
+```
+
+Unlike every other driver here it will **not run from where you unpack it**. The
+libraries resolve their message catalogues, EBCDIC conversion tables and preferences file
+under a compiled-in `/opt/ibm/iaccess`, and with that directory missing every diagnostic —
+including the one that would tell you why a connect failed — degrades to
+`CWBNL0202 - cwbodmsg.dll` and the real error code is lost:
+
+```
+[HY000] CWBNL0202 - cwbodmsg.dllCWBNL0202 - cwbodmsg.dllCWBNL0202 - cwbodmsg.dll (30119)
+```
+
+Installing the `.deb` as root puts the tree there (and registers the driver with
+`odbcinst`, which is what `[IBM i Access ODBC Driver]` in `odbcinst.ini` comes from). To
+stay root-free, give the process a mount namespace where the path exists —
+[bubblewrap](https://github.com/containers/bubblewrap) does it unprivileged, and `/opt`
+has to be a `tmpfs` first because the real one is not writable:
+
+```sh
+P=/tmp/dbs/ibmi/root/opt/ibm/iaccess
+bwrap --dev-bind / / --tmpfs /opt \
+      --bind $P /opt/ibm/iaccess \
+      --ro-bind $P/lib64/libcwbodbc.so /opt/ibm/cwbodbc.so \
+      -- <command>
+```
+
+Re-bind any other `/opt` subdirectory you need in the same run (`--ro-bind /opt/microsoft
+/opt/microsoft`, say) — the `tmpfs` hides them all. Two more things it needs from the
+unixODBC side:
+
+* `LD_LIBRARY_PATH` must contain the driver's own `lib64`: `libcwbodbc.so` links against
+  `libcwbcore.so` with no `RPATH`, so `ldd` says `not found` and unixODBC reports
+  `Can't open lib`.
+* **The `Driver=` value may be at most 35 characters.** Longer and the driver answers
+  `Key value in connection string too long. (30119)` before it looks at anything else —
+  measured exactly: a 35-character path connects, a 36-character one does not. Which is
+  why the second bind above exists: the driver's own installed path,
+  `/opt/ibm/iaccess/lib64/libcwbodbc.so`, is 36 characters. A short symlink anywhere does
+  as well, and a normal root install would use the registered *name*
+  (`Driver={IBM i Access ODBC Driver}`, 24 characters) instead of a path.
+
+```sh
+export IBMI_ODBC_DRIVER=/opt/ibm/cwbodbc.so
+export LD_LIBRARY_PATH=/opt/ibm/iaccess/lib64:$LD_LIBRARY_PATH
+```
+
+### The initial password is expired
+
+PUB400 mails a temporary password, and IBM i marks it expired, so the first ODBC connect
+fails no matter what:
+
+```
+[28000] [IBM][System i Access ODBC Driver]Communication link failure. comm rc=8003 -
+CWBSY0003 - Password for user <user> on system PUB400.COM has expired, Password length = 9,
+Prompt Mode = Never, System IP Address = ... (8003) (SQLDriverConnect)
+```
+
+Two routes that do **not** work: `ssh -p 2222` is refused outright
+(`Permission denied (publickey,password,keyboard-interactive)`) because IBM i's sshd
+will not sign on an expired profile, and the client's own change-password API —
+`cwbCO_ChangePassword()` in `libcwbcore.so`, which needs no working sign-on — is refused
+by this host for every password shape tried, short, long, mixed case:
+
+```
+cwbCO_ChangePassword rc=8007   CWBSY1008 - General security error occurred rc=400
+```
+
+What works is what PUB400's own reset mail says: a **5250 session**. Sign on with the
+expired password, IBM i answers `Password has expired. Password must be changed to
+continue sign-on request.`, and Enter goes to the *Change Password* screen (`F9` there
+lists the rules: minimum 6 characters, maximum 128, at least one digit — the maximum says
+this host is at `QPWDLVL` 2 or 3, so passwords are case-sensitive). `tn5250` is no longer
+packaged by Debian or Ubuntu; build it from its own release tarball, which needs only
+`libncurses-dev`:
+
+```sh
+curl -sSLO https://github.com/tn5250/tn5250/releases/download/v0.18.0/tn5250-0.18.0.tar.gz
+tar xzf tn5250-0.18.0.tar.gz && cd tn5250-0.18.0
+./configure --prefix=$PWD/../inst && make -j4      # -> curses/tn5250
+curses/tn5250 env.TERM=IBM-3179-2 pub400.com
+```
+
+Take 0.18.0, not the 0.17.4 tarball still on SourceForge: that one segfaults at start-up
+on a current x86-64 Linux before it prints anything.
+
+### TLS
+
+The driver takes `SSL=1`, which moves it from the plain host-server ports (8470-8479) to
+the TLS ones (9470-9479); both are open on PUB400 and both complete the whole workload.
+The entry uses `SSL=1`.
+
+### Libraries, naming and commitment control
+
+PUB400 gives every profile two libraries of its own, `<YOURUSER>1` and `<YOURUSER>2`
+(plus a `<YOURUSER>B`). The entry runs in SQL naming (`Naming=0`) with
+`DefaultLibraries=<YOURUSER>1`, which is what makes `CURRENT SCHEMA` that library and lets
+the workload create `adbc_t` unqualified.
+
+`CommitMode=0` (`*NONE`) is not optional. Under the driver's default commitment control,
+the first `INSERT` into a table you just created fails:
+
+```
+[HY000] (-7008) [IBM][System i Access ODBC Driver][DB2 for i5/OS]
+SQL7008 - ADBC_T in <lib> not valid for operation.
+```
+
+The table is not journaled — nothing created with plain `CREATE TABLE` in a user library
+on IBM i is — and a non-journaled table cannot be changed under commitment control.
+`CommitMode=0` is the standard answer and the only one available on a profile that cannot
+run `CRTJRN`/`STRJRNPF`.
+
+### Run the entry
+
+```sh
+export IBMI_ODBC_DRIVER=/opt/ibm/cwbodbc.so
+export LD_LIBRARY_PATH=/opt/ibm/iaccess/lib64:$LD_LIBRARY_PATH
+bwrap --dev-bind / / --tmpfs /opt --bind $P /opt/ibm/iaccess \
+      --ro-bind $P/lib64/libcwbodbc.so /opt/ibm/cwbodbc.so -- \
+  env ADBC_ODBC_DRIVER=$PWD/build/libadbc_driver_odbc.so \
+  python tests/compat/test_matrix.py ibmi
+# ibmi      PASS  (DB2/400 SQL (via ODBC) 07.05.0015)
+```
+
+`SQL_DBMS_NAME` is `DB2/400 SQL` and `SQL_DBMS_VER` `07.05.0015`; the driver reports
+`SQL_DRIVER_NAME` `libcwbodbc.so` and `SQL_DRIVER_VER` `07.01.029`.
+`SYSIBMADM.ENV_SYS_INFO` says OS version 7, release 5.
+
+### Entry notes and quirks
+
+* **Unquoted identifiers fold to upper case** (`SQL_IDENTIFIER_CASE` = `SQL_IC_UPPER`),
+  so `ident=str.upper`, as for Db2 proper. Quoted ones keep their case, and
+  `SQL_MAX_IDENTIFIER_LEN` is **18** — short enough to matter if you set a long
+  `ADBC_MATRIX_SUFFIX`.
+* **`s` is `VARCHAR(50) CCSID 1208` in the entry's DDL, on purpose.** A plain `VARCHAR`
+  takes the job's CCSID, which on this host is 273 (a single-byte EBCDIC one — `QCCSID`
+  is 273 system-wide), and `héllo 🚀` comes back with substitution characters. `CCSID
+  1208` is UTF-8 and round-trips it byte for byte, in a bound parameter and in statement
+  text alike.
+* **Generated ingest DDL does not use the type `SQLGetTypeInfo(SQL_LONGVARCHAR)` names.**
+  That is `CLOB`, and a CLOB column is the worst case for this driver at both ends: it
+  cannot be array-bound for writing and has no declared width to bind for reading, so
+  every row costs a network round trip. 3,000 rows of `(INTEGER, DOUBLE, <string>, DATE)`
+  over a 110 ms link went in at **8 rows/s** and came back at **8 rows/s** as `CLOB(1M)`.
+  The driver therefore spells an Arrow string column `VARCHAR(8000) CCSID 1208`
+  (`ddl_string_type_name`, keyed on `SQL_DBMS_NAME` `DB2/400`): the same table then
+  ingests at **926-1,070 rows/s** and reads back at **1,636-8,052 rows/s**.
+  8,000 is not an arbitrary width — the widest `VARCHAR` the server reports (32,739) is
+  refused in a four-column table (`SQL0101`, "SQL statement too long or complex": Db2 for
+  i's row is at most 32,766 bytes), and a column that wide describes too wide to bind, which
+  puts the *read* back on `SQLGetData` row by row — 120 rows/s at `VARCHAR(16000)` and 62
+  at `VARCHAR(32700)`. At 8,000 the block cursor survives and four such columns still fit
+  a row.
+* Because that column is an ordinary `VARCHAR`, the ingested table can be sorted, grouped
+  and de-duplicated on its text column, so the entry claims `text_sortable`.
+* Everything else in the workload is a native 7.5 type and needs no tolerance flag:
+  `INTEGER`, `DOUBLE`, `VARBINARY(n)`, `DATE`, `TIMESTAMP(6)` (full microseconds),
+  `DECIMAL(10,3)` and `BOOLEAN` (7.5 has a real one). `SQLGetTypeInfo` names the binary
+  type `VARCHAR() FOR BIT DATA`, but the ingest payload has no binary column so nothing
+  builds DDL from that spelling.
+* Times are dominated by the network, not the server: ~110 ms TCP round trip from here to
+  Frankfurt. The whole entry runs in about 22 seconds.
+
 ## MySQL 8
 
 Server (or use the `mysql` service in `docker-compose.yml`):

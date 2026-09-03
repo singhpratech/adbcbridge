@@ -43,9 +43,16 @@ INGRES_ODBC_DRIVER is the one that is not a path: the Ingres driver copies the c
 string's Driver= value into a 32-byte buffer, so it holds a driver *name* registered in an
 odbcinst.ini (ODBCSYSINI) instead -- see README.md, which also has the II_SYSTEM and
 II_HOSTNAME that entry needs and the ANSI shim it is registered against.
+    VIRTUOSO_ODBC_DRIVER, ACCESS_ODBC_DRIVER, IBMI_ODBC_DRIVER
 Servers are expected as in docker-compose.yml (override with *_CONN env vars); the
 file-based entries (sqlite, duckdb, access) need no server.
 See README.md in this directory for how to obtain each driver without root.
+
+The `ibmi` entry (Db2 for i) has no container -- IBM i runs on Power hardware -- so it is
+pointed at a hosted server and reads the account from the environment as well as the
+driver: PUB400_HOST, PUB400_USER and PUB400_PASSWORD, an account of your own from
+PUB400.COM, the free public IBM i.  README.md has the account, the root-free driver
+install and the password change the first connect needs.
 """
 import os, sys, shutil, tempfile, pathlib, datetime, decimal, ctypes
 
@@ -692,6 +699,38 @@ DBS = {
         # path: ~7k rows/s whatever the batch size, 2026-08-28); ingest DDL asks for the
         # widest VARCHAR instead.  See ddl_string_as_max_varchar in src/odbc_internal.h.
         text_sortable=True),
+    "ibmi": dict(
+        # Db2 for i -- the database built into IBM i, reached with IBM's own "IBM i Access
+        # ODBC Driver" (libcwbodbc.so) rather than the Db2 CLI driver above: a different
+        # driver, a different wire (the IBM i host servers, not DRDA) and a different
+        # engine, which answers SQL_DBMS_NAME "DB2/400 SQL".  The server here is
+        # PUB400.COM, the free public IBM i, so the account details come from the
+        # environment; see README.md for the driver download and the account.
+        env="IBMI_ODBC_DRIVER",
+        conn="Driver={drv};System=" + os.environ.get("PUB400_HOST", "pub400.com") + ";"
+             "UID=" + os.environ.get("PUB400_USER", "") + ";"
+             "PWD=" + os.environ.get("PUB400_PASSWORD", "") + ";"
+             "SSL=1;Naming=0;CommitMode=0;DefaultLibraries="
+             + os.environ.get("PUB400_USER", "") + "1;",
+        # `s` is VARCHAR(50) CCSID 1208 on purpose: a plain VARCHAR here takes the job's
+        # CCSID (273 on this host, a single-byte EBCDIC one), which has no room for
+        # "héllo 🚀" -- the emoji comes back as substitution characters.  CCSID 1208 is
+        # UTF-8 and round-trips it byte for byte.  Everything else is a native type:
+        # 7.5 has BOOLEAN, VARBINARY(n), TIMESTAMP(6) and DECIMAL(10,3).
+        ddl="CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50) CCSID 1208,"
+            " b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
+        # Db2 for i folds unquoted identifiers to upper case (SQL_IDENTIFIER_CASE is
+        # SQL_IC_UPPER), like Db2 proper.
+        ident=str.upper,
+        # SQLGetTypeInfo(SQL_LONGVARCHAR) names CLOB here, which this driver can neither
+        # array-bind for writing nor bind at all for reading -- one round trip per row
+        # each way.  Generated ingest DDL asks for VARCHAR(8000) CCSID 1208 instead
+        # (ddl_string_type_name, keyed on SQL_DBMS_NAME "DB2/400"), which Db2 for i does
+        # sort, group and de-duplicate on, so this entry claims text_sortable.
+        text_sortable=True,
+        # A shared community machine on the public internet: keep the bulk ingest small
+        # and the connection count at one.  ~110 ms round trip from here.
+        big_rows=3000),
     "informix": dict(
         # IBM Informix is reached over DRDA -- the same wire protocol Db2 speaks, served
         # by Informix's `<server>_dr` alias on port 9089 -- so the Db2 CLI driver
