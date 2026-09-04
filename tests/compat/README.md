@@ -6824,6 +6824,19 @@ until docker logs adbcbridge-exasol 2>&1 | grep -q "stage6: All stages finished"
 
 Login is the image's built-in `sys` / `exasol`.
 
+### Server gotcha: the private-network address is pinned at first boot
+
+`exadt` records the container's Docker address in `/exa/etc/EXAConf` (`PrivateNet =
+172.17.0.2/16` on a default bridge) the first time the volume is initialised, and refuses
+to start when the container later comes up on a different address — `the private interface
+with address '172.17.0.2/16' either does not exist or is down`, container `Exited (1)`.
+That happens whenever another container claims that address first after a reboot (a
+compose stack starting in a different order is enough). Fix without re-initialising: edit
+`PrivateNet` in `EXAConf` to the address `docker inspect` now shows, set `Checksum = COMMIT`
+(the file is checksummed and refuses a silent edit), and restart the container; a stuck
+`DB1` partition after that clears on one more restart. Giving the service a fixed address
+on a user-defined network avoids it altogether.
+
 ### Run the entry
 
 ```sh
@@ -6921,7 +6934,7 @@ as text and never asks for `SQL_C_DEFAULT`, which is why an eight-column insert 
 while the same NULL in a single-column table went through: the binary column is what
 forces the batch off arrays and onto rows.
 
-### Quirk 3: `SQL_GD_BLOCK` is claimed but does not cover a clipped value
+### Quirk 3: `SQL_GD_BLOCK` is claimed but `SQLGetData` works once per `SQLFetch`
 
 `SQL_GETDATA_EXTENSIONS` is `0xf` — `SQL_GD_ANY_COLUMN | ANY_ORDER | BLOCK | BOUND`. On the
 strength of that the reader binds a wide text column at `adbc.odbc.long_bind_bytes`
@@ -6940,11 +6953,17 @@ SQLSetPos(3) rc=0  SQLGetData rc=SQL_NO_DATA  value=''   <- the clipped row
 SQLSetPos(4) rc=0  SQLGetData rc=SQL_NO_DATA  value=''   <- and the cursor stays there
 ```
 
-`SQLSetPos` succeeds on every row and `SQLGetData` re-reads the short ones correctly; on the
-clipped row it returns `SQL_NO_DATA` with no diagnostic at all — the driver counts the
-truncated bound fetch as having delivered the column, so the call that asks for the rest
-finds nothing left — and it leaves the cursor in that state, so the *next* short row
-answers `SQL_NO_DATA` too. Through the bridge that surfaced as
+That trace suggested the clipped value was the trigger. A plain-ODBC probe on 2026-09-04
+(C against unixODBC, no bridge) isolated the real rule, and truncation is not part of it:
+**only the first `SQLGetData` after each `SQLFetch` succeeds, whichever row `SQLSetPos`
+selected.** With no long value anywhere, rows 2–5 still answer `SQL_NO_DATA`; with the
+clipped row visited *first* it returns its full 100 characters and the short rows after it
+fail; with a buffer large enough for everything, or the column never bound at all, nothing
+changes; with `SQL_ATTR_ROW_ARRAY_SIZE` 1 and one `SQLFetch` per row every row reads fine.
+`SQLFetch` resets the driver's per-column "already returned" state and `SQLSetPos` does
+not, which makes `SQL_GD_BLOCK` unusable as advertised (block fetching into *bound* columns
+is correct throughout: right data, right indicators, a proper `01004` on the truncated
+row). Through the bridge that surfaced as
 
 ```
 [ODBC] SQLGetData returned no data for column b after SQLSetPos positioned on row 251
@@ -6952,8 +6971,9 @@ of a rowset: this driver's SQL_GETDATA_EXTENSIONS overstates what it supports.
 ```
 
 on the 3,000-row wide-text ingest, whose every 250th value is 9,010 characters.
-`SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1` is `0x1` — `SQL_CA1_NEXT` alone — so re-fetching the
-rowset a row at a time is not available either. `getdata_repair` is therefore off for this
+`SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1` is `0x0` — not even `SQL_CA1_NEXT`, let alone
+`SQL_CA1_POS_POSITION`, yet `SQLSetPos(SQL_POSITION)` returns `SQL_SUCCESS` instead of
+refusing — so the driver's own capability bits give no supported way round it. `getdata_repair` is therefore off for this
 driver and a long column stays unbound, the same conclusion DuckDB's ODBC reaches for a
 different reason.
 
