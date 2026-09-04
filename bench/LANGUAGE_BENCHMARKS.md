@@ -114,6 +114,8 @@ driver default, the same setting every other language here runs with — not its
   inside ODBC (`odbc-api`, `OdbcDataReader`), the Arrow path is at or above the
   raw row-by-row one.
 
+The seven databases added on 2026-09-03 — SingleStore, SAP HANA Express, Exasol, Altibase, Kinetica, Actian Ingres and IBM Db2 for i — were measured on 2026-09-04 with the bridge rebuilt from `main` at 530720e, the same workload and sizes, three databases at a time on the reference host (1-minute load 0.4–3.3). Db2 for i is the one remote entry: the public IBM i host PUB400.COM at ~110 ms round trip, one connection at a time from the account, so its rows are a WAN measurement and its native comparisons mostly could not open their second connection (see below).
+
 ## Results
 
 | Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
@@ -348,6 +350,41 @@ driver default, the same setting every other language here runs with — not its
 | csharp | access | — | 3,124,349 | — | — |
 | java | access | — | 803,137 | — | — |
 | go | access | — | 2,576,841 | — | — |
+| python | singlestore | 201,384 | 1,676,765 | — | — |
+| rust | singlestore | 195,038 | 1,300,312 | 16,175 | 2,312,971 |
+| csharp | singlestore | 117,605 | 1,435,985 | 18,105 | 1,012,648 |
+| java | singlestore | 175,056 | 1,415,632 | — | — |
+| go | singlestore | 109,652 | 1,843,792 | 17,075 | 604,631 |
+| python | hana | 682,120 | 7,283,051 | — | — |
+| rust | hana | 779,004 | 7,233,554 | 1,300,593 | 5,843,678 |
+| csharp | hana | 688,705 | 7,159,580 | 10,169 | 826,358 |
+| java | hana | 578,624 | 4,669,900 | — | — |
+| go | hana | 762,244 | 7,402,942 | — | — |
+| python | exasol | 10,323 | 1,507,321 | — | — |
+| rust | exasol | 10,375 | 1,466,367 | 103,819 | 4,531,326 |
+| csharp | exasol | 10,360 | 1,275,818 | 14,788 | — |
+| java | exasol | 10,190 | 1,423,727 | — | — |
+| go | exasol | 10,599 | 1,396,677 | 20,911 | 725,624 |
+| python | altibase | 959,383 | 2,387,341 | — | — |
+| rust | altibase | 965,812 | 2,503,114 | 686,317 | 5,104,674 |
+| csharp | altibase | 972,573 | 2,434,049 | 42,058 | 1,157,544 |
+| java | altibase | 399,477 | 1,953,582 | — | — |
+| go | altibase | — | — | — | — |
+| python | kinetica | — | 597,315 | — | — |
+| rust | kinetica | — | 542,148 | — | 573,141 |
+| csharp | kinetica | — | 589,845 | — | — |
+| java | kinetica | — | 550,805 | — | — |
+| go | kinetica | — | 579,404 | — | — |
+| python | ibmi | 1,392 | 1,929 | — | — |
+| rust | ibmi | 1,575 | 1,665 | 6,160 | 5,633 |
+| csharp | ibmi | 1,779 | 1,378 | — | — |
+| java | ibmi | 1,497 | 1,316 | — | — |
+| go | ibmi | 2,005 | 1,692 | — | — |
+| python | ingres | 1,853 | — | 1,328 | — |
+| rust | ingres | 6,859 | 362,335 | 2,501 | 347,394 |
+| csharp | ingres | — | — | — | — |
+| java | ingres | — | — | — | — |
+| go | ingres | 9,989 | 357,583 | 4,086 | 318,450 |
 
 The postgres rows were re-measured with the databases above them and
 **supersede** the ones recorded before the write-path rework — that run read
@@ -431,6 +468,13 @@ path; the ADBC columns are still the real measurement.
 | **influxdb3** (native columns) | *Server, read-only.* InfluxDB 3's SQL has no DDL, so the entry is `read_only` and the harnesses read the pre-loaded 100,000-point `adbc_big` instead of ingesting; all five languages land within 1.17M–1.28M rows/s. The four native fetch comparisons read the wrong column shape (Go `expected 3 destination arguments in Scan, not 4`, C# `Unable to cast System.Int64 to System.Int32`); Rust's `odbc-api` reads it at 1,277,855 rows/s, `arrow-odbc` at 1,142,367. |
 | **ydb** (ran with `ADBC_BENCH_AUTOCOMMIT=1` and `-no-native`) | *Server.* YDB requires a primary key, so the bridge's create-mode DDL appends one; its PostgreSQL layer will not run that inside an open transaction and answers `[ODBC] CREATE TABLE "adbc_bench_rs_b2" ("id" INTEGER, "val" DOUBLE, "txt" TEXT, "dt" DATE, adbc_pk SERIAL PRIMARY KEY) failed`. With autocommit on it takes it, and all five languages land within 1,597–1,742 rows/s of each other. `-no-native` as well because the row-at-a-time comparison alone overran the 600 s cap in rust, go and C#; that is why the native columns are empty. |
 | **access** (native columns) | *Driver, read-only; and a number that is not a throughput.* The `mdbtools` driver is read-only, so the fetch reads the fixture's `adbc_big` — which holds **3,000** rows. The four harnesses used to fail to connect because `bench/rust/conn.py` named a fixture it never copied; it copies it now. The fetch figures (0.8M–3.3M rows/s) are 3,000 rows in about a millisecond, timer resolution rather than a rate; read them as "works", not as a speed. Native fetch: mdbtools has no `SQLPrepare` (`IM001 Driver does not support this function` for Go) and Rust's `odbc-api` trips on `SQLSetStmtAttr` (`HY092 Invalid attribute/option identifier`). |
+| **singlestore**, **hana**, **exasol**, **altibase**, **kinetica**, **ibmi**, **ingres** (java native) | *Harness, by design.* `no JDBC URL for <db>; set <DB>_JDBC` — the pom carries only the SQLite and PostgreSQL JDBC drivers, as for every other database in the table. |
+| **hana** (go native) | *Binding.* The `database/sql` read died before printing anything: `SIGSEGV: segmentation violation` / `signal arrived during cgo execution` on the finalizer goroutine in `arrow-go/v18 cdata.initReader.func2 -> _Cfunc_ArrowArrayStreamRelease` while goroutine 1 was in `alexbrainman/odbc (*Rows).Next -> SQLFetch` — the same arrow-go finalizer signature recorded above for mssql, percona and monetdb. Re-run `-no-native`: clean; the ADBC columns are that run. |
+| **exasol** (csharp native fetch) | *Client.* `Unable to cast object of type 'System.Decimal' to type 'System.Int32'.` — Exasol has no narrow integer type (`INT` is `DECIMAL(18,0)`, described `SQL_DECIMAL`), so `System.Data.Odbc` hands `id` over as a decimal and the comparison reads it as `int`; the same shape as the oracle and vertica rows. ADBC columns and the native ingest are from the same run. |
+| **altibase** (go, all four cells) | *Binding.* Three `run.sh` invocations — the measuring pass, its `ADBC_BENCH_NO_NATIVE=1` retry and a verification re-run — died before printing anything with the identical `SIGSEGV: segmentation violation` / `signal arrived during cgo execution`, fault address `0x20002f` every time, on the finalizer goroutine in `arrow-go/v18 cdata.initReader.func2 -> _Cfunc_ArrowArrayStreamRelease` while goroutine 1 was still building the Arrow batch for step 1 (`main.makeRecord`), before any ADBC ingest or native step ran: an `ArrowArrayStream` from the harness's earlier ADBC reads (vendor probe, drop-table row count) finalised on GC timing. `-no-native` cannot help because the native path never starts. The other four languages all have both ADBC cells (399k–973k rows/s ingest, 1.95M–2.50M fetch). |
+| **kinetica** (ingest, all five; csharp and go native fetch; python native) | *Entry, by design; harness shape.* Kinetica is a `read_only` compat entry (the driver executes parameter *N* with the value bound at *N+1*, see `COMPATIBILITY.md`), so every language fetches the pre-loaded 100,000-row `adbc_big` and has nothing to ingest; `matrix_bench.py` skips pyodbc for read-only entries. The C# and Go comparisons read the four-column bench shape and `adbc_big` is `(a INTEGER, b VARCHAR)`: `Unable to cast object of type 'System.String' to type 'System.Double'.` and `sql: expected 2 destination arguments in Scan, not 4` — the same pattern as the other read-only entries. Rust's `odbc-api` read the two columns as they are (573,141 rows/s). |
+| **ibmi** (csharp and go native; python native fetch) | *Account and link, not the bridge.* PUB400.COM allows one connection at a time from the account and sits ~110 ms away; with the comparison on, `bench_cs` and `bench_go` each printed `== ibmi` and then nothing for 600 s while the ADBC connection was open, and were killed — no error, no diagnostic. Both re-run `-no-native`; the ADBC columns are that run. Rust's `odbc-api` did get its own connection (6,160 / 5,633 rows/s). Python's pyodbc fetch of 100,000 rows hit `matrix_bench.py`'s 600 s per-step timeout over the WAN (its ingest, 6,735 rows/s with `fast_executemany`, finished). |
+| **ingres** (python ADBC fetch; csharp, all four; java ADBC) | *Server log limit; driver; driver.* Python's fetch step failed loading the 100,000-row table on `matrix_bench.py`'s autocommit connection: `SQLExecute failed` with the diagnostic `[40001] (4706) … Your transaction has been externally aborted` and `E_DM9059_TRAN_FORCE_ABORT … in database adbc is being force aborted` in the server's `errlog.log` — Ingres' logging system force-aborting a transaction that outgrows the log's force-abort limit (20,000 and 50,000 rows load fine); Rust and Go loaded the same 100,000 rows through the same driver with autocommit off and one commit. Its ADBC ingest of 10,000 rows measured normally (1,853 rows/s). C#: `[ODBC] SQLSetConnectAttr(SQL_ATTR_AUTOCOMMIT) failed`, then a SIGSEGV with no row printed, under gdb inside the driver's own `IIODsqtb_SQLTables_InternalCall` ← `SQLTables` called from the bridge's ingest under `libcoreclr.so`; identical with `ADBC_BENCH_AUTOCOMMIT=1`, `ADBC_BENCH_NO_NATIVE=1` and a 100-row workload, so neither size nor the comparison. Java: `# SIGSEGV (0xb) … (sent by kill)`, problematic frame `libcompat.1.so EXsignal` — the Ingres client's own EX exception facility installs process-wide signal handlers when its GCF layer loads and takes over the SIGSEGV the JVM uses for implicit null checks, so the JVM dies 0.37 s in, inside the harness's `makeRoot`, before any ADBC step; same with `ADBC_BENCH_AUTOCOMMIT=1`. Both driver findings are recorded in `docs/UPSTREAM.md`. |
 
 **Oracle's fetch column used to be empty, and what filling it costs.** It was
 `—` in all five languages because the read *crashed the process*: any row-array
