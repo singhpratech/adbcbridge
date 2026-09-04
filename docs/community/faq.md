@@ -282,7 +282,7 @@ partition column. Set `adbc.odbc.partitions`. See
 
 ### Which databases are known to work?
 
-53 databases are verified on Linux by one identical workload, and re-run on macOS (44 pass)
+53 databases are verified on Linux by one identical workload, and re-run on macOS (45 pass)
 and Windows (48 pass); the full matrix with per-driver notes is in
 [`docs/COMPATIBILITY.md`](../COMPATIBILITY.md). It spans SQLite, DuckDB,
 PostgreSQL and its wire-compatible forks (CockroachDB, YugabyteDB, TimescaleDB,

@@ -41,7 +41,7 @@ you get native speed from the same install.
 
 ## Measured, not claimed
 
-- **53 databases on Linux, 44 on macOS (Apple Silicon), 48 on Windows** pass one
+- **53 databases on Linux, 45 on macOS (Apple Silicon), 48 on Windows** pass one
   workload — types, NULLs, Unicode in parameters and in statement text, bulk ingest,
   batched reads, catalog, error mapping — against a real server or file; every cell that
   is not a pass names its reason. [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
