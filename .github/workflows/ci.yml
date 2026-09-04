@@ -129,6 +129,27 @@ jobs:
           python -m pip install -e python
           python -m pytest python/tests -q
 
+      # The Go binding (go/) drives the same library through arrow-adbc's cgo
+      # driver manager; its tests skip themselves unless both variables are set.
+      - name: Set up Go (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Build and test the Go package (Linux)
+        if: runner.os == 'Linux'
+        working-directory: go
+        env:
+          SQLITE_ODBC_DRIVER: /usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
+          ADBC_ODBC_DRIVER: ${{ github.workspace }}/build/libadbc_driver_odbc.so
+        run: |
+          go vet ./...
+          go build ./...
+          go test -v ./... 2>&1 | tee go-test.log
+          grep -q -- '--- PASS' go-test.log || { echo "::error::no Go test ran (all skipped?)"; exit 1; }
+
       # Check that the installed manifest really lets the driver manager find
       # the driver by name.  Both install flavours are covered: the prefix
       # given at configure time (dist, installed above) and a prefix given at
