@@ -86,15 +86,27 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: GPG_PASSPHRASE
 
+      - name: The passphrase must unlock the imported key
+        env:
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          gpg --batch --list-secret-keys --keyid-format long | grep -E '^sec' || { echo "::error::no secret key was imported"; exit 1; }
+          if ! printf 'probe' | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 --detach-sign -o /dev/null - 3<<<"$MAVEN_GPG_PASSPHRASE"; then
+            echo "::error::GPG_PASSPHRASE does not unlock the key in GPG_PRIVATE_KEY (gpg said: Bad passphrase). Re-set the GPG_PASSPHRASE secret with the passphrase chosen when the key was generated."
+            exit 1
+          fi
+          echo "signing key unlocks"
+
       - name: Sign, upload and validate
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          # maven-gpg-plugin 3.2 reads the passphrase from this variable (gpg.passphraseEnvName);
+          # it never goes on a command line.
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           mvn -B -f java/pom.xml -Prelease deploy -DskipTests \
             -Dadbcbridge.natives=$PWD/natives \
-            -Dgpg.passphrase="$GPG_PASSPHRASE" \
             -Dcentral.autoPublish=${{ inputs.publish }}
           unzip -l java/target/adbcbridge-*[0-9].jar | grep native/
           ls -l java/target/*.asc
