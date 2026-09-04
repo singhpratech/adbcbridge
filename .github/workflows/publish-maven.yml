@@ -102,7 +102,7 @@ jobs:
           ls -R natives
           [ "$(ls natives | wc -l)" = "4" ] || { echo "::error::expected four native directories"; exit 1; }
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"

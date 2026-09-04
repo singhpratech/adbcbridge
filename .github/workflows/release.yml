@@ -237,7 +237,7 @@ jobs:
             rid=${pair%%:*}; osarch=${pair##*:}
             [ -d "dl/$rid" ] && cp -r "dl/$rid" "natives/$osarch"
           done; ls -R natives
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
