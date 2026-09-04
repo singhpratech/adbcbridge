@@ -62,7 +62,7 @@ The Windows release asset is `adbcbridge-<tag>-win-x64.tar.gz`, containing
 
 The release page also carries `SHA256SUMS`; `Get-FileHash adbcbridge-v0.1.0-win-x64.tar.gz -Algorithm SHA256`
 in PowerShell gives the value to compare. [Security](../community/security.md#verifying-a-download)
-covers the signature, provenance and SBOM that releases after v0.1.0 add.
+covers checking the file's GPG signature, and the provenance and SBOM that releases after v0.1.0 add.
 
 ### From the Python wheel
 

@@ -36,21 +36,19 @@ has a security angle.
 
 ## Verifying a download
 
-Every GitHub Release carries `SHA256SUMS`, a checksum of each asset:
+Every GitHub Release, v0.1.0 included, carries `SHA256SUMS`, a checksum of each
+asset, and `SHA256SUMS.asc`, a detached signature of that file by the project's
+release key (fingerprint `1515 33D6 5DDE 6F9D AA04 558C 95CC 478E 1985 A908`, on
+`keyserver.ubuntu.com`; the same key signs the Maven Central artifacts):
 
 ```sh
+gpg --keyserver keyserver.ubuntu.com --recv-keys 95CC478E1985A908
+gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
 Releases after v0.1.0 also carry:
 
-- `SHA256SUMS.asc`, a detached signature by the project's release key
-  (fingerprint `1515 33D6 5DDE 6F9D AA04 558C 95CC 478E 1985 A908`, on
-  `keyserver.ubuntu.com`; the same key signs the Maven Central artifacts):
-  ```sh
-  gpg --keyserver keyserver.ubuntu.com --recv-keys 95CC478E1985A908
-  gpg --verify SHA256SUMS.asc SHA256SUMS
-  ```
 - a build-provenance attestation for every asset, recorded by GitHub's Sigstore
   instance, which ties the file to the exact workflow run and commit that built it:
   ```sh

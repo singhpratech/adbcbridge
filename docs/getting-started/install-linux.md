@@ -93,8 +93,8 @@ tar xzf adbcbridge-v0.1.0-linux-x64.tar.gz
 # → linux-x64/libadbc_driver_odbc.so
 ```
 
-Releases after v0.1.0 also carry a GPG signature of the checksum file, a build-provenance
-attestation for every asset and an SBOM; [Security](../community/security.md#verifying-a-download)
+The checksum file is signed by the release key (`SHA256SUMS.asc`); releases after v0.1.0 also
+carry a build-provenance attestation for every asset and an SBOM; [Security](../community/security.md#verifying-a-download)
 shows how to check each.
 
 Point adbcBridge's clients at it with the `ADBC_ODBC_DRIVER` environment
