@@ -41,13 +41,40 @@ on:
         description: "Release automatically after validation (false = leave the deployment staged for review)"
         type: boolean
         default: false
+      verify_only:
+        description: "Do not build or upload: resolve the tag's version from Maven Central and check the jar (records the result on the maven-central environment)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  verify:
+    name: Verify ${{ inputs.tag }} on Maven Central
+    if: inputs.verify_only
+    runs-on: ubuntu-latest
+    environment: maven-central
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Resolve from Central into an empty repository and inspect the jar
+        run: |
+          V="${{ inputs.tag }}"; V="${V#v}"
+          mvn -q -B -Dmaven.repo.local=$PWD/m2 dependency:get -Dartifact=org.adbcbridge:adbcbridge:$V -Dtransitive=true
+          JAR=m2/org/adbcbridge/adbcbridge/$V/adbcbridge-$V.jar
+          ls -l "$JAR" m2/org/adbcbridge/adbcbridge/$V/adbcbridge-$V.pom
+          unzip -l "$JAR" | grep -E 'native/(linux-x86_64|linux-aarch64|macos-aarch64|windows-x86_64)/' | grep -E 'libadbc_driver_odbc|adbc_driver_odbc' 
+          N=$(unzip -l "$JAR" | grep -cE 'native/.*/(lib)?adbc_driver_odbc\.(so|dylib|dll)$')
+          [ "$N" = "4" ] || { echo "::error::expected 4 native libraries in the jar, found $N"; exit 1; }
+          ls -d m2/org/apache/arrow/adbc/adbc-driver-jni/* >/dev/null && echo "transitive adbc-driver-jni resolved"
+          echo "org.adbcbridge:adbcbridge:$V resolves from Maven Central with its four natives"
+
   maven:
     name: Publish ${{ inputs.tag }} (${{ inputs.publish && 'auto-publish' || 'validate and stage' }})
+    if: ${{ !inputs.verify_only }}
     runs-on: ubuntu-latest
     environment: maven-central
     env:
