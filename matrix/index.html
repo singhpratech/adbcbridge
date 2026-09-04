@@ -109,7 +109,7 @@ function chip(o){ return `<span class="chip ${o.kind}">${CHIP[o.kind]}</span>`; 
 
 function render(list){
   tb.innerHTML = list.map((e,i)=>`
-  <tr class="entry" data-i="${i}" aria-expanded="false">
+  <tr class="entry" id="${e.slug}" data-i="${i}" aria-expanded="false">
     <td class="dbname"><span class="caret">▸</span>${e.name}</td>
     <td class="drvcol"><span class="drv">${e.driver.replace(/`/g,'')}</span></td>
     <td class="wirecol"><span class="wiretag">${e.wire}</span></td>
@@ -154,6 +154,23 @@ document.getElementById('counts').innerHTML =
   `<div class="count"><b>${c.macos}</b><span>pass on macOS arm64</span></div>`+
   `<div class="count"><b>${c.windows}</b><span>pass on Windows x64</span></div>`;
 apply();
+// Deep links: /matrix/#<slug> opens that database's row (clearing any filter that hides it).
+function openHash(){
+  const slug = decodeURIComponent(location.hash.slice(1));
+  if (!slug) return;
+  let tr = document.getElementById(slug);
+  if (!tr) {
+    document.getElementById('q').value = ''; wire = '';
+    document.querySelectorAll('.chipbtn').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.wire === '')));
+    apply(); tr = document.getElementById(slug);
+    if (!tr) return;
+  }
+  tr.setAttribute('aria-expanded', 'true');
+  tr.nextElementSibling.classList.add('open');
+  tr.scrollIntoView({ block: 'center' });
+}
+openHash();
+window.addEventListener('hashchange', openHash);
 </script>
 </body>
 </html>
