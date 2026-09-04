@@ -140,15 +140,29 @@ java --add-opens=java.base/java.nio=ALL-UNNAMED \
 
 ## Install
 
-### From a GitHub Release now (`mvn install:install-file`)
+### From Maven Central
 
-The jar is attached to each release. Download it, install it into your local
-Maven repository, then depend on it. Because `install:install-file` generates a
-dependency-less POM, also declare the runtime dependencies the artifact needs
-(they resolve transitively once the artifact is on Maven Central).
+```xml
+<dependency>
+  <groupId>org.adbcbridge</groupId>
+  <artifactId>adbcbridge</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
+
+`adbc-core`, `adbc-driver-jni`, `arrow-vector` and `arrow-memory-netty` come in
+transitively; the jar carries the native driver for Linux x86_64 and aarch64,
+macOS arm64 and Windows x64. Published from the release tag by the
+**Publish to Maven Central** workflow (`java/PUBLISHING.md`); the same jar, with
+its sources and javadoc jars, is attached to the
+[GitHub release](https://github.com/singhpratech/adbcbridge/releases) as well.
+
+### From a GitHub Release jar (offline, or a build you made yourself)
+
+`mvn install:install-file` puts a downloaded jar into the local repository, but
+generates a dependency-less POM, so declare the runtime dependencies alongside:
 
 ```sh
-# 1. Download adbcbridge-0.1.0.jar from the Release, then install it locally:
 mvn install:install-file \
     -Dfile=adbcbridge-0.1.0.jar \
     -DgroupId=org.adbcbridge \
@@ -157,8 +171,6 @@ mvn install:install-file \
     -Dpackaging=jar
 ```
 
-Then in your `pom.xml`:
-
 ```xml
 <dependencies>
   <dependency>
@@ -166,9 +178,7 @@ Then in your `pom.xml`:
     <artifactId>adbcbridge</artifactId>
     <version>0.1.0</version>
   </dependency>
-
-  <!-- Declare these explicitly when installing from the release jar; they
-       resolve transitively once adbcbridge is published to Maven Central. -->
+  <!-- Only needed for a locally installed jar; Maven Central resolves them transitively. -->
   <dependency>
     <groupId>org.apache.arrow.adbc</groupId>
     <artifactId>adbc-driver-jni</artifactId>
@@ -182,22 +192,6 @@ Then in your `pom.xml`:
   </dependency>
 </dependencies>
 ```
-
-The release jar is available on the project's GitHub Releases page at
-<https://github.com/singhpratech/adbcbridge/releases>.
-
-### From Maven Central once published
-
-```xml
-<dependency>
-  <groupId>org.adbcbridge</groupId>
-  <artifactId>adbcbridge</artifactId>
-  <version>0.1.0</version>
-</dependency>
-```
-
-`adbc-core`, `adbc-driver-jni`, `arrow-vector` and `arrow-memory-netty` then come
-in transitively.
 
 ### Building the jar yourself
 
@@ -663,8 +657,8 @@ through the SQLite ODBC driver, runs a query, and reads the Arrow result.
     <version>0.1.0</version>
   </dependency>
 
-  <!-- Needed explicitly when adbcbridge was installed from the release jar;
-       transitive once it is published to Maven Central. -->
+  <!-- Only needed when adbcbridge was installed from a downloaded jar;
+       from Maven Central they resolve transitively. -->
   <dependency>
     <groupId>org.apache.arrow.adbc</groupId>
     <artifactId>adbc-driver-jni</artifactId>

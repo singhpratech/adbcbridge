@@ -5,6 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/adbcbridge)](https://pypi.org/project/adbcbridge/)
 [![crates.io](https://img.shields.io/crates/v/adbcbridge)](https://crates.io/crates/adbcbridge)
 [![NuGet](https://img.shields.io/nuget/v/AdbcBridge)](https://www.nuget.org/packages/AdbcBridge)
+[![Maven Central](https://img.shields.io/maven-central/v/org.adbcbridge/adbcbridge)](https://central.sonatype.com/artifact/org.adbcbridge/adbcbridge)
 [![Go Reference](https://pkg.go.dev/badge/github.com/singhpratech/adbcbridge/go.svg)](https://pkg.go.dev/github.com/singhpratech/adbcbridge/go)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
@@ -161,8 +162,9 @@ try (RootAllocator allocator = new RootAllocator();
   try (AdbcStatement.QueryResult result = statement.executeQuery()) { /* result.getReader() */ }
 }
 ```
-The jar carries the natives (install it from the release with `mvn install:install-file`
-until it is on Maven Central); JDK 17+ needs `--add-opens=java.base/java.nio=ALL-UNNAMED`.
+On Maven Central since 2026-09-04; the jar carries the natives for all four platforms and
+pulls its ADBC and Arrow dependencies in transitively. JDK 17+ needs
+`--add-opens=java.base/java.nio=ALL-UNNAMED`.
 Full page: [`docs/languages/java.md`](docs/languages/java.md).
 
 ### Go
@@ -278,8 +280,8 @@ place they looked.
 
 Early (0.1.0). Working: everything under *What it does*, on Linux, macOS (arm64) and
 Windows (x64 and Win32 built and tested in CI on every push; the Windows build lacks
-prefetch and parallel ingest); 0.1.0 on PyPI, crates.io and nuget.org. Next: the ADBC Driver
-Foundry validation suite, Maven Central, a driver bootstrap for the open-licence ODBC
+prefetch and parallel ingest); 0.1.0 on PyPI, crates.io, nuget.org and Maven Central. Next: the ADBC Driver
+Foundry validation suite, a driver bootstrap for the open-licence ODBC
 drivers, the Win32 thread shim; then a JDBC bridge on the same model —
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
