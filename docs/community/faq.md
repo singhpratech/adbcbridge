@@ -401,7 +401,9 @@ connection string with secrets removed; the failing SQL and the schema of the
 columns involved; and the full ADBC error, including SQLSTATE and the native error
 code. If you can, add a case to `tests/test_sqlite.py` that fails before the fix.
 See [`CONTRIBUTING.md`](../../CONTRIBUTING.md#reporting-bugs) and
-[Contributing](contributing.md).
+[Contributing](contributing.md). A security problem is the one exception: report it
+through GitHub's private vulnerability reporting, not an issue — the policy, the
+response times and the support window are in [Security](security.md).
 
 ### How are findings given back to upstream projects?
 

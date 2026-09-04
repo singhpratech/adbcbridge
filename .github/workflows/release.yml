@@ -248,9 +248,51 @@ jobs:
           unzip -l java/target/adbcbridge-*[0-9].jar | grep native/
           gh release upload "${{ needs.prepare.outputs.tag }}" java/target/adbcbridge-*.jar --clobber
 
+  trust:
+    name: Checksums, signature, SBOM and provenance
+    needs: [prepare, linux, macos, windows, sdist, crate, nuget, maven]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch every asset of the release
+        run: |
+          mkdir -p assets && cd assets
+          gh release download "${{ needs.prepare.outputs.tag }}" --repo "${{ github.repository }}"
+          rm -f SHA256SUMS SHA256SUMS.asc *.spdx.json
+          ls -l
+      - name: SHA256SUMS, signed with the release key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          cd assets
+          sha256sum $(ls | sort) > SHA256SUMS
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 --armor --detach-sign SHA256SUMS 3<<<"$GPG_PASSPHRASE"
+          gpg --verify SHA256SUMS.asc SHA256SUMS
+      - name: SBOM of the source tree (SPDX JSON)
+        uses: anchore/sbom-action@v0.24.2
+        with:
+          path: .
+          format: spdx-json
+          output-file: assets/adbcbridge-${{ needs.prepare.outputs.tag }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Build provenance for every asset
+        uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-path: assets/*
+      - name: Attach
+        run: |
+          gh release upload "${{ needs.prepare.outputs.tag }}" assets/SHA256SUMS assets/SHA256SUMS.asc assets/*.spdx.json --clobber
+
   finish:
     name: Publish the release (or delete the dry run)
-    needs: [prepare, linux, macos, windows, sdist, crate, nuget, maven]
+    needs: [prepare, linux, macos, windows, sdist, crate, nuget, maven, trust]
     if: always() && needs.prepare.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -261,7 +303,7 @@ jobs:
             gh release view "$TAG" --json assets -q '.assets[].name'
             gh release delete "$TAG" --yes   # a draft has no tag to clean up
             echo "dry run: draft release deleted"
-          elif [ "${{ needs.linux.result }}" = "success" ] && [ "${{ needs.macos.result }}" = "success" ] && [ "${{ needs.windows.result }}" = "success" ] && [ "${{ needs.sdist.result }}" = "success" ] && [ "${{ needs.crate.result }}" = "success" ] && [ "${{ needs.nuget.result }}" = "success" ] && [ "${{ needs.maven.result }}" = "success" ]; then
+          elif [ "${{ needs.linux.result }}" = "success" ] && [ "${{ needs.macos.result }}" = "success" ] && [ "${{ needs.windows.result }}" = "success" ] && [ "${{ needs.sdist.result }}" = "success" ] && [ "${{ needs.crate.result }}" = "success" ] && [ "${{ needs.nuget.result }}" = "success" ] && [ "${{ needs.maven.result }}" = "success" ] && [ "${{ needs.trust.result }}" = "success" ]; then
             gh release edit "$TAG" --draft=false
             gh release view "$TAG" --json assets -q '.assets[].name'
           else

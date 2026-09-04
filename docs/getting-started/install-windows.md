@@ -60,6 +60,10 @@ is kept on Windows too (the build sets it deliberately, so the file is
 The Windows release asset is `adbcbridge-<tag>-win-x64.tar.gz`, containing
 `win-x64/libadbc_driver_odbc.dll`, built for 64-bit x86 with MSVC.
 
+The release page also carries `SHA256SUMS`; `Get-FileHash adbcbridge-v0.1.0-win-x64.tar.gz -Algorithm SHA256`
+in PowerShell gives the value to compare. [Security](../community/security.md#verifying-a-download)
+covers the signature, provenance and SBOM that releases after v0.1.0 add.
+
 ### From the Python wheel
 
 The Windows wheel bundles the DLL. Install it, plus the ADBC client:
