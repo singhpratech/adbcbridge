@@ -45,8 +45,8 @@ you get native speed from the same install.
   workload — types, NULLs, Unicode in parameters and in statement text, bulk ingest,
   batched reads, catalog, error mapping — against a real server or file; every cell that
   is not a pass names its reason. [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
-- **Five languages × the 46 databases of the language matrix on one binary** — Python, Rust, C#, Java and Go,
-  229 of 230 cells on Linux, 191 on macOS, 219 of 230 on Windows, every empty cell
+- **Five languages × 53 databases on one binary** — Python, Rust, C#, Java and Go,
+  261 of 265 cells on Linux, 215 of 225 on macOS, 219 of 240 on Windows, every empty cell
   explained. [`bench/LANGUAGE_BENCHMARKS.md`](bench/LANGUAGE_BENCHMARKS.md)
 - **1.2–1.5× the native PostgreSQL ADBC driver** on a 1,000,000-row read split over eight
   connections — on a quiet host; 0.97× on a busy one, 0.60× on an M4 Max. Bulk ingest does
