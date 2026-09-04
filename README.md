@@ -30,7 +30,7 @@ Python / R / Go / Rust / Java / C#
  Snowflake · Redshift · SQLite · anything with an ODBC driver
 ```
 
-*(the names above are what ODBC reaches; the 46 actually verified are in
+*(the names above are what ODBC reaches; the 53 actually verified are in
 [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md))*
 
 Native ADBC drivers exist for a handful of databases. The other few hundred ship an ODBC
@@ -41,11 +41,11 @@ you get native speed from the same install.
 
 ## Measured, not claimed
 
-- **46 databases on Linux, 41 on macOS (Apple Silicon), 45 on Windows** pass one
+- **53 databases on Linux, 44 on macOS (Apple Silicon), 45 on Windows** pass one
   workload — types, NULLs, Unicode in parameters and in statement text, bulk ingest,
   batched reads, catalog, error mapping — against a real server or file; every cell that
   is not a pass names its reason. [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
-- **Five languages × 46 databases on one binary** — Python, Rust, C#, Java and Go,
+- **Five languages × the 46 databases of the language matrix on one binary** — Python, Rust, C#, Java and Go,
   229 of 230 cells on Linux, 191 on macOS, 219 of 230 on Windows, every empty cell
   explained. [`bench/LANGUAGE_BENCHMARKS.md`](bench/LANGUAGE_BENCHMARKS.md)
 - **1.2–1.5× the native PostgreSQL ADBC driver** on a 1,000,000-row read split over eight
@@ -206,13 +206,13 @@ Everything below except the benchmark index lives under [`docs/`](docs/index.md)
 [Connection keywords set for you](docs/how-it-works/connection-keywords.md)
 
 **Reference** — [Options and environment variables](docs/reference/options.md) ·
-[Connection strings, all 46 databases](docs/reference/connection-strings.md) ·
+[Connection strings, per entry](docs/reference/connection-strings.md) ·
 [Type mapping](docs/reference/types.md) · [Driver quirks and why](docs/reference/quirks.md) ·
 [Build, install and the driver manifest](docs/reference/install.md) ·
 [Building from source and testing](docs/reference/building.md) ·
 [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-**Project** — [Compatibility, 46 × 3](docs/COMPATIBILITY.md) ·
+**Project** — [Compatibility, 53 databases × 3 operating systems](docs/COMPATIBILITY.md) ·
 [Benchmarks, by OS](bench/README.md) · [Upstream](docs/UPSTREAM.md) ·
 [Roadmap](docs/ROADMAP.md) · [FAQ](docs/community/faq.md) ·
 [Contributing](docs/community/contributing.md)
@@ -239,7 +239,7 @@ Everything below except the benchmark index lives under [`docs/`](docs/index.md)
 - [Native delegation](docs/how-it-works/delegation.md): a connection string that names a
   database with a native ADBC driver (PostgreSQL, SQLite, DuckDB, Snowflake, BigQuery,
   Flight SQL) is handed to that driver, when it is installed.
-- Every ODBC driver quirk that the 46 databases needed is detected from the driver's own
+- Every ODBC driver quirk that the 53 databases needed is detected from the driver's own
   name and handled — [driver quirks](docs/reference/quirks.md).
 - Windows: the prefetch pipeline and parallel ingest are compiled out until a Win32 thread
   shim lands — [roadmap](docs/ROADMAP.md).
@@ -282,7 +282,7 @@ drivers, the Win32 thread shim; then a JDBC bridge on the same model —
 
 ## Upstream: giving back
 
-Running 46 databases through one driver on three operating systems finds defects that
+Running 53 databases through one driver, 46 of them on three operating systems, finds defects that
 belong to other projects. They are reported with a reproduction that needs no adbcBridge
 in the stack — [lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239)
 (the driver manager aborts on the first SQL error from a 4-byte-`SQLWCHAR` driver; the

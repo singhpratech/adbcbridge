@@ -289,3 +289,26 @@ too, on 2.3.12 and 2.3.14): [lurcher/unixODBC#239](https://github.com/lurcher/un
 Build the bridge against iODBC and use those drivers through it (the recipe two sections up):
 Flight SQL, InfluxDB 3 and Dremio then pass the compat workload. Or keep unixODBC and never let a
 statement fail — which is not a workaround anyone should ship.
+
+## PostgreSQL: `HYC00 Unrecognized C_parameter type in copy_statement_with_parameters`
+
+### What you see
+
+A multi-row `executemany` (or `adbc_ingest`) through psqlodbc fails with
+`NOT_IMPLEMENTED: [ODBC] SQLExecute failed — [HYC00] (10) Unrecognized C_parameter type in
+copy_statement_with_parameters`, while single statements and plain reads work. pyodbc through
+the same DSN fails the same way on an `executemany` (`HYC00`) and with `07006 Received an
+unsupported type from Postgres (14)` on a fetch.
+
+### What is actually happening
+
+`make install` of psqlodbc installs two libraries: `psqlodbca.so`, the ANSI build, and
+`psqlodbcw.so`, the Unicode build. The ANSI build exports no `SQL*W` entry points and has no
+`SQL_C_WCHAR` case in its parameter-copy path, so any bound wide parameter — which is how
+adbcBridge sends text — is refused. Distro packages on Linux ship both files too, and a DSN or
+`Driver=` can point at either.
+
+### What works
+
+Point `Driver=` (or the DSN's `Driver` line) at `psqlodbcw.so`. Every psqlodbc row in
+[COMPATIBILITY.md](COMPATIBILITY.md) was measured through the Unicode build.
