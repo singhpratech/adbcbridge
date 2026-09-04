@@ -197,8 +197,20 @@ jobs:
           SQLITE_ODBC_DRIVER: /usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
           ADBC_ODBC_DRIVER: ${{ github.workspace }}/build/libadbc_driver_odbc.so
         run: |
-          mvn -B -q -f java/pom.xml test 2>&1 | tee mvn-test.log
-          grep -E 'Tests run: [1-9][0-9]*, Failures: 0, Errors: 0, Skipped: 0' mvn-test.log >/dev/null || { echo "::error::Java tests did not all run and pass"; grep -E 'Tests run:' mvn-test.log || true; exit 1; }
+          mvn -B -q -f java/pom.xml test
+          # -q hides Surefire's summary; the XML reports carry the counts regardless.
+          python3 - <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+          files = glob.glob("java/target/surefire-reports/TEST-*.xml")
+          tests = failures = errors = skipped = 0
+          for f in files:
+              r = ET.parse(f).getroot()
+              tests += int(r.get("tests", 0)); failures += int(r.get("failures", 0))
+              errors += int(r.get("errors", 0)); skipped += int(r.get("skipped", 0))
+          print(f"surefire: {tests} tests, {failures} failures, {errors} errors, {skipped} skipped, {len(files)} report(s)")
+          if tests == 0 or failures or errors or skipped:
+              print("::error::Java tests did not all run and pass"); sys.exit(1)
+          PY
 
       # Check that the installed manifest really lets the driver manager find
       # the driver by name.  Both install flavours are covered: the prefix
