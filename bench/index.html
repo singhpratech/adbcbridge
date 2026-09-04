@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>adbcBridge Bench Matrix</title>
-<meta name="description" content="The compatibility matrix behind adbcBridge: 46 databases run through one workload on Linux, macOS and Windows, with the ODBC driver, version and result for every cell.">
+<meta name="description" content="The compatibility matrix behind adbcBridge: 53 databases run through one workload on Linux, macOS and Windows, with the ODBC driver, version and result for every cell.">
 <link rel="canonical" href="https://adbcbridge.org/bench/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="adbcBridge">
 <meta property="og:title" content="adbcBridge Bench Matrix">
-<meta property="og:description" content="The compatibility matrix behind adbcBridge: 46 databases run through one workload on Linux, macOS and Windows, with the ODBC driver, version and result for every cell.">
+<meta property="og:description" content="The compatibility matrix behind adbcBridge: 53 databases run through one workload on Linux, macOS and Windows, with the ODBC driver, version and result for every cell.">
 <meta property="og:url" content="https://adbcbridge.org/bench/">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48">
@@ -88,8 +88,8 @@ footer{color:var(--muted);font-size:.8rem;margin-top:40px;border-top:1px solid v
 <p class="sub">A plain-C ADBC driver that turns any ODBC driver into an Arrow-native one. The Linux figures on this page were measured on one Linux box (Linux Mint 22.3, Core i9-13900HK, 31 GiB) on 2026-08-23 and 24 with servers in local Docker, build <code>main@db03415</code>; the macOS and Windows campaigns that followed are summarised in the per-platform line below and detailed in their own files.</p>
 
 <div class="kpis">
-  <div class="kpi"><b>46</b><span>databases verified by the full compat workload</span></div>
-  <div class="kpi"><b>18</b><span>distinct ODBC drivers exercised, three of them built from source</span></div>
+  <div class="kpi"><b>53</b><span>databases verified by the full compat workload</span></div>
+  <div class="kpi"><b>24</b><span>distinct ODBC drivers exercised, three of them built from source</span></div>
   <div class="kpi"><b>up to 734×</b><span>faster bulk ingest after the write-path rework (IBM Db2, 600 → 440,492 rows/s)</span></div>
   <div class="kpi"><b>1.2–1.5×</b><span>faster than the <b>native</b> PostgreSQL ADBC driver on fetch, on the quiet Linux reference host — <a href="#native">0.97× busy, 0.60× on an M4 Max, and why</a></span></div>
   <div class="kpi"><b>46 × 5</b><span>databases × languages measured on one binary — <a href="#languages">the full grid</a>; 229 of 230 language × database cells carry a number; the one without (C# on Azure SQL Edge) is explained</span></div>
@@ -191,9 +191,9 @@ footer{color:var(--muted);font-size:.8rem;margin-top:40px;border-top:1px solid v
 <h2>What "any ODBC source" means, measured</h2>
 <div class="grid2">
 <div class="caveat"><b>Reachable ≠ verified.</b> The ODBC ecosystem spans a few hundred sources. The 46 above are the ones that passed the full workload against a real server or file. All but a few of the drivers needed at least one workaround, so an untested driver should be expected to work on the generic path <i>and</i> to have a quirk waiting.</div>
-<div class="caveat"><b>Drivers are the real unit.</b> 46 databases ride on 18 drivers: psqlodbc fronts 14 of them and MySQL Connector/ODBC 11. Three of those drivers were built from source for Linux here — Apache Ignite's and OpenSearch's have no Linux release, and OpenSearch's POSIX branch had never been compiled at all and needed source fixes before it built; TDengine's own driver builds from its repository. That's useful — H2, QuestDB, CrateDB and Databend all broke psqlodbc/myodbc in ways plain PostgreSQL/MySQL never did — but it's what the number means.</div>
+<div class="caveat"><b>Drivers are the real unit.</b> 53 databases ride on 24 drivers: psqlodbc fronts 14 of them and MySQL Connector/ODBC 12. Three of those drivers were built from source for Linux here — Apache Ignite's and OpenSearch's have no Linux release, and OpenSearch's POSIX branch had never been compiled at all and needed source fixes before it built; TDengine's own driver builds from its repository. That's useful — H2, QuestDB, CrateDB and Databend all broke psqlodbc/myodbc in ways plain PostgreSQL/MySQL never did — but it's what the number means.</div>
 <div class="caveat"><b>Reached only outside ODBC:</b> H2 and GreptimeDB's PostgreSQL wire (psqlodbc's connect handshake sends <code>SHOW</code>/<code>SET</code> GUCs neither implements — GreptimeDB is in the table via its MySQL wire instead), libSQL server (dropped its PG-wire listener), Elasticsearch and the Microsoft Text/Excel drivers (Windows-only).</div>
-<div class="caveat"><b>Need an account to verify: Snowflake, BigQuery, Redshift/Athena, Databricks, Synapse (the same msodbcsql as SQL Server), Cassandra/DataStax, Hive/Impala/Spark, Trino, SAP HANA, Teradata — free or registration-walled drivers, hosted-only or licence-bound servers; expected to work on the generic path, not verified. Queued: Exasol (needs a privileged container and 4 GB).</div>
+<div class="caveat"><b>Need an account to verify: Snowflake, BigQuery, Redshift/Athena, Databricks, Synapse (the same msodbcsql as SQL Server), Cassandra/DataStax, Hive/Impala/Spark, Trino, Teradata — free or registration-walled drivers, hosted-only or licence-bound servers; expected to work on the generic path, not verified. SAP HANA Express and Exasol, once on this list, are verified since 2026-09-03.</div>
 </div>
 
 <h2>Driver fixes found along the way</h2>
