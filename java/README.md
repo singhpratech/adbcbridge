@@ -140,4 +140,6 @@ from `odbcinst.ini`), runs `SELECT 1`, and reads the Arrow batch. Set
 the bundle to the Maven Central Portal with `central-publishing-maven-plugin`.
 The profile is inert unless activated and needs a GPG key on the machine plus a
 `<server id="central">` with a Portal token in `settings.xml`; nothing is
-published automatically (`autoPublish` is off).
+published automatically unless `-Dcentral.autoPublish=true`. Releases go through
+the **Publish to Maven Central** workflow instead; the procedure, the secrets it
+needs and the one-time namespace and key setup are in [`PUBLISHING.md`](PUBLISHING.md).
