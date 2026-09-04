@@ -150,6 +150,68 @@ jobs:
           go test -v ./... 2>&1 | tee go-test.log
           grep -q -- '--- PASS' go-test.log || { echo "::error::no Go test ran (all skipped?)"; exit 1; }
 
+      # The Rust crate, the .NET package and the Java library each carry a test
+      # suite that opens SQLite through the library built above; every suite
+      # skips itself without the two variables, so each step checks that tests
+      # really ran.
+      - name: Set up Rust (Linux)
+        if: runner.os == 'Linux'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test the Rust crate (Linux)
+        if: runner.os == 'Linux'
+        working-directory: rust
+        env:
+          SQLITE_ODBC_DRIVER: /usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
+          ADBC_ODBC_DRIVER: ${{ github.workspace }}/build/libadbc_driver_odbc.so
+        run: |
+          cargo test 2>&1 | tee cargo-test.log
+          grep -E 'test result: ok\. [1-9][0-9]* passed' cargo-test.log >/dev/null || { echo "::error::no Rust test passed (all skipped or filtered?)"; exit 1; }
+
+      - name: Set up .NET (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Test the .NET package (Linux)
+        if: runner.os == 'Linux'
+        env:
+          SQLITE_ODBC_DRIVER: /usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
+          ADBC_ODBC_DRIVER: ${{ github.workspace }}/build/libadbc_driver_odbc.so
+        run: |
+          dotnet test csharp/AdbcBridge.Tests -c Release --nologo 2>&1 | tee dotnet-test.log
+          grep -E 'Passed! .*Skipped: +0,' dotnet-test.log >/dev/null || { echo "::error::.NET tests did not all pass with zero skipped"; exit 1; }
+
+      - name: Set up Java (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Test the Java library (Linux)
+        if: runner.os == 'Linux'
+        env:
+          SQLITE_ODBC_DRIVER: /usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
+          ADBC_ODBC_DRIVER: ${{ github.workspace }}/build/libadbc_driver_odbc.so
+        run: |
+          mvn -B -q -f java/pom.xml test
+          # -q hides Surefire's summary; the XML reports carry the counts regardless.
+          python3 - <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+          files = glob.glob("java/target/surefire-reports/TEST-*.xml")
+          tests = failures = errors = skipped = 0
+          for f in files:
+              r = ET.parse(f).getroot()
+              tests += int(r.get("tests", 0)); failures += int(r.get("failures", 0))
+              errors += int(r.get("errors", 0)); skipped += int(r.get("skipped", 0))
+          print(f"surefire: {tests} tests, {failures} failures, {errors} errors, {skipped} skipped, {len(files)} report(s)")
+          if tests == 0 or failures or errors or skipped:
+              print("::error::Java tests did not all run and pass"); sys.exit(1)
+          PY
+
       # Check that the installed manifest really lets the driver manager find
       # the driver by name.  Both install flavours are covered: the prefix
       # given at configure time (dist, installed above) and a prefix given at

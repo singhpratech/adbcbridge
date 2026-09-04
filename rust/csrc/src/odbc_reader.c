@@ -416,7 +416,9 @@ static inline bool TruncationRepairable(const struct OdbcReaderOptions* opts) {
 // TEXT column, MySQL says 16,777,215, SQL Server says 2,147,483,647 for NVARCHAR(MAX).
 // Binding that literally is out of the question -- the rowset alone would be hundreds of
 // megabytes, and a driver that null-fills a bound buffer writes every byte of it on every
-// row (sqliteodbc reads a 100,000-row table 4x slower bound at 256 KiB than at 4 KiB) --
+// row (sqliteodbc null-fills a bound SQL_C_CHAR buffer to its full width on every row:
+// a 100,000-row table reads 20x slower bound at 256 KiB than at 4 KiB, 0.52 s against
+// 0.026 s, while bound as SQL_C_WCHAR the same driver writes only the value) --
 // so such a column is bound at `long_bind_bytes` instead and the few values that overflow
 // that are re-read in full.  Re-reading needs a driver that can go back to a row (see
 // TruncationRepairable); without one the column stays unbound, which costs the whole
@@ -427,6 +429,19 @@ static inline bool TruncationRepairable(const struct OdbcReaderOptions* opts) {
 // column falls through to the reader's text default, where the driver hands the bytes
 // back hex-encoded ("0102" for b"\x01\x02") instead of as bytes.
 #define ODBC_SQL_BLOB_IBM (-98)
+// Altibase's driver does the same, for four types at once: its byte types are numbered
+// well outside the ODBC range (BYTE 20001, NIBBLE 20002, VARBYTE 20003, VARBIT -100) and
+// its large-object types have codes of their own too (BLOB 30, CLOB 40).  Left
+// unrecognised, BYTE, VARBYTE and BLOB fall through to the reader's text default and the
+// driver hex-encodes them there ("0102" for b"\x01\x02"), exactly as the IBM CLI
+// driver's SQL_BLOB does; read as SQL_C_BINARY all three hand back the value's own bytes.
+// NIBBLE and VARBIT are deliberately not here: read as SQL_C_BINARY they carry Altibase's
+// internal framing rather than the value (NIBBLE'01' comes back b"\x02\x01", a length
+// byte first, and VARBIT'0101' b"\x04\x00\x00\x00P"), so for those the hex text the
+// default path produces is the more faithful answer.
+#define ODBC_SQL_BLOB_ALTIBASE (30)
+#define ODBC_SQL_BYTE_ALTIBASE (20001)
+#define ODBC_SQL_VARBYTE_ALTIBASE (20003)
 
 static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions* opts) {
   // SQL_LONGVARCHAR / SQL_WLONGVARCHAR / SQL_LONGVARBINARY name a type with no length at
@@ -435,7 +450,8 @@ static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions*
   const bool no_declared_length = c->sql_type == SQL_LONGVARCHAR ||
                                   c->sql_type == SQL_WLONGVARCHAR ||
                                   c->sql_type == SQL_LONGVARBINARY ||
-                                  c->sql_type == ODBC_SQL_BLOB_IBM;
+                                  c->sql_type == ODBC_SQL_BLOB_IBM ||
+                                  c->sql_type == ODBC_SQL_BLOB_ALTIBASE;
   const bool repairable = TruncationRepairable(opts) && opts->long_bind_bytes > 0;
   if (c->column_size == 0) {
     // No width to bind against.  For one of the no-length types that is not a different
@@ -447,8 +463,10 @@ static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions*
     // 500,000-row read of (int4, text, varchar, numeric, bool, timestamp, bytea) out of
     // PostgreSQL goes from 0.633 s to 0.530 s that way, and (int4, bytea) from 0.182 s
     // to 0.139 s.  A type that does have a declared
-    // length and still comes back as size 0 (MatrixOne reports octet length 0 for
-    // int/numeric/timestamp) is a driver saying nothing useful at all, and stays unbound.
+    // length and still comes back as size 0 is a driver saying nothing useful at all,
+    // and stays unbound.  (MatrixOne's zero widths are all on the no-length types: TEXT
+    // and BLOB describe with column size 0 and octet length 0; its INT, DECIMAL and
+    // DATETIME columns describe with usable sizes.)
     if (!no_declared_length || !repairable) {
       c->bound = false;
       return;
@@ -458,7 +476,8 @@ static void ApplyBindWidth(struct OdbcColumn* c, const struct OdbcReaderOptions*
     return;
   }
   // A guess can be too small as well as too large: MatrixOne describes a TEXT column as
-  // five characters (and octet length 0) however long its values are, so binding what it
+  // one third of its widest value's byte length (5 for 16-byte strings, 0 for an empty
+  // result set; octet length 0 either way), so binding what it
   // says would truncate -- and re-read -- every single row, which is slower than not
   // binding at all (a 100,000-row read runs at 3k rows/s that way, 900k bound wide).
   // Since the width of such a column is a guess either way, bind it at the same
@@ -570,6 +589,12 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_NUMERIC:
       c->precision = (int32_t)c->column_size;
       c->scale = (int32_t)c->decimal_digits;
+      // A driver that misdescribes every decimal column reports a fixed, correct pair
+      // here instead; see decimal_fixed_precision in odbc_internal.h (Kinetica).
+      if (opts->decimal_fixed_precision > 0) {
+        c->precision = opts->decimal_fixed_precision;
+        c->scale = opts->decimal_fixed_scale;
+      }
       if (!opts->decimal_as_string && c->precision > 0 && c->precision <= 38 &&
           c->scale >= 0 && c->scale <= c->precision) {
         c->kind = FETCH_DECIMAL;
@@ -660,6 +685,9 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_VARBINARY:
     case SQL_LONGVARBINARY:
     case ODBC_SQL_BLOB_IBM:
+    case ODBC_SQL_BLOB_ALTIBASE:
+    case ODBC_SQL_BYTE_ALTIBASE:
+    case ODBC_SQL_VARBYTE_ALTIBASE:
       c->kind = FETCH_BINARY; c->c_type = SQL_C_BINARY;
       c->elem_size = (SQLLEN)c->column_size;
       ApplyBindWidth(c, opts);

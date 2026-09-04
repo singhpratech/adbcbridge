@@ -249,6 +249,17 @@ struct OdbcReaderOptions {
   // fetches min(batch_size, rowset_bytes / row_width) rows at a time instead.
   int64_t rowset_bytes;
   bool decimal_as_string;
+  // Driver quirk: the precision and scale SQLDescribeCol reports for a DECIMAL/NUMERIC
+  // column are not the column's, so use these instead.  Set only for a driver whose
+  // server has exactly one decimal type, since that is the only case where a fixed pair
+  // can be right: Kinetica's is DECIMAL(18, 4) -- every DECIMAL(p, s) in DDL is stored
+  // as that one -- while its driver describes such a column as precision 38 scale 0
+  // (and SQLColumns answers 18, 18).  Believing scale 0 turns the "12.3450" the driver
+  // hands over into a decimal128(38, 0) holding 12: silent truncation of every
+  // fractional digit, which is why this is corrected rather than tolerated.
+  // Zero (the default) leaves the described values alone.
+  int32_t decimal_fixed_precision;
+  int32_t decimal_fixed_scale;
   // Driver quirk: some drivers (DuckDB) write a whole internal chunk into bound
   // buffers regardless of SQL_ATTR_ROW_ARRAY_SIZE; allocate at least this many rows.
   int64_t min_buffer_rows;
@@ -300,6 +311,14 @@ struct OdbcReaderOptions {
   bool null_param_as_varchar;
   // Driver quirk: DDL type wrapper for nullable columns, e.g. "Nullable(%s)" (ClickHouse).
   const char* nullable_type_format;
+  // Server quirk: how to spell "return no rows" in the zero-row SELECT that
+  // GetTableSchema -- and GetObjects' describe fallback -- reads a table's columns off.
+  // NULL means the default, "WHERE 1=0".  Kinetica's planner constant-folds a provably
+  // false predicate and answers the query from its empty pseudo-table SYSTEM.ITER, which
+  // cannot carry a BYTES column: "Invalid attribute: BYTES(null) for table: SYSTEM.ITER
+  // ... Unknown function: BYTES", so GetTableSchema fails on any table holding binary.
+  // "LIMIT 0" is not folded that way and describes the real table.
+  const char* zero_row_suffix;
   // Driver quirk: the names SQLGetTypeInfo reports are not names the server accepts in
   // DDL, so bulk ingest spells its CREATE TABLE with portable SQL type names (BIGINT,
   // DOUBLE, BOOLEAN, ...) instead.  psqlodbc drives every PostgreSQL-wire
@@ -358,6 +377,29 @@ struct OdbcReaderOptions {
   // servers accept and coerce -- the same trick the sub-second TIME path in
   // SlotFromArrowValue() already uses for every driver.
   bool temporal_binary_param_as_varchar;
+  // Driver quirk: bind binary parameters as SQL_VARCHAR text -- the binary half of
+  // temporal_binary_param_as_varchar above, without touching dates and timestamps.
+  //
+  // Exasol has no binary column type at all (BLOB is 0A000 "Feature not supported: data
+  // type BLOB", and VARBINARY/BINARY/RAW are not words its parser knows), and its ODBC
+  // driver refuses the C type outright: SQLBindParameter with SQL_C_BINARY answers
+  // HY003, "Invalid application buffer type: SQL_C_BINARY", whatever the target column
+  // is.  So an Arrow binary column cannot reach that server by the ordinary route at
+  // all.  Sent as SQL_C_CHAR into a VARCHAR the same bytes store and read back byte for
+  // byte, which is what a server with no binary type can offer.  Its dates, timestamps
+  // and VARBINARY-less type system are otherwise fine, so nothing else changes.
+  bool binary_param_as_varchar;
+  // Driver quirk: a NULL parameter whose SQL type is SQL_DECIMAL or SQL_NUMERIC cannot be
+  // bound with SQL_C_DEFAULT; name SQL_C_CHAR for it instead.  See NullParamCType.
+  //
+  // Exasol's driver answers SQLExecute with SI002, "C-Type not supported", followed by
+  // HY010, "Error creating prepared statement header", for exactly that pair -- so the
+  // whole statement fails, not just the parameter.  It matters more here than the name
+  // suggests: Exasol has no narrow integer type, INT/INTEGER/BIGINT are all aliases of
+  // DECIMAL, and SQLDescribeParam (which the NULL path asks first, and believes) reports
+  // SQL_DECIMAL for every one of them.  So a NULL in any numeric column takes this
+  // route.  Binding the same NULL as SQL_C_CHAR with a NULL data pointer is accepted.
+  bool null_decimal_param_as_char;
   // Driver quirk: the ODBC driver was compiled with a 32-bit SQLLEN/SQLULEN while the
   // driver manager and this driver use 64-bit ones.  IBM's freely downloadable Db2
   // "clidriver" ships exactly such a libdb2.so on 64-bit Linux (the 64-bit-SQLLEN build
@@ -419,6 +461,21 @@ struct OdbcReaderOptions {
   // the compat workload fails wide and passes narrow).  Only the calls that carry
   // caller text take this route; the bridge's own ASCII probes stay wide.
   bool narrow_sql;
+  // Driver quirk, the mirror image of narrow_sql and not Windows-only: send statement
+  // text through the W entry points (SQLExecDirectW / SQLPrepareW) everywhere, because
+  // this driver decodes narrow statement text as Latin-1 rather than UTF-8.
+  //
+  // Set for SAP HANA's libodbcHDB.so.  unixODBC hands a narrow `char*` to the driver as
+  // the bytes it is, so on Linux every other driver here reads the bridge's UTF-8
+  // statement text correctly -- but HANA's client takes each byte for one Latin-1
+  // character and re-encodes it, and no connection property (CHAR_AS_UTF8, CHAR_SET,
+  // charset) or locale (LC_ALL=C, en_US.UTF-8, C.UTF-8) changes it.  The UTF-8 bytes of
+  // 'héllo 🚀' (68 c3a9 6c6c6f 20 f09f9a80) are stored as the eleven Latin-1 characters
+  // those bytes spell, so a literal in statement text lands double-encoded and does not
+  // match the same value sent as a bound parameter -- the exact corruption the Windows
+  // driver manager causes for every driver, here caused by one driver on every platform.
+  // Through SQLExecDirectW the same statement stores 'héllo 🚀' exactly.
+  bool wide_sql;
   // Driver quirk: never call SQLDescribeParam (DuckDB aborts the process on it).
   bool no_describe_param;
   // Driver quirk: the driver describes a column as SQL_TYPE_TIMESTAMP but has no
@@ -436,7 +493,11 @@ struct OdbcReaderOptions {
   // Driver quirk: never call SQLColumns -- nothing usable comes back from it, and not in
   // a way the return code reveals.  The Arrow Flight SQL ODBC driver returns SQL_SUCCESS
   // from SQLColumns and describes all 18 result columns, then segfaults inside the first
-  // SQLFetch on that cursor, with no bound columns at all.  psqlodbc against ArcadeDB
+  // SQLFetch on that cursor -- with no bound columns at all -- whenever the request spans
+  // a table whose Flight SQL schema has no per-field key-value metadata: every table
+  // tried against sqlflite, and InfluxDB 3's information_schema and most system tables
+  // (its iox tables fetch cleanly, and Dremio 26 does not crash at all).  Nothing in the
+  // return code separates the cases.  psqlodbc against ArcadeDB
   // returns SQL_SUCCESS and an empty result set, because the pg_catalog query it builds
   // is one ArcadeDB's SQL parser rejects -- so every table would look like it has no
   // columns.  MySQL Connector/ODBC against the MongoDB BI Connector segfaults inside
@@ -485,10 +546,11 @@ struct OdbcReaderOptions {
   const char* multirow_union_from;
   // Driver quirk: keep ODBC parameter arrays ahead of multi-row INSERT batching for bulk
   // ingest.  Multi-row INSERT is the default because it was faster on every server
-  // measured (see ExecuteRows), including most of the ones whose arrays work.  Two
+  // measured (see ExecuteRows), including most of the ones whose arrays work.  Three
   // drivers are the exception and are all that set this: MariaDB Connector/ODBC, which
-  // turns a bound array into one COM_STMT_BULK_EXECUTE, and Vertica's own client driver,
-  // which turns one into a native bulk load.
+  // turns a bound array into one COM_STMT_BULK_EXECUTE, Vertica's own client driver,
+  // which turns one into a native bulk load, and Altibase's, which applies the array in
+  // a single round trip (30k rows/s multi-row against ~800k as an array).
   bool prefer_param_arrays;
   // Server quirk: bulk ingest may send a whole batch as one array parameter per column
   // and let the server expand it --
@@ -532,6 +594,19 @@ struct OdbcReaderOptions {
   // NVARCHAR(MAX), and a 100,000-row read 859,215 rows/s against 3,172,747 (medians of
   // 5, interleaved).
   const char* ddl_string_type_name;
+  // Driver quirk: the literal DDL type to give an Arrow timestamp column, for a driver
+  // whose SQLGetTypeInfo(SQL_TYPE_TIMESTAMP) names a whole-second type in its first row
+  // -- the row generated ingest DDL reads -- and its sub-second type only further down.
+  //
+  // Set for SAP HANA's libodbcHDB.so, whose first row is SECONDDATE (COLUMN_SIZE 19,
+  // MAXIMUM_SCALE 0, no CREATE_PARAMS) while TIMESTAMP, which holds 7 fractional
+  // digits, is the second and third.  Nothing in the ODBC metadata distinguishes them:
+  // SECONDDATE takes no CREATE_PARAMS, so fractional_time_type_format's route -- ask
+  // for a scale -- has nothing to ask, and HANA's TIMESTAMP takes no precision argument
+  // either ("TIMESTAMP(6)" is 42000/257, "incorrect syntax near ("), so the replacement
+  // is a fixed name rather than a format.  Without it an Arrow timestamp[us] column
+  // became SECONDDATE and every microsecond was silently dropped on ingest.
+  const char* ddl_timestamp_type_name;
   // SQL_MAX_STATEMENT_LEN, in bytes; 0 when the driver will not say.
   int64_t max_statement_len;
   // Server quirk: a hard ceiling on the number of parameters one statement may carry.
@@ -707,8 +782,10 @@ SQLRETURN OdbcPrepareUtf8(SQLHSTMT hstmt, const char* sql);
 // OdbcReaderOptions::narrow_sql, and only means something on Windows (the narrow
 // calls are the only ones elsewhere).  Statement text that came from the caller goes
 // through these; the two-argument forms above are for the bridge's own ASCII probes.
-SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, bool narrow);
-SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, bool narrow);
+// Statement text from the caller, routed by this connection's narrow_sql / wide_sql
+// quirks; `opts` may be NULL, which means the platform default.
+SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, const struct OdbcReaderOptions* opts);
+SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, const struct OdbcReaderOptions* opts);
 SQLRETURN OdbcDescribeColUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* name, SQLSMALLINT name_cap,
                               SQLSMALLINT* name_len, SQLSMALLINT* type, SQLULEN* size,
                               SQLSMALLINT* digits, SQLSMALLINT* nullable);
