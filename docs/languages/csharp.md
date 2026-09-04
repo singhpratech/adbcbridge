@@ -12,7 +12,7 @@ library — `libadbc_driver_odbc.so` on Linux, `.dylib` on macOS,
 The `AdbcBridge` NuGet package is a thin .NET wrapper around that library. It
 does two things: it **finds** the shared library on the machine (or unpacks the
 copy shipped inside the package), and it **hands it to** `Apache.Arrow.Adbc`,
-the official Arrow ADBC binding for .NET. Everything after that — connections,
+the Apache Arrow ADBC binding for .NET. Everything after that — connections,
 statements, Arrow record batches — is the `Apache.Arrow.Adbc` API.
 
 This page assumes you are comfortable in C# but new to ODBC and ADBC.
@@ -119,7 +119,7 @@ page and ships inside the `.nupkg`.
 ### With only the upstream package
 
 The wrapper is a convenience, not a requirement. The driver is a plain C shared
-library, so the official binding alone can load it:
+library, so the Apache binding alone can load it:
 
 ```sh
 dotnet add package Apache.Arrow.Adbc --version 0.24.0

@@ -91,15 +91,22 @@ MySQL-wire warehouse matches `myodbc` and then a server probe narrows it further
 | `msodbcsql` | Microsoft SQL Server | `ddl_string_type_name="NVARCHAR(MAX)"` | Its `SQL_LONGVARCHAR` is the deprecated `TEXT`, which cannot be sorted, grouped, de-duplicated or compared |
 | `db2` + `SQL_DBMS_NAME` = `IDS…` | IBM Informix | `wchar_as_utf8`, `narrow_params`, `bool_param_as_int` | Gives up on a UTF-16 surrogate pair (-415); a `SQL_C_BIT` param breaks the DRDA stream |
 | `db2` + `SQL_DBMS_NAME` not `IDS…` | IBM Db2 | `ddl_string_as_max_varchar` | Its `SQL_LONGVARCHAR` is `LONG VARCHAR`, ~700× slower to bulk-insert than VARCHAR |
+| `altibase` | Altibase | `wchar_as_utf8`, `narrow_params`, `ddl_string_type_name="VARCHAR(32000)"`, `prefer_param_arrays` | Stores a `SQL_C_WCHAR` parameter as CESU-8 and hands those bytes back verbatim, while the narrow path round-trips; has no `SQL_LONGVARCHAR`, and reports CREATE_PARAMS "precision" for VARCHAR, so a generated column would be VARCHAR(1); a bound array ingests at 778–816k rows/s against 30k for the multi-row form |
+| `libodbchdb` | SAP HANA (Express) | `wide_sql`, `ddl_string_as_max_varchar`, `ddl_timestamp_type_name="TIMESTAMP"`, `prefer_param_arrays` | Decodes narrow statement text as Latin-1, so statement text goes through the W entry points; its `SQL_LONGVARCHAR` is CLOB, which HANA bars from `ORDER BY` and `SELECT DISTINCT`; `SQLGetTypeInfo(SQL_TYPE_TIMESTAMP)` names whole-second SECONDDATE first; HANA has no multi-row `VALUES` at all, so without arrays ingest is one execute per row (3,506 rows/s against 296,082) |
+| `kinetica` | Kinetica | `decimal_fixed_precision=18`, `decimal_fixed_scale=4`, `zero_row_suffix="LIMIT 0"` | Every `DECIMAL(p, s)` is stored as `DECIMAL(18, 4)` but described as precision 38 scale 0; its planner answers a provably false predicate from the empty pseudo-table `SYSTEM.ITER`, which cannot carry a BYTES column |
+| `iiodbcdriver` | Actian Ingres | `wchar_as_utf8`; `sqllen_32bit` (autodetected) | Reads a `SQL_C_WCHAR` parameter as UCS-2 and rejects a surrogate pair (5000B), while its narrow path is UTF-8; its `SQLLEN` is four bytes on 64-bit Linux |
+| `exaodbc` | Exasol | `binary_param_as_varchar`, `null_decimal_param_as_char`, `getdata_repair=false` | Exasol has no binary column type and the driver rejects `SQL_C_BINARY` outright (HY003); a NULL parameter described `SQL_DECIMAL` — which every Exasol numeric is — fails with SI002 unless bound as `SQL_C_CHAR`; `SQLGetData` answers `SQL_NO_DATA` on a clipped bound value, so a long column has to stay unbound |
+| `cwbodbc` + `SQL_DBMS_NAME` = `DB2/400…` | IBM Db2 for i (IBM i Access ODBC) | `ddl_string_type_name="VARCHAR(8000) CCSID 1208"` | Its `SQL_LONGVARCHAR` is CLOB, which cannot be array-bound for writing and has no width to bind for reading (8 rows/s each way against 1,070 and 1,636 as VARCHAR); the reported VARCHAR(32739) is refused in a table with three more columns and describes too wide to bind; CCSID 1208 keeps the column UTF-8 |
 | `myodbc` + 4-byte SQLWCHAR | MySQL Connector/ODBC on iODBC (macOS) | `wide_utf16_pairs`, `wchar_as_utf8` | Writes UTF-16 units into 4-byte slots but mangles wide params under `NO_SSPS`; its narrow path is clean UTF-8 |
 
 ### Autodetected `sqllen_32bit`
 
 Unless pinned by `adbc.odbc.sqllen_32bit`, the 32-bit-SQLLEN quirk is turned on
-when the driver name contains `db2` (but not `libdb2o`/`db2o.`) or `mdbtools`.
-IBM's freely downloadable Db2 CLI driver ships a 32-bit-`SQLLEN` `libdb2.so` even
-on 64-bit Linux; MDB Tools writes bound-column NULL indicators the same
-truncated way.
+when the driver name contains `db2` (but not `libdb2o`/`db2o.`), `mdbtools` or
+`iiodbcdriver`. IBM's freely downloadable Db2 CLI driver ships a 32-bit-`SQLLEN`
+`libdb2.so` even on 64-bit Linux; MDB Tools writes bound-column NULL indicators
+the same truncated way; and Ingres' own driver has a four-byte `SQLLEN` on
+64-bit Linux too, which read a NULL column back as the previous row's value.
 
 ### Windows final adjustment
 
@@ -134,11 +141,13 @@ Every field of `OdbcReaderOptions` that acts as a quirk, with its exact meaning.
 | `bigint_param_as_string` | bool | Send 64-bit integers as numeric text (Oracle, Virtuoso have no `SQL_C_SBIGINT`). |
 | `decimal_param_as_varchar` | bool | Bind decimals as `SQL_VARCHAR` text, not `SQL_DECIMAL` (DuckDB mis-scales). |
 | `null_param_as_varchar` | bool | Bind NULL parameters as a NULL VARCHAR whatever the type (clickhouse-odbc). |
+| `null_decimal_param_as_char` | bool | Bind a NULL parameter described `SQL_DECIMAL`/`SQL_NUMERIC` as `SQL_C_CHAR` rather than `SQL_C_DEFAULT` (Exasol fails the whole statement otherwise). |
+| `binary_param_as_varchar` | bool | Bind binary parameters as `SQL_C_CHAR` into a VARCHAR (Exasol has no binary column type and rejects `SQL_C_BINARY`). |
 | `temporal_binary_param_as_varchar` | bool | Bind date/timestamp/binary parameters as VARCHAR text so the server parses the literal (MySQL Connector/ODBC fronting a non-MySQL server). |
 | `timestamp_as_text` | bool | The driver has no `TIMESTAMP_STRUCT` conversion; read timestamp columns as text and bind timestamp parameters as text (TDengine). |
 | `no_param_arrays` | bool | Column-wise parameter arrays are accepted but only partly executed; bind one execute per row instead. |
 | `no_timestamp_param_arrays` | bool | As `no_param_arrays`, but only for a batch that binds a timestamp (Spanner). |
-| `prefer_param_arrays` | bool | Keep ODBC parameter arrays ahead of multi-row INSERT for ingest (MariaDB Connector/ODBC, Vertica). |
+| `prefer_param_arrays` | bool | Keep ODBC parameter arrays ahead of multi-row INSERT for ingest (MariaDB Connector/ODBC before 3.2, Vertica, Altibase, SAP HANA). |
 | `param_array_row_counts` | int | `SQL_PARAM_ARRAY_ROW_COUNTS`: `SQL_PARC_BATCH` (default, one row count per set) or `SQL_PARC_NO_BATCH`. |
 
 ### Unicode and statement text
@@ -150,6 +159,7 @@ Every field of `OdbcReaderOptions` that acts as a quirk, with its exact meaning.
 | `narrow_params` | bool | Bind string parameters as `SQL_C_CHAR` (UTF-8) even where the wide path is default, including on Windows (Apache Ignite, Informix). |
 | `text_as_binary` | bool | **(Windows)** Read character columns as `SQL_C_BINARY` and take the bytes as UTF-8 (Arrow Flight SQL driver). |
 | `narrow_sql` | bool | **(Windows)** Send caller statement text through the narrow `SQLExecDirect`/`SQLPrepare` as UTF-8 (Apache Ignite). |
+| `wide_sql` | bool | Send caller statement text through the wide `SQLExecDirectW`/`SQLPrepareW`, for a driver that decodes narrow text as Latin-1 (SAP HANA). |
 | `ind_stride_32bit` | bool | **(Windows)** Read side only: the driver strides the bound-column indicator array by 4 bytes per row on a block cursor (Virtuoso on Win64). |
 | `sqllen_32bit` | bool | The driver was compiled with a 32-bit `SQLLEN`/`SQLULEN` while the driver manager uses 64-bit (IBM Db2 CLI, MDB Tools). Every `SQLLEN` the driver writes is read at 4-byte width. |
 | `sqllen_32bit_forced` | bool | `sqllen_32bit` was pinned by option; suppresses autodetection. |
@@ -163,7 +173,8 @@ Every field of `OdbcReaderOptions` that acts as a quirk, with its exact meaning.
 | `ddl_extra_column` | string | An extra column the server fills in itself, appended to ingest DDL (GreptimeDB time index, YDB / Spanner surrogate primary key). |
 | `ddl_table_options` | string | A trailing table-options clause every ingest CREATE TABLE needs (Doris distribution, GreptimeDB append mode). |
 | `ddl_string_as_max_varchar` | bool | Spell an unbounded Arrow string as the widest VARCHAR, not `SQL_LONGVARCHAR` (Db2 `LONG VARCHAR`). |
-| `ddl_string_type_name` | string | A literal DDL type for an unbounded Arrow string (`NVARCHAR(MAX)` for SQL Server, `VARCHAR(8191)` for Firebird). |
+| `ddl_string_type_name` | string | A literal DDL type for an unbounded Arrow string (`NVARCHAR(MAX)` for SQL Server, `VARCHAR(8191)` for Firebird, `VARCHAR(32000)` for Altibase, `VARCHAR(8000) CCSID 1208` for Db2 for i). |
+| `ddl_timestamp_type_name` | string | A literal DDL type for an Arrow timestamp column, overriding what `SQLGetTypeInfo` names first (SAP HANA's `TIMESTAMP`, since it lists whole-second SECONDDATE first). |
 | `fractional_time_type_format` | string | DDL type for a sub-second TIME column, e.g. `"Time64(%d)"`, `"TIME(%d)"`. |
 | `fractional_time_max_digits` | int | Largest fractional-digit count that format accepts (0 = no limit). |
 
@@ -184,6 +195,8 @@ Every field of `OdbcReaderOptions` that acts as a quirk, with its exact meaning.
 |---|---|---|
 | `no_describe_param` | bool | Never call `SQLDescribeParam` (DuckDB aborts the process on it). |
 | `no_sql_columns` | bool | Never call `SQLColumns` (it segfaults or returns nothing usable with no return code to reveal it); describe `SELECT * FROM <table> WHERE 1=0` instead. |
+| `zero_row_suffix` | string | Appended to that zero-row column-discovery `SELECT` for a planner that will not fold a false predicate (Kinetica's `LIMIT 0`). |
+| `decimal_fixed_precision` / `decimal_fixed_scale` | int | The server's one real decimal type, used in place of the precision and scale the driver describes (Kinetica stores every decimal as `DECIMAL(18, 4)` and describes it as 38, 0). |
 
 The four batching constants that bound these behaviours — the starting parameter
 ceiling, the VALUES row cap, the array-ingest row count and their byte budgets —

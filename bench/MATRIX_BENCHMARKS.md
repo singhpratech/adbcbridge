@@ -34,6 +34,10 @@ Failures:
 * **ibmi** fetch_pyodbc: pyodbc timed out after 600s
 * **ingres** fetch: OperationalError: UNKNOWN: [ODBC] SQLExecute failed
 
+The rows are not all from one run: `matrix_bench.py` rewrites a database's row the next time that
+database is measured and leaves every other row as it stands, so the nine at the top (`firebird`
+through `ingres`) are the 2026-09-04 run and the twelve below them (`sqlite` through `clickhouse`)
+are from the 2026-08 runs.
 Caveats for this run: Oracle and Db2 were measured while a CockroachDB container on the same host
 was stuck in schema-change GC at ~5 cores (pyodbc is equally slow on them here, so it is the host, not
 the bridge); a quiet-host run of the same shape gave 266k / 293k rows/s ingest and 1.9M / 5.7M rows/s

@@ -75,7 +75,7 @@ that a *shared* library defines:
 readelf -r <driver.so> | grep R_X86_64_TPOFF64
 ```
 
-Of the 18 distinct ODBC driver libraries in this repository's compatibility
+Of the 24 distinct ODBC driver libraries in this repository's compatibility
 matrix, exactly one has any:
 
 | Driver library | Affected | After `import pyarrow` |
@@ -98,10 +98,17 @@ matrix, exactly one has any:
 | OpenSearch (`libsqlodbc.so`) | no | loads |
 | Arrow Flight SQL / Dremio (`libarrow-odbc.so`) | no | loads |
 | Apache Ignite (`libignite-odbc.so`) | no | loads |
+| SAP HANA client (`libodbcHDB.so`) | no | loads |
+| Exasol (`libexaodbc.so`) | no | loads |
+| Altibase (`libaltibase_odbc-64bit-ul64.so`) | no | loads |
+| Kinetica (`libKineticaODBC.so`) | no | loads |
+| Actian Ingres (`libiiodbcdriver.1.so`) | no | loads |
+| IBM i Access (`libcwbodbc.so`) | no | loads |
 
-The one affected library is shared by eleven matrix entries, because every
+The one affected library is shared by twelve matrix entries, because every
 MySQL-wire database is driven through it: MySQL, TiDB, Dolt, Doris, StarRocks,
-Percona, MatrixOne, GreptimeDB, Databend, OceanBase and MongoDB (BI connector).
+Percona, MatrixOne, GreptimeDB, Databend, OceanBase, SingleStore and MongoDB
+(BI connector).
 
 ### What works
 

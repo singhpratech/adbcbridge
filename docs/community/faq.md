@@ -289,9 +289,10 @@ PostgreSQL and its wire-compatible forks (CockroachDB, YugabyteDB, TimescaleDB,
 Citus, CrateDB, QuestDB, RisingWave, Materialize, openGauss, Cloudberry, YDB,
 Spanner via PGAdapter, ArcadeDB), the MySQL-wire family (MySQL, MariaDB, TiDB,
 Dolt, Percona, Doris, StarRocks, MatrixOne, GreptimeDB, Databend, OceanBase,
-MongoDB BI), SQL Server, Oracle, Db2, Informix, MonetDB, Firebird, Vertica,
-ClickHouse, Virtuoso, Access, TDengine, Apache Ignite, OpenSearch, and Arrow
-Flight SQL servers (sqlflite, InfluxDB 3, Dremio).
+SingleStore, MongoDB BI), SQL Server, Oracle, Db2, IBM Db2 for i, Informix,
+SAP HANA Express, Exasol, Altibase, Kinetica, Actian Ingres, MonetDB, Firebird,
+Vertica, ClickHouse, Virtuoso, Access, TDengine, Apache Ignite, OpenSearch, and
+Arrow Flight SQL servers (sqlflite, InfluxDB 3, Dremio).
 
 ### Does a database that is not on the list work?
 
@@ -408,9 +409,12 @@ Driving 53 databases across three operating systems turns up defects that belong
 to other projects. Each is reported upstream with a reproduction that needs no
 adbcBridge in the stack, and the whole record — filed reports and findings
 documented but not yet filed — is kept in
-[`docs/UPSTREAM.md`](../UPSTREAM.md). Filed so far: a unixODBC driver-manager
-crash, and two undocumented driver-width issues (OpenLink Virtuoso and
-Dremio / Arrow Flight SQL ODBC).
+[`docs/UPSTREAM.md`](../UPSTREAM.md). Filed so far: 27 reports across fifteen
+projects — unixODBC, OpenLink Virtuoso, Dremio / Arrow Flight SQL ODBC, Firebird
+ODBC, taos-odbc, Apache Doris, clickhouse-odbc, MySQL Connector/ODBC, Apache
+Ignite, OpenSearch SQL ODBC, QuestDB, CrateDB, psqlodbc, Materialize and
+SingleStore Connector/ODBC. Three have already been fixed by their maintainers
+(CrateDB, psqlodbc #207 and #208), and unixODBC shipped a mitigation.
 
 ### How can I contribute?
 
