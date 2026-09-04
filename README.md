@@ -5,6 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/adbcbridge)](https://pypi.org/project/adbcbridge/)
 [![crates.io](https://img.shields.io/crates/v/adbcbridge)](https://crates.io/crates/adbcbridge)
 [![NuGet](https://img.shields.io/nuget/v/AdbcBridge)](https://www.nuget.org/packages/AdbcBridge)
+[![Maven Central](https://img.shields.io/maven-central/v/org.adbcbridge/adbcbridge)](https://central.sonatype.com/artifact/org.adbcbridge/adbcbridge)
 [![Go Reference](https://pkg.go.dev/badge/github.com/singhpratech/adbcbridge/go.svg)](https://pkg.go.dev/github.com/singhpratech/adbcbridge/go)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
