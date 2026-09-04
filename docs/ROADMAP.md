@@ -9,13 +9,14 @@ ODBC is the first bridge; the name leaves room for the others.
 | Milestone | Status |
 |---|---|
 | Query, types, NULLs, Unicode, parameters, bulk ingest, metadata, errors | done |
-| Compatibility matrix: **46 databases** verified on Linux by one workload (`docs/COMPATIBILITY.md`) | done |
+| Compatibility matrix: **53 databases** verified on Linux by one workload (`docs/COMPATIBILITY.md`) | done |
 | Clients measured against all 46: Python, Rust, Go, Java, C# (`bench/LANGUAGE_BENCHMARKS.md`); R smoke-tested | done |
 | Array-bound and multi-row bulk ingest, probed per driver, default on | done |
 | Plug-and-play install: `install.sh`, driver manifest, `driver="odbc"` by name (Linux, macOS) | done |
 | macOS verified on a real machine: SQLite, PostgreSQL 15, SQL Server 2022 (`bench/BENCHMARKS-macos.md`) | done |
 | Windows: first build 2026-08-24 (ten defects across driver, tests and harnesses, three of them the ANSI code page in three disguises); compat campaign on an 8 GB laptop, then the full 46-entry re-measure on a 32 GB machine on 2026-08-25 (45 pass; MySQL Connector/ODBC 26.7.1 retires the astral class) — `bench/BENCHMARKS-windows.md` | done |
-| macOS: 46 of 46 results (41 pass, 5 driver/server unavailable); a bridge built against iODBC is a supported configuration for vendor drivers that only ship iODBC builds (MySQL Connector/ODBC for macOS) — three width bugs found and fixed on the way (`docs/TROUBLESHOOTING.md`) | done |
+| macOS: 53 of 53 results (44 pass, 8 driver/server unavailable, 1 not run); a bridge built against iODBC is a supported configuration for vendor drivers that only ship iODBC builds (MySQL Connector/ODBC for macOS) — three width bugs found and fixed on the way (`docs/TROUBLESHOOTING.md`) | done |
+| 2026-09-03 batch: SingleStore, SAP HANA Express, Exasol, Altibase, Kinetica, Actian Ingres and IBM Db2 for i (PUB400.COM) verified on Linux — 53 entries; macOS and Windows cells measured the same week (44 and 48 pass; every other cell names its reason in `docs/COMPATIBILITY.md`) | done |
 | Windows: per-connection narrow-text route for ANSI-only drivers whose narrow path is UTF-8 (`narrow_sql` + `narrow_params` + `wchar_as_utf8`, keyed on the driver, no global state) — Apache Ignite passes on Windows, measured on the second Windows machine | done |
 | Windows, to verify on the next Windows session (reported by the second Windows campaign, not reproduced on a machine still available): (1) whether `cmake --install` under MSVC can write the manifest key `windows_amd64_mingw` (CMake's `MINGW` is only set for a GNU toolchain; the campaign's own build log recorded `windows_amd64`); (2) the Go binding's SQLite test leaves the database file open after `Close` so `t.TempDir()` cleanup fails — the drivermgr `Close` calls `AdbcConnectionRelease`/`AdbcDatabaseRelease` synchronously, so the open handle is either a driver-side pool or a missing release in the test's reader path | next |
 | Connection-level reader options (`adbc.odbc.batch_size`, `sqllen_32bit`) set before AdbcConnectionInit are discarded — `OdbcConnectionInit` copies the database defaults over them; re-apply the recorded pre-options after the copy | next |

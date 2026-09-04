@@ -282,8 +282,8 @@ partition column. Set `adbc.odbc.partitions`. See
 
 ### Which databases are known to work?
 
-46 databases are verified on Linux by one identical workload, and re-run on macOS
-and Windows; the full matrix with per-driver notes is in
+53 databases are verified on Linux by one identical workload, and re-run on macOS (44 pass)
+and Windows (48 pass); the full matrix with per-driver notes is in
 [`docs/COMPATIBILITY.md`](../COMPATIBILITY.md). It spans SQLite, DuckDB,
 PostgreSQL and its wire-compatible forks (CockroachDB, YugabyteDB, TimescaleDB,
 Citus, CrateDB, QuestDB, RisingWave, Materialize, openGauss, Cloudberry, YDB,
@@ -296,7 +296,7 @@ Flight SQL servers (sqlflite, InfluxDB 3, Dremio).
 ### Does a database that is not on the list work?
 
 Probably, on the generic path — adbcBridge can reach anything with an ODBC driver.
-But all but a few of the 46 verified drivers needed at least one workaround, so expect
+But all but a few of the 53 verified drivers needed at least one workaround, so expect
 an unlisted driver to work *and* to have a quirk waiting. Reachability is not
 verification.
 
@@ -313,7 +313,7 @@ and **error mapping** (SQLSTATE plus native code). Some entries are marked
 
 ### Which drivers are known to need quirks, and why?
 
-All but a few of the 46 needed at least one. A few representative ones: **IBM Db2** and **Informix**
+All but a few of the 53 needed at least one. A few representative ones: **IBM Db2** and **Informix**
 ship a 32-bit `SQLLEN` on 64-bit Linux (`adbc.odbc.sqllen_32bit`); **DuckDB**,
 **MonetDB**, **ClickHouse**, **Firebird** and others have parameter arrays that
 silently drop values, so those are turned off; **Oracle** lacks `SQL_C_SBIGINT`,
@@ -377,7 +377,7 @@ Apache-2.0. Every non-vendored source file carries an
 
 ### What does the 0.1.x version mean?
 
-Early. The read/write path, the 46-database matrix and the five language packages
+Early. The read/write path, the 53-database matrix and the five language packages
 are done and 0.1.0 is on PyPI, crates.io and nuget.org; a conformance suite and Maven
 Central are in progress. `v0.1.0` was tagged 2026-08-25 with four platform libraries,
 four wheels plus an sdist, a crate, a NuGet package and a jar. Treat the API as stabilising, not stable. See
@@ -404,7 +404,7 @@ See [`CONTRIBUTING.md`](../../CONTRIBUTING.md#reporting-bugs) and
 
 ### How are findings given back to upstream projects?
 
-Driving 46 databases across three operating systems turns up defects that belong
+Driving 53 databases across three operating systems turns up defects that belong
 to other projects. Each is reported upstream with a reproduction that needs no
 adbcBridge in the stack, and the whole record — filed reports and findings
 documented but not yet filed — is kept in
