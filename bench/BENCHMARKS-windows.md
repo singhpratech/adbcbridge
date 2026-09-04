@@ -184,6 +184,44 @@ first compat run right after boot hit a `$scratch` metadata race (`Object 'adbc_
 immediately after CTAS); rerun clean.
 <!-- bigwin-end -->
 
+## Second machine — the seven entries added 2026-09-03, main @ 8be392d
+
+Same box as the section above: Windows 11 Home 22631 (x64), i9-13900HK, 32 GB; Docker Desktop 4.88.0
+(engine 29.7.2, linux/amd64) on WSL2 capped at 20 GB / 12 CPUs; bridge built from 8be392d with
+MSVC 19.44 (x64 Release, ctest 7/7); harness Python 3.12.10, pyodbc 5.3.0, pyarrow 25.0.1,
+adbc_driver_manager 1.12.0. Every server a local Docker Desktop container (no network hop);
+bench from a copy of `bench/matrix_bench.py` outside the tree, `--rows 10000 --fetch-rows 100000`,
+two runs each, ODBC tracing off. Measured 2026-09-03/04.
+
+**Three pass, one fails on this tree, three have no Windows driver today.** Windows' driver
+manager reads driver definitions from `HKLM` only and answers a DLL path in `DRIVER=` with IM002,
+so every vendor msi here is installed machine-wide and the entries use the registered names.
+
+### Compat workload
+
+| database | result | vendor string / driver |
+|---|---|---|
+| singlestore | PASS | `MySQL (via ODBC) 5.7.32` (`@@memsql_version` 9.1.1) — `singlestoredb-dev` native amd64, healthy in ~15 s; "MySQL ODBC 26.7 Unicode Driver" (`myodbc26w.dll`, `SQL_DRIVER_VER` 026.07.0001); the entry verbatim, `NO_SSPS=1` from the placeholder, no quirks |
+| exasol | PASS | `EXASolution (via ODBC) 2025.01.0014` — `exasol/docker-db`, privileged, 6 GB; "EXASolution Driver" (`EXAODBC.dll`, Exasol ODBC 26.2.8, `SQL_DRIVER_VER` 26.02.0008); the name carries the `exaodbc` key, so the three Exasol quirks apply. A bridge DLL built before the 2026-09-03 quirk commits fails HY003 on the binary column — rebuild first |
+| hana | PASS | `HDB (via ODBC) 02.00.0088 00-1760424921` — `saplabs/hanaexpress`, 12 GB, ~16 min to `Startup finished!`; "HDBODBC" (`libodbcHDB.dll`, SAP HANA client 2.29.25, `SQL_DRIVER_VER` 02.29.0025). Connected straight to the tenant SQL port 39041 (a socat sidecar publishes it; the compose service publishes 39013/39017 only): with `DATABASENAME=HXE` the driver is redirected to the container-internal address and fails `08S01 -10709 … rc=10060 {172.18.0.2:39041}` |
+| kinetica | **FAIL** | "Kinetica ODBC 7.1" (`KineticaODBC.dll` 7.1.9.16, `windows-odbc-client.zip` from the `kinetica-intel:7.1.9` image, unsigned). The driver exports the W entry points yet transcodes W statement text through the ANSI code page inside itself: the `setup` literal `'héllo 🚀'` reaches the server as cp1252 bytes and every read of that row answers `HY000 (50311) Error converting invalid input with source encoding UTF-8 using ICU. Rejected bytes began with: E96C` — pyodbc alone reproduces it. Its narrow statement path hands UTF-8 through byte for byte and its wide fetch is correct, its narrow fetch is not, so the full Ignite treatment fails (`0xE9` read as UTF-8) and the fix is `narrow_sql` alone in the Kinetica quirk block on Windows — with it: `Kinetica (via ODBC) 7.1.9.33.20240329114503` PASS. Proposed, not in this tree. Server side, any Windows host needs `enable_worker_http_servers = false` in `gpudb.conf` (restart), or the driver's multi-head inserter dials the container-internal worker URLs the server advertises and every INSERT times out `HY000 (1050)` |
+| altibase | driver unavailable | the vendor's Windows ODBC guide: "provided only up to Altibase version 6.5.1, and not provided to Altibase version 7 or later"; server is 7.3 |
+| ingres | driver unavailable | Actian Client for Windows (ODBC Driver 3.50 / Client Runtime) is behind the esd.actian.com login; skipped |
+| ibmi | driver unavailable | "IBM i Access ODBC Driver" (`cwbodbc.dll`) ships only inside the IBM i Access Client Solutions Windows Application Package, and IBM's download portal holds that behind an export-control review of the downloading IBM ID ("Your request is being reviewed"); pending on IBM |
+
+### Python: adbcBridge vs pyodbc (`--rows 10000 --fetch-rows 100000`, two runs)
+
+| database | ADBC ingest rows/s | pyodbc ingest | ADBC fetch rows/s | pyodbc fetch |
+|---|---:|---:|---:|---:|
+| singlestore | 60,950 / 107,125 (array 113,081 / 106,612) | 1,823 / 1,507 | 721,851 / 778,953 | 441,948 / 421,002 |
+| exasol | 42,022 / 40,154 (array 45,300 / 39,185) | 107,311 / 104,876 | 747,308 / 731,319 | 272,468 / 261,128 |
+| hana | 1,702 / 1,724 (array 363,638 / 397,893) | 379,718 / 346,149 | 1,444,594 / 1,483,233 | 469,318 / 468,928 |
+| kinetica (with the proposed `narrow_sql`; read-only entry) | — | — | 482,752 / 450,785 | — |
+
+SingleStore's first run includes its query compilation, as on Linux. Exasol's pyodbc ingest
+leads the bridge's on every OS (the driver's per-row path). HANA's one-row-per-execute figure
+is a commit round trip per row; the array path is the default.
+
 ## First machine (i7-8550U, 7.7 GB) — historical campaign
 
 ## Verified at the shipped state — main @ 4b3d9ff
