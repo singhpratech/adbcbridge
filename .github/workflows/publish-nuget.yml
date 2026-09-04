@@ -53,7 +53,7 @@ jobs:
           mkdir -p dist && cd dist
           gh release download "${{ inputs.tag }}" --repo "${{ github.repository }}" --pattern '*.nupkg'
           ls -l
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
       - name: Get a short-lived API key from nuget.org

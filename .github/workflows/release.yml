@@ -212,7 +212,7 @@ jobs:
           mkdir -p natives && cd natives
           gh release download "${{ needs.prepare.outputs.tag }}" --pattern 'adbcbridge-*-linux-x64.tar.gz' --pattern 'adbcbridge-*-linux-arm64.tar.gz' --pattern 'adbcbridge-*-osx-arm64.tar.gz' --pattern 'adbcbridge-*-win-x64.tar.gz'
           for f in *.tar.gz; do tar xzf "$f"; done; rm -f *.tar.gz; ls -R
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "8.0.x"
       - name: Pack and upload
