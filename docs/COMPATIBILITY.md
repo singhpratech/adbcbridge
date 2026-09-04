@@ -15,7 +15,7 @@ unverified driver should be expected to work on the generic path *and* to have a
 two waiting. Bug reports with the driver name and SQLSTATE are what move rows from the
 second table to the first.
 
-The Verified table below is the Linux column, 53 entries; the macOS (44 of 53) and Windows (45 of 53)
+The Verified table below is the Linux column, 53 entries; the macOS (44 of 53) and Windows (48 of 53)
 columns, cell by cell, are under [Per operating system](#per-operating-system). Servers
 for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`. Per-database
 driver setup (root-free) and run commands:

@@ -208,7 +208,7 @@ SQLITE_ODBC_DRIVER=/path/to/libsqlite3odbc.so .venv/bin/python tests/test_delega
 The compatibility matrix runner,
 [`tests/compat/test_matrix.py`](../../tests/compat/test_matrix.py), is what
 produces the numbers in [Compatibility](../COMPATIBILITY.md); it exercises all
-46 databases (see [Connection strings](connection-strings.md)). It reads:
+53 databases (see [Connection strings](connection-strings.md)). It reads:
 
 - `ADBC_ODBC_DRIVER` — the driver under test (default
   `<repo>/build/libadbc_driver_odbc.so`);

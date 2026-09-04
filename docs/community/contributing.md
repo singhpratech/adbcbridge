@@ -308,7 +308,7 @@ is recorded in [`NOTICE`](../../NOTICE).
 
 ## Giving findings back upstream
 
-Driving 46 databases through one driver across three operating systems turns up
+Driving 53 databases through one driver across three operating systems turns up
 defects that belong to other projects. The practice is to report each one upstream
 with a reproduction that needs no adbcBridge in the stack, and to keep the whole
 record — filed reports and findings documented but not yet filed — in

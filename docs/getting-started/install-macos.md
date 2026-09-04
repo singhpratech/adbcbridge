@@ -211,8 +211,8 @@ with dbapi.connect(driver="odbc",
 - **Two driver managers, two bridge builds.** A driver built against iODBC needs
   an iODBC-built bridge; a driver built against unixODBC needs the unixODBC-built
   bridge. You cannot mix a driver and a bridge across the two managers.
-- **The verified count on macOS is 41** of the 46-database workload; the
-  remaining five lack an obtainable driver or a runnable server on this platform
+- **The verified count on macOS is 44** of the 53-database workload; eight of the
+  remaining nine lack an obtainable driver or a runnable server on this platform
   (for example, some drivers ship no macOS build, and some server images do not
   run under Docker Desktop's virtual machine). The per-database detail, including
   the macOS column, is in [COMPATIBILITY.md](../COMPATIBILITY.md).

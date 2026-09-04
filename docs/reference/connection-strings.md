@@ -64,7 +64,7 @@ overrides individual keywords.
 ## The compatibility templates
 
 The templates below are the exact connection strings adbcBridge's compatibility
-matrix (`tests/compat/test_matrix.py`) uses for each database, one per entry, 46
+matrix (`tests/compat/test_matrix.py`) uses for each database, one per entry, 53
 in total. In them:
 
 - **`{drv}`** is the path to that database's vendor ODBC driver `.so`/`.dll`. In
@@ -142,6 +142,7 @@ above; MySQL-wire analytic warehouses without prepared-statement support need
 | MySQL | `Driver={drv};Server=127.0.0.1;Port=13307;Database=adbc;User=adbc;Password=adbc;` |
 | OceanBase | `Driver={drv};Server=127.0.0.1;Port=12881;Database=adbc;User=root@test;Password=adbc;{plugin_dir}` |
 | Percona Server | `Driver={drv};Server=127.0.0.1;Port=13312;Database=adbc;User=adbc;Password=adbc;` |
+| SingleStore | `Driver={drv};Server=127.0.0.1;Port=13320;User=root;Password=adbc;{plugin_dir}{no_ssps}` |
 | StarRocks | `Driver={drv};Server=127.0.0.1;Port=19030;User=root;NO_SSPS=1;{plugin_dir}` |
 | TiDB | `Driver={drv};Server=127.0.0.1;Port=14000;Database=test;User=root;{plugin_dir}{no_ssps}` |
 
@@ -150,7 +151,7 @@ Per-database notes:
 - **Databend**, **Apache Doris**, **GreptimeDB**, **StarRocks** and the
   **MongoDB BI Connector** set an unconditional `NO_SSPS=1;` — their servers do
   not support `COM_STMT_PREPARE`.
-- **MatrixOne**, **Apache Doris** and **StarRocks** carry no `Database=` in the
+- **MatrixOne**, **Apache Doris**, **StarRocks** and **SingleStore** carry no `Database=` in the
   template (the schema is created during test setup); OceanBase's
   `User=root@test` puts the tenant in the login name.
 - **MySQL** and **MariaDB** are set to `ANSI_QUOTES` mode during test setup so
@@ -243,6 +244,12 @@ file path.
 | Apache Ignite | libignite-odbc | `Driver={drv};ADDRESS=127.0.0.1:11800;SCHEMA=PUBLIC;` |
 | OpenSearch | OpenSearch SQL ODBC | `Driver={drv};host=127.0.0.1;port=19200;auth=NONE;useSSL=0;` |
 | TDengine | taos-odbc | `Driver={drv};SERVER=127.0.0.1:16030;UID=root;PWD=taosdata;TIMESTAMP_AS_IS=1;` |
+| SAP HANA | SAP HANA client ODBC (`libodbcHDB.so`) | `Driver={drv};SERVERNODE=127.0.0.1:39017;UID=SYSTEM;PWD=AdbcBridge2026;DATABASENAME=HXE;` |
+| Exasol | Exasol ODBC (`libexaodbc.so`) | `Driver={drv};EXAHOST=127.0.0.1:18563;EXAUID=sys;EXAPWD=exasol;SSLCertificate=SSL_VERIFY_NONE;` |
+| Altibase | Altibase ODBC (`libaltibase_odbc-64bit-ul64.so`) | `Driver={drv};Server=127.0.0.1;Port=20300;User=sys;Password=manager;NLS_USE=UTF8;` |
+| Kinetica | Kinetica ODBC (`libKineticaODBC.so`) | `Driver={drv};URL=http://127.0.0.1:29191;UID=admin;PWD=admin;` |
+| Actian Ingres | Ingres ODBC (`libiiodbcdriver.1.so`) | `Driver={drv};Server=adbcing;Database=adbc;UID=ingres;PWD=adbc;ServerType=INGRES;` |
+| IBM Db2 for i | IBM i Access ODBC (`libcwbodbc.so`) | `Driver={drv};System=<host>;UID=<user>;PWD=<password>;SSL=1;Naming=0;CommitMode=0;DefaultLibraries=<library>;` |
 
 Per-database notes:
 
@@ -258,6 +265,21 @@ Per-database notes:
 - **OpenSearch** uses lower-case `host`/`port` keyword names and is read-only.
 - **TDengine** uses `SERVER=host:port` and sets `TIMESTAMP_AS_IS=1`; the database
   is created during setup, so the template has no `DB=`.
+- **SAP HANA** names the SQL port with `SERVERNODE=host:port` and the tenant with
+  `DATABASENAME=`; a client on another machine is redirected by the server to the
+  tenant's own port, so from a remote host name that port in `SERVERNODE=` directly.
+- **Exasol** uses the `EXAHOST=host:port`, `EXAUID=` and `EXAPWD=` keywords;
+  `SSLCertificate=SSL_VERIFY_NONE` accepts the container's self-signed certificate.
+- **Altibase** sets `NLS_USE=UTF8` so the driver hands text over as UTF-8.
+- **Kinetica** connects to the HTTP endpoint with `URL=`; the entry is read-only
+  (the driver binds parameters off by one).
+- **Ingres** names a virtual node (`Server=`) that the Ingres client configuration
+  maps to the host, plus `ServerType=INGRES`; the matrix reaches the driver through
+  an ANSI shim under unixODBC (see the compatibility test README).
+- **Db2 for i** is the one remote entry: `System=` is the IBM i host, `SSL=1`
+  turns on TLS, `Naming=0` selects SQL naming, `CommitMode=0` autocommit, and
+  `DefaultLibraries=` the library the workload creates its tables in. The matrix
+  fills host, user, password and library from the `PUB400_*` environment variables.
 
 ---
 

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Upstream: what this project found, and gave back
 
-Driving 46 databases through one driver across three operating systems turns up defects
+Driving 53 databases through one driver across three operating systems turns up defects
 that belong to other projects. This file is the record: what was found, where it was
 reported, and what is documented here but not yet filed. Each reported entry stands on
 evidence that anyone can reproduce without adbcBridge in the stack; the not-yet-reported

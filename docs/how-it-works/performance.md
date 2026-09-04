@@ -15,7 +15,7 @@ numbers with these in mind:
 | OS | Linux Mint 22.3, kernel 7.0 | macOS 26.5.2 | Windows 11 Home 23H2 (build 22631) |
 | Driver manager | unixODBC 2.3.12 | unixODBC 2.3.12 from source (iODBC from source for iODBC-only vendor drivers) | the OS's own (odbc32), ANSI code page 1252 |
 | Compiler | gcc 13.3 | Apple clang 21 | MSVC 19.44 (VS 2022 Build Tools) |
-| Databases | 46 of 46, Docker containers on the same machine (the full fleet often idling alongside) | 46 of 46 results: 41 pass, 5 without an obtainable driver or runnable server; servers in Docker Desktop, some amd64 images under emulation | 46 of 46 results: 45 pass, servers in Docker Desktop on WSL2 (20 GB VM cap) |
+| Databases | 53 of 53 verified, Docker containers on the same machine (the full fleet often idling alongside); the matrix benchmarks below cover the 46 of the 2026-08-25 campaign | 53 of 53 results: 44 pass, 8 without an obtainable driver or runnable server, 1 not run; servers in Docker Desktop, some amd64 images under emulation | 53 of 53 results: 48 pass, 3 fail inside the vendor driver, 2 without an obtainable driver; servers in Docker Desktop on WSL2 (20 GB VM cap) |
 | Load during runs | never idle: ~23 GiB of other work resident, 1-minute load typically 2–5, CPU governor `powersave` after a reboot | 1-minute load 2.4–10.5, recorded per entry | up to 8 benchmark runs and ~30 idle containers at once; single samples |
 | What the build lacks | — | — | prefetch pipeline and parallel ingest (pthreads, compiled out on `_WIN32`) |
 
