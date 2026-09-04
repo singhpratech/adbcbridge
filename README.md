@@ -282,7 +282,7 @@ drivers, the Win32 thread shim; then a JDBC bridge on the same model —
 
 ## Upstream: giving back
 
-Running 53 databases through one driver, 49 of them on three operating systems, finds defects that
+Running 53 databases through one driver, 43 of them on three operating systems, finds defects that
 belong to other projects. They are reported with a reproduction that needs no adbcBridge
 in the stack — [lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239)
 (the driver manager aborts on the first SQL error from a 4-byte-`SQLWCHAR` driver; the
