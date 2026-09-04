@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0 — adbcBridge notes</title>
+<meta name="description" content="Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute.">
+<link rel="canonical" href="https://adbcbridge.org/notes/apache-ignite-odbc-findings/">
+<meta property="og:type" content="article"><meta property="og:title" content="A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0"><meta property="og:description" content="Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute."><meta property="og:url" content="https://adbcbridge.org/notes/apache-ignite-odbc-findings/">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#1f8a8a;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+nav .brand{font-weight:600;color:var(--ink);border:0;font-size:1.05rem}
+nav ul{list-style:none;margin:0;padding:0;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+nav ul a{border:0;color:var(--muted);font-size:.95rem}nav ul a:hover{color:var(--teal)}
+.theme{background:none;border:1px solid var(--line);border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}
+.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}
+.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article p,article li{max-width:70ch}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list p{margin:.3rem 0;color:var(--muted)}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a class="brand" href="/">adbcBridge</a><ul><li><a href="/docs/">Docs</a></li><li><a href="/matrix/">Matrix</a></li><li><a href="/notes/">Notes</a></li><li><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></li><li><button id="theme" class="theme" type="button" aria-label="Switch between light and dark" title="Light / dark"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></li></ul></nav>
+<article><div class="eyebrow">Notes · found 2026-08-29 · published 2026-09-04</div><h1>A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0</h1><p class="meta">Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute.</p><h2>What you see</h2>
+<p>Bind a two-column, three-row column-wise parameter array on <code>INSERT INTO t (a, b) VALUES
+(?, ?)</code> with <code>SQL_ATTR_PARAMSET_SIZE=3</code> and indicators <code>{SQL_NTS, SQL_NULL_DATA, SQL_NTS}</code>.
+Everything reports success: <code>rc=0</code>, <code>SQL_ATTR_PARAMS_PROCESSED_PTR</code> 3, every entry of the
+parameter-status array <code>SQL_PARAM_SUCCESS</code>. Then read row 2 back and <code>b IS NULL</code> is false —
+the column holds an <em>empty string</em>. A fixed-width column stores whatever bytes sit in that
+row's value slot. On a <code>BINARY</code> or <code>VARBINARY</code> column the client does not get that far:</p>
+<pre><code>__memcpy_avx_unaligned_erms
+ignite::odbc::query::BatchQuery::MakeRequestExecuteBatch
+ignite::odbc::query::BatchQuery::Execute
+ignite::odbc::Statement::ExecuteSqlQuery
+ignite::SQLExecute
+</code></pre>
+<p>The server is untouched in all three cases. A NULL in row 0 goes the other way and nulls the
+whole batch. Row-wise binding is not an escape: <code>SQL_ATTR_PARAM_BIND_TYPE</code> answers <code>HYC00
+Only binding by column is currently supported</code>.</p>
+<h2>What is actually happening</h2>
+<p><code>odbc/src/app/parameter.cpp</code> writes a parameter like this:</p>
+<pre><code class="language-cpp">void Parameter::Write(BinaryWriterImpl&amp; writer, int offset, SqlUlen idx) const
+{
+    if (buffer.GetInputSize() == SQL_NULL_DATA) { writer.WriteNull(); return; }
+
+    ApplicationDataBuffer buf(buffer);   // the copy...
+    buf.SetByteOffset(offset);
+    buf.SetElementOffset(idx);           // ...is where the row offset is applied
+</code></pre>
+<p><code>GetInputSize()</code> reads <code>*GetResLen()</code>, and <code>GetResLen()</code> applies the buffer's <em>own</em> element
+offset — still 0 at that point. So the NULL test always inspects row 0's indicator and every
+row of the chunk inherits row 0's NULL-ness. A NULL further down is therefore written as a
+value: the <code>SQL_CHAR</code> branch reads that row's indicator, -1, and <code>SqlStringToString</code> returns
+the empty string for any negative length that is not <code>SQL_NTS</code>, while the <code>SQL_BINARY</code> branch
+hands the same -1 to <code>writer.WriteInt8Array</code> as a length and <code>memcpy</code> runs off the end.</p>
+<p>The workaround is one execute per row, where the element offset really is 0. Reported on
+2026-08-29 as <a href="https://github.com/apache/ignite/issues/13537">apache/ignite#13537</a>, with the
+plain-ODBC reproduction above and <code>parameter.cpp</code> cited; open.</p>
+<h2>The server rule behind it: no table without a primary key</h2>
+<p>Every Ignite SQL table <em>is</em> a cache and its <code>PRIMARY KEY</code> is the cache key, so:</p>
+<pre><code>CREATE TABLE nopk (a BIGINT, b VARCHAR)
+-&gt; 42000  No PRIMARY KEY defined for CREATE TABLE
+</code></pre>
+<p>Generated ingest DDL has no notion of a key, and no column of an arbitrary payload can be
+one: Ignite allows neither a NULL key (<code>23000 Null value is not allowed for column 'A'</code>) nor
+the duplicates an append would then insert (<code>23000 Failed to INSERT some keys because they
+are already in cache</code>). Nor can the server fill one in — a <code>DEFAULT</code> must be a constant
+(<code>Non-constant DEFAULT expressions are not supported</code> for <code>RANDOM_UUID()</code>), and <code>IDENTITY</code>,
+<code>AUTO_INCREMENT</code> and <code>SERIAL</code> are all <code>HYC00 AUTO_INCREMENT columns are not supported</code>. This
+is a property of the server, not of its driver, and no client-side workaround exists: write
+into a table that declares its own key.</p>
+<h2>There is no Linux driver to download</h2>
+<p>Apache ships <code>libignite-odbc.so</code> for Windows only, as two <code>.msi</code> installers; the Linux
+binary release carries the C++ <em>sources</em> it would be built from. The image has them under
+<code>/opt/ignite/apache-ignite/platforms/cpp</code>, and the ODBC driver alone builds root-free in
+about two minutes against system unixODBC and OpenSSL headers with <code>-DWITH_ODBC=ON
+-DWITH_CORE=OFF</code> — <code>WITH_CORE=OFF</code> is what keeps it short, since the C++ core module embeds
+a JVM and the ODBC driver needs neither JVM nor JNI. On macOS there is nothing to build:
+<code>platforms/cpp</code> carries only <code>common/os/{linux,win}</code> and the Darwin build stops at
+<code>concurrent_os.cpp:18 fatal error: 'sys/sysinfo.h' file not found</code>.</p>
+<h2>On Windows the statement text has to go narrow</h2>
+<p><code>ignite.odbc.dll</code> (2.18.0, registered as <code>Apache Ignite</code>) exports no <code>W</code> entry points at all,
+so the Windows driver manager maps every wide call onto it through the system ANSI code page:
+a wide fetch of <code>héllo 🚀</code> comes back <code>hÃ©llo ðŸš€</code> and a statement literal <code>'héllo'</code> matches
+nothing, pyodbc identical for both. Its own narrow path is untouched UTF-8 in both directions,
+so sending caller statement text through the narrow entry points, and keeping the narrow fetch
+route, passes the whole workload and is 2.5× faster: 775,660 rows/s against 316,230.</p>
+<p>Related: <a href="/notes/windows-ansi-code-page-three-disguises/">Five Windows-only ODBC failures are one thing wearing different clothes</a></p>
+<p>Two smaller things worth knowing. <code>SQL_DRIVER_VER</code> and <code>SQL_DBMS_VER</code> are both the hardcoded
+<code>02.04.0000</code>, neither the server's version nor the protocol actually negotiated. And the
+driver truncates a character parameter to the <code>ColumnSize</code> given to <code>SQLBindParameter</code>,
+client-side and with no warning, so pass the real width.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
+database's ODBC driver on Linux, macOS and Windows and records each failure with its first
+error; the row for this database is at https://adbcbridge.org/matrix/#ignite, and the finding
+is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');var saved=null;try{saved=localStorage.getItem('adbcbridge-theme');}catch(e){}
+if(saved==='light'||saved==='dark'){root.setAttribute('data-theme',saved);}
+function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();</script>
+</body>
+</html>

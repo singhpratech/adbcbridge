@@ -104,10 +104,480 @@ const DATA = {"counts": {"linux": 53, "macos": 45, "windows": 48}, "entries": [{
 const CHIP = {pass:'✓ pass', read:'✓ read', platform:'platform', detail:'note'};
 const OSNAMES = {linux:'Linux', macos:'macOS arm64', windows:'Windows x64'};
 const NOTES = {
+ "altibase": [
+  {
+   "title": "Altibase ODBC stores astral characters as CESU-8 on its wide path",
+   "url": "/notes/altibase-odbc-findings/"
+  },
+  {
+   "title": "Two ways a Go ODBC program dies before it prints anything",
+   "url": "/notes/go-odbc-and-arrow-finalizers/"
+  }
+ ],
+ "exasol": [
+  {
+   "title": "Three things Exasol's ODBC driver gets wrong about C types and block cursors",
+   "url": "/notes/exasol-odbc-three-quirks/"
+  },
+  {
+   "title": "Five Windows-only ODBC failures are one thing wearing different clothes",
+   "url": "/notes/windows-ansi-code-page-three-disguises/"
+  }
+ ],
+ "ibmi": [
+  {
+   "title": "A 35-character Driver=, a compiled-in path, and a CLOB at eight rows a second",
+   "url": "/notes/ibm-i-access-odbc-on-linux-and-macos/"
+  }
+ ],
  "ingres": [
   {
    "title": "The Ingres ODBC client kills any Java process that loads it",
    "url": "/notes/ingres-client-and-the-jvm/"
+  },
+  {
+   "title": "A NULL column that reads back as the previous row's value",
+   "url": "/notes/thirty-two-bit-sqllen-on-64-bit-linux/"
+  },
+  {
+   "title": "The process dies with SIGABRT on the first SQL error, and it is the manager",
+   "url": "/notes/unixodbc-four-byte-sqlwchar/"
+  }
+ ],
+ "kinetica": [
+  {
+   "title": "Kinetica's ODBC driver executes parameter N with the value bound at N+1",
+   "url": "/notes/kinetica-odbc-parameters-off-by-one/"
+  },
+  {
+   "title": "Five Windows-only ODBC failures are one thing wearing different clothes",
+   "url": "/notes/windows-ansi-code-page-three-disguises/"
+  }
+ ],
+ "mssql": [
+  {
+   "title": "Which older engine releases pass the matrix entry unchanged",
+   "url": "/notes/older-releases-that-still-pass/"
+  },
+  {
+   "title": "Two ways a Go ODBC program dies before it prints anything",
+   "url": "/notes/go-odbc-and-arrow-finalizers/"
+  }
+ ],
+ "postgres": [
+  {
+   "title": "Which older engine releases pass the matrix entry unchanged",
+   "url": "/notes/older-releases-that-still-pass/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "mariadb": [
+  {
+   "title": "Which older engine releases pass the matrix entry unchanged",
+   "url": "/notes/older-releases-that-still-pass/"
+  },
+  {
+   "title": "MariaDB Connector/ODBC 3.2 segfaults on a NULL DATE in a parameter array",
+   "url": "/notes/mariadb-connector-odbc-findings/"
+  }
+ ],
+ "firebird": [
+  {
+   "title": "Which older engine releases pass the matrix entry unchanged",
+   "url": "/notes/older-releases-that-still-pass/"
+  },
+  {
+   "title": "Three ways Firebird's ODBC driver loses your parameters without saying so",
+   "url": "/notes/firebird-odbc-parameter-defects/"
+  },
+  {
+   "title": "Five Windows-only ODBC failures are one thing wearing different clothes",
+   "url": "/notes/windows-ansi-code-page-three-disguises/"
+  }
+ ],
+ "oracle": [
+  {
+   "title": "Which older engine releases pass the matrix entry unchanged",
+   "url": "/notes/older-releases-that-still-pass/"
+  },
+  {
+   "title": "Oracle's SQORA driver takes a rowset change, then crashes or loses rows",
+   "url": "/notes/oracle-instant-client-odbc-findings/"
+  }
+ ],
+ "hana": [
+  {
+   "title": "The SAP HANA ODBC client decodes narrow statement text as Latin-1",
+   "url": "/notes/sap-hana-odbc-latin-1-and-type-table/"
+  },
+  {
+   "title": "Two ways a Go ODBC program dies before it prints anything",
+   "url": "/notes/go-odbc-and-arrow-finalizers/"
+  }
+ ],
+ "singlestore": [
+  {
+   "title": "SingleStore's ODBC connector loses SQLGetTypeInfo under ANSI_QUOTES",
+   "url": "/notes/singlestore-odbc-connector-findings/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  }
+ ],
+ "ignite": [
+  {
+   "title": "A parameter array in Ignite's ODBC driver takes every row's NULL flag from row 0",
+   "url": "/notes/apache-ignite-odbc-findings/"
+  },
+  {
+   "title": "Five Windows-only ODBC failures are one thing wearing different clothes",
+   "url": "/notes/windows-ansi-code-page-three-disguises/"
+  }
+ ],
+ "clickhouse": [
+  {
+   "title": "A bound NULL becomes an empty string, and a parameter array stops at set 1",
+   "url": "/notes/clickhouse-odbc-findings/"
+  }
+ ],
+ "virtuoso": [
+  {
+   "title": "Five things OpenLink Virtuoso's ODBC driver does silently and wrongly",
+   "url": "/notes/virtuoso-odbc-five-defects/"
+  },
+  {
+   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
+   "url": "/notes/macos-iodbc-width-vendor-drivers/"
+  },
+  {
+   "title": "A NULL column that reads back as the previous row's value",
+   "url": "/notes/thirty-two-bit-sqllen-on-64-bit-linux/"
+  },
+  {
+   "title": "The process dies with SIGABRT on the first SQL error, and it is the manager",
+   "url": "/notes/unixodbc-four-byte-sqlwchar/"
+  }
+ ],
+ "flightsql": [
+  {
+   "title": "What the Arrow Flight SQL ODBC driver claims, and what it does",
+   "url": "/notes/arrow-flight-sql-odbc-findings/"
+  },
+  {
+   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
+   "url": "/notes/macos-iodbc-width-vendor-drivers/"
+  },
+  {
+   "title": "The process dies with SIGABRT on the first SQL error, and it is the manager",
+   "url": "/notes/unixodbc-four-byte-sqlwchar/"
+  },
+  {
+   "title": "Five Windows-only ODBC failures are one thing wearing different clothes",
+   "url": "/notes/windows-ansi-code-page-three-disguises/"
+  }
+ ],
+ "dremio": [
+  {
+   "title": "What the Arrow Flight SQL ODBC driver claims, and what it does",
+   "url": "/notes/arrow-flight-sql-odbc-findings/"
+  },
+  {
+   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
+   "url": "/notes/macos-iodbc-width-vendor-drivers/"
+  }
+ ],
+ "influxdb3": [
+  {
+   "title": "What the Arrow Flight SQL ODBC driver claims, and what it does",
+   "url": "/notes/arrow-flight-sql-odbc-findings/"
+  }
+ ],
+ "percona": [
+  {
+   "title": "Two ways a Go ODBC program dies before it prints anything",
+   "url": "/notes/go-odbc-and-arrow-finalizers/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  }
+ ],
+ "monetdb": [
+  {
+   "title": "Two ways a Go ODBC program dies before it prints anything",
+   "url": "/notes/go-odbc-and-arrow-finalizers/"
+  }
+ ],
+ "columnstore": [
+  {
+   "title": "Two ways a Go ODBC program dies before it prints anything",
+   "url": "/notes/go-odbc-and-arrow-finalizers/"
+  },
+  {
+   "title": "MariaDB Connector/ODBC 3.2 segfaults on a NULL DATE in a parameter array",
+   "url": "/notes/mariadb-connector-odbc-findings/"
+  }
+ ],
+ "yugabyte": [
+  {
+   "title": "Two ways a Go ODBC program dies before it prints anything",
+   "url": "/notes/go-odbc-and-arrow-finalizers/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "mysql": [
+  {
+   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
+   "url": "/notes/macos-iodbc-width-vendor-drivers/"
+  },
+  {
+   "title": "MariaDB Connector/ODBC 3.2 segfaults on a NULL DATE in a parameter array",
+   "url": "/notes/mariadb-connector-odbc-findings/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  }
+ ],
+ "databend": [
+  {
+   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
+   "url": "/notes/macos-iodbc-width-vendor-drivers/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "doris": [
+  {
+   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
+   "url": "/notes/macos-iodbc-width-vendor-drivers/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "opensearch": [
+  {
+   "title": "Any text read as a timestamp comes back as today's date, under SQL_SUCCESS",
+   "url": "/notes/opensearch-sql-odbc-findings/"
+  }
+ ],
+ "cratedb": [
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "questdb": [
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "materialize": [
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "risingwave": [
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "arcadedb": [
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "spanner": [
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "ydb": [
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "cockroachdb": [
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "timescaledb": [
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "citus": [
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "opengauss": [
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "cloudberry": [
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "sqlite": [
+  {
+   "title": "SQL_ERROR with no diagnostic, and a status array nobody writes",
+   "url": "/notes/sqliteodbc-numeric-and-param-status/"
+  }
+ ],
+ "tdengine": [
+  {
+   "title": "Four conversions taos-odbc calls \"not implemented yet\", and one that aborts",
+   "url": "/notes/tdengine-taos-odbc-findings/"
+  },
+  {
+   "title": "Five Windows-only ODBC failures are one thing wearing different clothes",
+   "url": "/notes/windows-ansi-code-page-three-disguises/"
+  }
+ ],
+ "db2": [
+  {
+   "title": "A NULL column that reads back as the previous row's value",
+   "url": "/notes/thirty-two-bit-sqllen-on-64-bit-linux/"
+  }
+ ],
+ "informix": [
+  {
+   "title": "A NULL column that reads back as the previous row's value",
+   "url": "/notes/thirty-two-bit-sqllen-on-64-bit-linux/"
+  },
+  {
+   "title": "Five Windows-only ODBC failures are one thing wearing different clothes",
+   "url": "/notes/windows-ansi-code-page-three-disguises/"
+  }
+ ],
+ "tidb": [
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  }
+ ],
+ "dolt": [
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  }
+ ],
+ "starrocks": [
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "oceanbase": [
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "matrixone": [
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "greptimedb": [
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "mongodbbi": [
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "SQLColumns segfaults on a NULL NUMERIC_PRECISION from mongosqld",
+   "url": "/notes/mongodb-bi-connector-through-mysql-odbc/"
+  }
+ ],
+ "duckdb": [
+  {
+   "title": "Four things DuckDB's ODBC driver does that a caller has to know about",
+   "url": "/notes/duckdb-odbc-findings/"
   }
  ]
 };

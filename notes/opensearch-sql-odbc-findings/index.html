@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Any text read as a timestamp comes back as today&#x27;s date, under SQL_SUCCESS — adbcBridge notes</title>
+<meta name="description" content="OpenSearch SQL ODBC 1.5.0.0 converts any character value to today&#x27;s date when asked for SQL_C_TYPE_TIMESTAMP, and its SQLError never returns SQL_NO_DATA, so a failed connect hangs unixODBC forever.">
+<link rel="canonical" href="https://adbcbridge.org/notes/opensearch-sql-odbc-findings/">
+<meta property="og:type" content="article"><meta property="og:title" content="Any text read as a timestamp comes back as today&#x27;s date, under SQL_SUCCESS"><meta property="og:description" content="OpenSearch SQL ODBC 1.5.0.0 converts any character value to today&#x27;s date when asked for SQL_C_TYPE_TIMESTAMP, and its SQLError never returns SQL_NO_DATA, so a failed connect hangs unixODBC forever."><meta property="og:url" content="https://adbcbridge.org/notes/opensearch-sql-odbc-findings/">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#1f8a8a;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+nav .brand{font-weight:600;color:var(--ink);border:0;font-size:1.05rem}
+nav ul{list-style:none;margin:0;padding:0;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+nav ul a{border:0;color:var(--muted);font-size:.95rem}nav ul a:hover{color:var(--teal)}
+.theme{background:none;border:1px solid var(--line);border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}
+.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}
+.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article p,article li{max-width:70ch}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list p{margin:.3rem 0;color:var(--muted)}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a class="brand" href="/">adbcBridge</a><ul><li><a href="/docs/">Docs</a></li><li><a href="/matrix/">Matrix</a></li><li><a href="/notes/">Notes</a></li><li><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></li><li><button id="theme" class="theme" type="button" aria-label="Switch between light and dark" title="Light / dark"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></li></ul></nav>
+<article><div class="eyebrow">Notes · found 2026-08-25 · published 2026-09-04</div><h1>Any text read as a timestamp comes back as today&#x27;s date, under SQL_SUCCESS</h1><p class="meta">OpenSearch SQL ODBC 1.5.0.0 converts any character value to today&#x27;s date when asked for SQL_C_TYPE_TIMESTAMP, and its SQLError never returns SQL_NO_DATA, so a failed connect hangs unixODBC forever.</p><h2>What you see</h2>
+<p>Read a character column as <code>SQL_C_TYPE_TIMESTAMP</code> or <code>SQL_C_TYPE_DATE</code> and you get <em>today's</em>
+date at midnight, under <code>SQL_SUCCESS</code>, whatever the string held. It happens to a text column,
+a numeric-looking one and a real timestamp alike. ODBC specifies <code>22018</code> for a value that
+cannot be parsed; this driver reports no error at all, so the wrong value flows into the
+application as if it were the stored one.</p>
+<p>The cause is in <code>convert.c</code>: the conversion fills a <code>SIMPLE_TIME</code> from <code>localtime</code> and never
+parses the input. A <code>TIMESTAMP</code> column takes the same route by a second path — the driver's
+result-set type map (<code>opensearch_parse_result.cpp</code>) has an entry for <code>date</code> but none for
+<code>timestamp</code>, a type name the SQL plugin grew after the driver's last release, and anything
+unmapped falls back to <code>SQL_WVARCHAR</code> with the type name <code>unsupported</code>. Its <em>other</em> type
+tables, the ones behind <code>SQLColumns</code> and <code>SQLGetTypeInfo</code>, do map <code>timestamp</code>, so the two
+metadata paths disagree about the same column. The workaround is to take such a column as
+text and parse it yourself, which is what the compatibility entry does. Reported on
+2026-08-29 as <a href="https://github.com/opensearch-project/sql-odbc/issues/101">opensearch-project/sql-odbc#101</a>; open.</p>
+<h2>A failed connect never returns</h2>
+<p>The second one costs a process. Point the driver at a closed port, or at a plaintext cluster
+with <code>useSSL=1</code>, or give it an unknown <code>auth=</code> value, and <code>SQLDriverConnect</code> through unixODBC
+sits at 100 % CPU until the process is killed — <code>responseTimeout=</code> makes no difference. The
+network part does finish: the refused <code>connect()</code> is diagnosed within about two seconds,
+after the AWS SDK's probe of the EC2 metadata endpoint. What never ends is the driver manager
+collecting the diagnostics.</p>
+<p>unixODBC prefers a driver's <code>SQLError</code>/<code>SQLErrorW</code> over <code>SQLGetDiagRecW</code> when it collects a
+failed connect's records, and calls it in a <code>do … while (SQL_SUCCEEDED(ret))</code> loop —
+<code>SQLError</code> has no record number, so a driver must clear each error as it hands it out. This
+driver exports <code>SQLErrorW</code> and its <code>OPENSEARCHAPI_ConnectError</code> returns the connection's
+error on every call without ever clearing it: an <code>strace</code> of the hung process is 31,948 log
+writes in 20 seconds, all of them the same function entering. Called directly through
+<code>dlopen</code>, the same driver answers <code>SQLGetDiagRecW</code> correctly — <code>08001</code>, then <code>SQL_NO_DATA</code>
+for record 2 — and <code>SQLErrorW</code> with the same <code>08001</code> on call 1, 2 and 3. psqlodbc, which this
+code descends from, has the same non-clearing <code>ConnectError</code> but exports neither <code>SQLError</code>
+nor <code>SQLErrorW</code>, which is why it never loops. Reported on 2026-08-29 as
+<a href="https://github.com/opensearch-project/sql-odbc/issues/102">opensearch-project/sql-odbc#102</a>; open.</p>
+<p>There is a related trap behind it. The driver's ANSI <code>SQLDriverConnect</code> cannot connect at
+all: <code>CC_connect()</code> asks for the <code>SQL_ASCII</code> client encoding, which its own
+<code>m_supported_client_encodings</code> does not list, unless <code>SQLDriverConnectW</code> has set the
+unicode-driver flag first. It fails through a path that logs rather than sets a diagnostic,
+so you get <code>SQL_ERROR</code> with an empty diagnostic queue — while pyodbc, which calls
+<code>SQLDriverConnectW</code>, connects to the same server with the same string. Everything after the
+connect works through the ANSI entry points, emoji included.</p>
+<h2>The macOS package is x86_64 only</h2>
+<p><code>opensearch-project/sql-odbc</code> has exactly one release, 1.5.0.0, whose single asset holds one
+macOS <code>.pkg</code> and two Windows <code>.msi</code> files. The macOS dylib is single-arch x86_64, so in an
+arm64 process <code>dlopen()</code> answers <code>incompatible architecture (have 'x86_64', need 'arm64e' or
+'arm64e.v1' or 'arm64' or 'arm64')</code>. It loads under Rosetta (<code>arch -x86_64 python3</code>), which
+an Intel-only stack can use. It also links <code>/usr/lib/libiodbc</code>, so it is an iODBC-width
+driver and cannot be relinked into a unixODBC stack whatever <code>install_name_tool</code> says.</p>
+<h2>The POSIX branch has never been compiled</h2>
+<p>There is no Linux build to download, and the tree's <code>WITH_UNIXODBC</code> branch does not compile
+as it stands. Five things are in the way, three of them real bugs: <code>-Werror</code> on a 2023 code
+base; a vestigial <code>#include "linux/kconfig.h"</code> — a <em>kernel</em> header, which is also why the
+CMakeLists puts a <code>linux-headers</code> include directory on the path; <code>RAPIDJSON_SRC</code> set inside
+an <code>if(WIN32)</code> although the vendored copy is right there in <code>libraries/rapidjson/include</code>;
+and <code>opensearch_semaphore.cpp</code>, whose constructor member-initialiser list is empty on any
+platform but Windows and macOS, leaving a bare <code>:</code> before the body, and whose <code>try_lock_for</code>
+calls <code>sem_timedwait(&amp;m_semaphore &amp; ts)</code> where it means <code>sem_timedwait(&amp;m_semaphore, &amp;ts)</code>.</p>
+<p>The fifth compiles and then crashes. The POSIX branch does <code>sem_init(&amp;m_semaphore, 0,
+capacity)</code> where WIN32 passes <code>initial</code> to <code>CreateSemaphore</code> and <code>__APPLE__</code> passes it to
+<code>dispatch_semaphore_create</code>. The result queue constructs its pop semaphore with an initial
+count of 0 and a capacity, so on Linux that semaphore starts <em>full</em>: <code>pop()</code> succeeds on an
+empty queue, <code>std::queue::pop()</code> on an empty queue corrupts it, and the next <code>clear()</code>
+deletes a garbage pointer — the first <code>close()</code> segfaults. Passing <code>initial</code> fixes it. With
+those five fixed the driver works, and reads about 120k rows/s.</p>
+<p>One last thing to plan around: it is read-only twice over. The SQL plugin's grammar is
+<code>SELECT</code>, <code>SHOW</code> and <code>DESCRIBE</code> — no <code>CREATE TABLE</code>, no <code>INSERT</code> — and the driver answers
+<code>SQLBindParameter</code> with <code>OpenSearch does not support parameters</code>. Data goes in over the REST
+<code>_bulk</code> API, and a parameterised query runs with a literal.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
+database's ODBC driver on Linux, macOS and Windows and records each failure with its first
+error; the row for this database is at https://adbcbridge.org/matrix/#opensearch, and the
+finding is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');var saved=null;try{saved=localStorage.getItem('adbcbridge-theme');}catch(e){}
+if(saved==='light'||saved==='dark'){root.setAttribute('data-theme',saved);}
+function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();</script>
+</body>
+</html>

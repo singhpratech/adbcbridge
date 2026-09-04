@@ -6,4 +6,32 @@
   <url><loc>https://adbcbridge.org/matrix/</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
   <url><loc>https://adbcbridge.org/notes/</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://adbcbridge.org/notes/ingres-client-and-the-jvm/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/altibase-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/exasol-odbc-three-quirks/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/ibm-i-access-odbc-on-linux-and-macos/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/kinetica-odbc-parameters-off-by-one/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/older-releases-that-still-pass/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/sap-hana-odbc-latin-1-and-type-table/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/singlestore-odbc-connector-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/apache-ignite-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/clickhouse-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/virtuoso-odbc-five-defects/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/firebird-odbc-parameter-defects/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/arrow-flight-sql-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/go-odbc-and-arrow-finalizers/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/macos-iodbc-width-vendor-drivers/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/opensearch-sql-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/postgresql-wire-servers-and-psqlodbc/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/psqlodbc-two-fixes-and-two-traps/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/sqliteodbc-numeric-and-param-status/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/tdengine-taos-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/thirty-two-bit-sqllen-on-64-bit-linux/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/unixodbc-four-byte-sqlwchar/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/windows-ansi-code-page-three-disguises/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/mariadb-connector-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/mysql-connector-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/mysql-wire-warehouses-prepared-statements/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/oracle-instant-client-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/duckdb-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/mongodb-bi-connector-through-mysql-odbc/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
 </urlset>

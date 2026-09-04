@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A 35-character Driver=, a compiled-in path, and a CLOB at eight rows a second — adbcBridge notes</title>
+<meta name="description" content="IBM i Access ODBC 1.1.0.29 against Db2 for i 7.5 — the Driver= value must stay under 36 characters, the libraries need a real /opt/ibm/iaccess, and a CLOB column costs a round trip per row.">
+<link rel="canonical" href="https://adbcbridge.org/notes/ibm-i-access-odbc-on-linux-and-macos/">
+<meta property="og:type" content="article"><meta property="og:title" content="A 35-character Driver=, a compiled-in path, and a CLOB at eight rows a second"><meta property="og:description" content="IBM i Access ODBC 1.1.0.29 against Db2 for i 7.5 — the Driver= value must stay under 36 characters, the libraries need a real /opt/ibm/iaccess, and a CLOB column costs a round trip per row."><meta property="og:url" content="https://adbcbridge.org/notes/ibm-i-access-odbc-on-linux-and-macos/">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#1f8a8a;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+nav .brand{font-weight:600;color:var(--ink);border:0;font-size:1.05rem}
+nav ul{list-style:none;margin:0;padding:0;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+nav ul a{border:0;color:var(--muted);font-size:.95rem}nav ul a:hover{color:var(--teal)}
+.theme{background:none;border:1px solid var(--line);border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}
+.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}
+.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article p,article li{max-width:70ch}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list p{margin:.3rem 0;color:var(--muted)}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a class="brand" href="/">adbcBridge</a><ul><li><a href="/docs/">Docs</a></li><li><a href="/matrix/">Matrix</a></li><li><a href="/notes/">Notes</a></li><li><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></li><li><button id="theme" class="theme" type="button" aria-label="Switch between light and dark" title="Light / dark"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></li></ul></nav>
+<article><div class="eyebrow">Notes · found 2026-09-03 · published 2026-09-04</div><h1>A 35-character Driver=, a compiled-in path, and a CLOB at eight rows a second</h1><p class="meta">IBM i Access ODBC 1.1.0.29 against Db2 for i 7.5 — the Driver= value must stay under 36 characters, the libraries need a real /opt/ibm/iaccess, and a CLOB column costs a round trip per row.</p><p>Db2 for i is the database built into IBM i, a different engine and a different wire from
+Db2 proper, reached by IBM's own IBM i Access ODBC driver over the host-server ports.
+Adding it to a compatibility matrix that runs one workload through 53 databases' ODBC
+drivers turned up several things that will each cost an afternoon if nobody has written
+them down. Found on 2026-09-03, against driver 1.1.0.29 (<code>libcwbodbc.so</code>, <code>SQL_DRIVER_VER</code>
+07.01.029) and <code>DB2/400 SQL</code> 07.05.0015 on the free public IBM i at PUB400.COM.</p>
+<h2>Every diagnostic reads <code>CWBNL0202 - cwbodmsg.dll</code></h2>
+<pre><code>[HY000] CWBNL0202 - cwbodmsg.dllCWBNL0202 - cwbodmsg.dllCWBNL0202 - cwbodmsg.dll (30119)
+</code></pre>
+<p>Unlike every other driver in the matrix, this one will not run from where you unpack it.
+The libraries resolve their message catalogues, EBCDIC conversion tables and preferences
+file under a <strong>compiled-in <code>/opt/ibm/iaccess</code></strong>, and with that directory missing every
+diagnostic — including the one that would tell you why a connect failed — degrades to the
+line above and the real error code is lost. Installing the <code>.deb</code> as root puts the tree
+there. To stay root-free, give the process a mount namespace where the path exists;
+bubblewrap does it unprivileged, and <code>/opt</code> has to be a <code>tmpfs</code> first because the real one
+is not writable:</p>
+<pre><code class="language-sh">P=&lt;where you unpacked it&gt;/opt/ibm/iaccess
+bwrap --dev-bind / / --tmpfs /opt --bind $P /opt/ibm/iaccess \
+      --ro-bind $P/lib64/libcwbodbc.so /opt/ibm/cwbodbc.so -- &lt;command&gt;
+</code></pre>
+<p>The <code>tmpfs</code> hides every other <code>/opt</code> subdirectory, so re-bind the ones you need in the
+same run. <code>LD_LIBRARY_PATH</code> must also contain the driver's own <code>lib64</code>: <code>libcwbodbc.so</code>
+links against <code>libcwbcore.so</code> with no <code>RPATH</code>, so <code>ldd</code> says <code>not found</code> and unixODBC
+reports <code>Can't open lib</code>.</p>
+<h2><code>Key value in connection string too long. (30119)</code></h2>
+<p>The <code>Driver=</code> value may be at most <strong>35 characters</strong>. Longer and the driver answers that
+before it looks at anything else — measured exactly: a 35-character path connects, a
+36-character one does not. Which is why the second bind above exists. The driver's own
+installed path, <code>/opt/ibm/iaccess/lib64/libcwbodbc.so</code>, is 36 characters, one over its own
+limit. A short symlink does as well, and a normal root install uses the registered name
+(<code>Driver={IBM i Access ODBC Driver}</code>, 24 characters) instead of a path.</p>
+<h2>The type the driver names is the type you cannot use</h2>
+<p><code>SQLGetTypeInfo(SQL_LONGVARCHAR)</code> names <code>CLOB</code>, and a CLOB column is this driver's worst
+case at both ends: it cannot be array-bound for writing and has no declared width to bind
+for reading, so every row costs a network round trip. 3,000 rows of
+<code>(INTEGER, DOUBLE, &lt;string&gt;, DATE)</code> over a ~110 ms link went in at <strong>8 rows/s</strong> and came
+back at <strong>8 rows/s</strong> as <code>CLOB(1M)</code>. Spelled <code>VARCHAR(8000) CCSID 1208</code> the same table
+ingests at 926–1,070 rows/s and reads back at 1,636–8,052.</p>
+<p>8,000 is measured, not chosen. The widest <code>VARCHAR</code> the server reports (32,739) is refused
+in a four-column table (<code>SQL0101</code>; Db2 for i's row is at most 32,766 bytes), and a column
+that wide describes too wide to bind, which puts the read back on <code>SQLGetData</code> row by row —
+120 rows/s at <code>VARCHAR(16000)</code>, 62 at <code>VARCHAR(32700)</code>.</p>
+<p><code>CCSID 1208</code> is not decoration either. A plain <code>VARCHAR</code> takes the job's CCSID, 273 on this
+host — single-byte EBCDIC — and <code>héllo 🚀</code> comes back with substitution characters. At
+CCSID 1208 it round-trips byte for byte, in a bound parameter and in statement text alike.</p>
+<h2>Server-side settings that are not optional</h2>
+<p><code>CommitMode=0</code> (<code>*NONE</code>) is required. Under the driver's default commitment control the
+first <code>INSERT</code> into a table you just created fails:</p>
+<pre><code>[HY000] (-7008) [IBM][System i Access ODBC Driver][DB2 for i5/OS]
+SQL7008 - ADBC_T in &lt;lib&gt; not valid for operation.
+</code></pre>
+<p>Nothing created with plain <code>CREATE TABLE</code> in a user library on IBM i is journaled, and a
+non-journaled table cannot be changed under commitment control. Also worth knowing before
+you name anything: unquoted identifiers fold to upper case, and <code>SQL_MAX_IDENTIFIER_LEN</code>
+is <strong>18</strong>.</p>
+<p>One thing stands between you and the first connect: the temporary password the host mails
+arrives already expired, and <code>ssh</code> refuses an expired profile outright while the client's
+own <code>cwbCO_ChangePassword()</code> is refused by this host
+(<code>CWBSY1008 - General security error occurred rc=400</code>). What works is a 5250 session,
+which walks straight to the Change Password screen.</p>
+<h2>macOS: <code>SSL=1</code> and pyarrow in one process</h2>
+<p>On macOS the driver segfaults inside <code>SQLDriverConnect</code> with <code>SSL=1</code> whenever pyarrow's
+libraries are loaded in the same process. Bisected: bare Python connects, with
+<code>adbc_driver_manager</code> connects, with the bridge library connects, with pyarrow loaded it
+crashes on <code>SSL=1</code> and connects on <code>SSL=0</code>, and pyodbc alone connects on <code>SSL=1</code>.
+<code>libcwbcore.dylib</code> is two-level with weak definitions and pyarrow's libraries carry their
+own OpenSSL statically, so weak-symbol coalescing across images is the likely mechanism;
+the exact symbol is not identified. The Linux driver, where the matrix runs <code>SSL=1</code>, does
+not show it. The macOS package also has no unprivileged install — it goes to
+<code>/Library/IBMiAccess</code> and needs an administrator — and the 35-character <code>Driver=</code> limit
+applies there too. The matrix entry runs <code>SSL=0</code> on macOS.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
+database's ODBC driver on Linux, macOS and Windows and records each failure with its first
+error; the row for this database is at https://adbcbridge.org/matrix/#ibmi, and the
+finding is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');var saved=null;try{saved=localStorage.getItem('adbcbridge-theme');}catch(e){}
+if(saved==='light'||saved==='dark'){root.setAttribute('data-theme',saved);}
+function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();</script>
+</body>
+</html>

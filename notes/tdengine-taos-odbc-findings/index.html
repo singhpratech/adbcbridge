@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Four conversions taos-odbc calls &quot;not implemented yet&quot;, and one that aborts — adbcBridge notes</title>
+<meta name="description" content="taos-odbc at 3.3.6.13 has no TIMESTAMP_STRUCT conversion, one route into a BOOL parameter and no DECIMAL at all, and it aborts the whole process when a client asks for ODBC 3.80.">
+<link rel="canonical" href="https://adbcbridge.org/notes/tdengine-taos-odbc-findings/">
+<meta property="og:type" content="article"><meta property="og:title" content="Four conversions taos-odbc calls &quot;not implemented yet&quot;, and one that aborts"><meta property="og:description" content="taos-odbc at 3.3.6.13 has no TIMESTAMP_STRUCT conversion, one route into a BOOL parameter and no DECIMAL at all, and it aborts the whole process when a client asks for ODBC 3.80."><meta property="og:url" content="https://adbcbridge.org/notes/tdengine-taos-odbc-findings/">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#1f8a8a;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+nav .brand{font-weight:600;color:var(--ink);border:0;font-size:1.05rem}
+nav ul{list-style:none;margin:0;padding:0;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+nav ul a{border:0;color:var(--muted);font-size:.95rem}nav ul a:hover{color:var(--teal)}
+.theme{background:none;border:1px solid var(--line);border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}
+.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}
+.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article p,article li{max-width:70ch}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list p{margin:.3rem 0;color:var(--muted)}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a class="brand" href="/">adbcBridge</a><ul><li><a href="/docs/">Docs</a></li><li><a href="/matrix/">Matrix</a></li><li><a href="/notes/">Notes</a></li><li><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></li><li><button id="theme" class="theme" type="button" aria-label="Switch between light and dark" title="Light / dark"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></li></ul></nav>
+<article><div class="eyebrow">Notes · found 2026-08-25 · published 2026-09-04</div><h1>Four conversions taos-odbc calls &quot;not implemented yet&quot;, and one that aborts</h1><p class="meta">taos-odbc at 3.3.6.13 has no TIMESTAMP_STRUCT conversion, one route into a BOOL parameter and no DECIMAL at all, and it aborts the whole process when a client asks for ODBC 3.80.</p><h2>What you see</h2>
+<p>Bind a TDengine timestamp column and the whole result set fails:</p>
+<pre><code>#1 Column converstion to 'SQL_C_TYPE_TIMESTAMP[0x5d/93]' not implemented yet
+</code></pre>
+<p><code>SQLBindParameter</code> answers the same way for a timestamp parameter. It is not a missing
+feature of the type — <code>SQLGetData</code> on the same column converts to <code>TIMESTAMP_STRUCT</code>
+perfectly well. taos-odbc looks a conversion up by the exact <code>(C type, SQL type, TDengine
+type)</code> triple and its table is sparse; the bound-column and bound-parameter routes are simply
+not in it.</p>
+<p>Four such gaps, each with a plain-ODBC program, were filed on 2026-08-28 as
+<a href="https://github.com/taosdata/taos-connector-odbc/issues/63">taosdata/taos-connector-odbc#63</a>,
+against the connector built from source at 3.3.6.13; open.</p>
+<ul>
+<li><strong><code>SQLBindCol</code> to <code>SQL_C_TYPE_TIMESTAMP</code></strong>, above. Its bound conversions are the numeric C
+  types, <code>SQL_C_CHAR</code>, <code>SQL_C_WCHAR</code> and <code>SQL_C_BINARY</code>, so the way through is to take a
+  timestamp column as text and parse it — which also keeps the column inside a block cursor
+  instead of dropping the whole result set to one-row <code>SQLGetData</code>.</li>
+<li><strong><code>SQL_TYPE_TIMESTAMP</code> parameters</strong>, the same error. Send the value as
+  <code>"YYYY-MM-DD HH:MM:SS.ffffff"</code> <code>SQL_VARCHAR</code> text and the server parses the literal.</li>
+<li><strong><code>BOOL</code> parameters from any C type but one.</strong> <code>SQL_C_BIT</code> → <code>SQL_BIT</code> is "not implemented
+  yet"; the single route into a TDengine <code>BOOL</code> column is <code>SQL_C_SBIGINT</code> described as
+  <code>SQL_TINYINT</code>. An integer described <code>SQL_INTEGER</code> is not in the driver's table either, and
+  the words <code>"true"</code>/<code>"false"</code> in a VARCHAR are parsed there with <code>strtoll</code> and refused.</li>
+<li><strong>Any <code>DECIMAL</code> column fails the whole <code>SELECT</code></strong>: <code>'UNKNOWN'[21] not supported yet</code> — 21
+  is <code>TSDB_DATA_TYPE_DECIMAL64</code>, and the 128-bit <code>TSDB_DATA_TYPE_DECIMAL</code> is missing from the
+  type table too. TDengine 3.3.6 has the type; its driver does not. Read the column as its
+  exact text instead.</li>
+</ul>
+<p>One connection keyword matters before any of this: without <code>TIMESTAMP_AS_IS=1</code>, taos-odbc's
+own setting, the driver describes every <code>TIMESTAMP</code> column as an <code>SQL_WVARCHAR</code> holding
+formatted text, so timestamps never arrive as timestamps at all.</p>
+<h2>The assert that takes the process with it</h2>
+<p><code>src/core/env.c</code>, <code>_env_set_odbc_version</code>: given <code>SQL_OV_ODBC3_80</code> it builds the <code>01S02</code>
+"substituted" diagnostic record as written — and then calls <code>OA_NIY(0)</code>, which aborts the
+process. <code>SQL_OV_ODBC3_80</code> is exactly what Rust's <code>odbc-api</code> sets, so a Rust program dies at
+environment setup, before it has issued a statement. Removing that one call makes the
+function return the <code>SQL_SUCCESS_WITH_INFO</code> its own code has already prepared; the other way
+round it is not to let <code>odbc-api</code> touch this driver at all. Through everything else the
+driver is fast — 933,052 rows/s from Rust on the 20,000-row fixture, against 403k rows/s
+through the compatibility run's own reader.</p>
+<h2>Every table starts with a TIMESTAMP, and that rules out generated DDL</h2>
+<pre><code>CREATE TABLE t (i INT, ...)
+-&gt; First column must be timestamp    (0x80002641)
+</code></pre>
+<p>The key is range-checked as well as mandatory: non-NULL, distinct per row and inside the
+database's retention window. So feeding it integers does not help either —
+<code>INSERT INTO t VALUES (1, ...)</code> is <code>Timestamp data out of range</code> (0x8000060B), one microsecond
+after the epoch being far outside the default <code>KEEP</code> of 3650 days. Any generated <code>CREATE
+TABLE</code> that declares no timestamp column, and any positional <code>INSERT</code> that fills columns from
+the first one, is therefore impossible against TDengine; a bulk load has to go into a table
+whose first column <em>is</em> a timestamp, which the driver's real parameter binding handles.</p>
+<p>Two more entry-level facts. Identifiers quote with a backtick, and <code>"..."</code> is a string
+literal — <code>FROM "adbc_big"</code> is <code>syntax error near '"adbc_big"'</code>. And an int64 payload whose
+values all fit in 32 bits gets bound as <code>SQL_C_SLONG</code>/<code>SQL_INTEGER</code>, which the driver's table
+maps only to a TDengine <code>INT</code>; values past 2³¹ go as <code>SQL_C_SBIGINT</code>/<code>SQL_BIGINT</code> and reach a
+<code>BIGINT</code> column.</p>
+<h2>On Windows it is the system code page</h2>
+<p>The Windows client package installs <code>taos_odbc.dll</code> as the <code>TDengine</code> driver. Two separate
+things go wrong there. First, the 3.4.2.5 client cannot speak the native protocol to a 3.3.6
+server at all: TCP connects and the server drops the connection with <code>read invalid packet</code> in
+<code>taosd</code>'s log. Connecting over websocket through taosadapter instead — a <code>URL={ws://…}</code>
+connection string against a published 6041 — reaches the server and passes every column
+but one.</p>
+<p>That one is the <code>NCHAR</code> column, and it is the ANSI code page rather than anything
+TDengine-specific: taos_odbc takes the client character set from <code>GetACP()</code> and ignores
+<code>CHARSET_FOR_COL_BIND</code>, <code>CHARSET_ENCODER_FOR_COL_BIND</code> and a UCRT <code>setlocale(".UTF-8")</code>
+alike, so with a 1252 system code page reading <code>héllo 🚀</code> fails</p>
+<pre><code>[iconv] Character set conversion for UTF-32LE to CP1252 failed
+</code></pre>
+<p>through <code>SQL_C_CHAR</code> and <code>SQL_C_WCHAR</code> both, pyodbc identical. Only a UTF-8 system code
+page changes that.</p>
+<p>Related: <a href="/notes/windows-ansi-code-page-three-disguises/">Most Windows-only ODBC failures are one thing wearing different clothes</a></p>
+<p>Finally, if you probe this driver with pyodbc, put it on the narrow path first
+(<code>conn.setencoding(encoding="utf-8", ctype=pyodbc.SQL_CHAR)</code>). pyodbc sends statement text as
+UTF-16 by default, and taos-odbc fails any statement carrying a non-ASCII character with
+<code>conversion for 'UTF-8' to 'UTF-8' not found</code>.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
+database's ODBC driver on Linux, macOS and Windows and records each failure with its first
+error; the row for this database is at https://adbcbridge.org/matrix/#tdengine, and the
+finding is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');var saved=null;try{saved=localStorage.getItem('adbcbridge-theme');}catch(e){}
+if(saved==='light'||saved==='dark'){root.setAttribute('data-theme',saved);}
+function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();</script>
+</body>
+</html>

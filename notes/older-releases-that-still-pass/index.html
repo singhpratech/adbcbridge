@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Which older engine releases pass the matrix entry unchanged — adbcBridge notes</title>
+<meta name="description" content="A sweep of older SQL Server, PostgreSQL, MariaDB and Firebird releases through the same driver and the same unmodified matrix entry, with only the port changed.">
+<link rel="canonical" href="https://adbcbridge.org/notes/older-releases-that-still-pass/">
+<meta property="og:type" content="article"><meta property="og:title" content="Which older engine releases pass the matrix entry unchanged"><meta property="og:description" content="A sweep of older SQL Server, PostgreSQL, MariaDB and Firebird releases through the same driver and the same unmodified matrix entry, with only the port changed."><meta property="og:url" content="https://adbcbridge.org/notes/older-releases-that-still-pass/">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#1f8a8a;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+nav .brand{font-weight:600;color:var(--ink);border:0;font-size:1.05rem}
+nav ul{list-style:none;margin:0;padding:0;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+nav ul a{border:0;color:var(--muted);font-size:.95rem}nav ul a:hover{color:var(--teal)}
+.theme{background:none;border:1px solid var(--line);border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}
+.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}
+.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article p,article li{max-width:70ch}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list p{margin:.3rem 0;color:var(--muted)}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a class="brand" href="/">adbcBridge</a><ul><li><a href="/docs/">Docs</a></li><li><a href="/matrix/">Matrix</a></li><li><a href="/notes/">Notes</a></li><li><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></li><li><button id="theme" class="theme" type="button" aria-label="Switch between light and dark" title="Light / dark"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></li></ul></nav>
+<article><div class="eyebrow">Notes · found 2026-09-03 · published 2026-09-04</div><h1>Which older engine releases pass the matrix entry unchanged</h1><p class="meta">A sweep of older SQL Server, PostgreSQL, MariaDB and Firebird releases through the same driver and the same unmodified matrix entry, with only the port changed.</p><p>A compatibility matrix is usually written against whatever the vendor ships today, which
+leaves a question it never answers: does any of this hold on the release you are actually
+running? A sweep took a set of older releases of engines already in the matrix and ran each
+one through the <strong>stock entry with only the port changed</strong> — same driver where the platform
+allows it, same DDL, same workload, same assertions, nothing tuned.</p>
+<p>The rule for what gets published is deliberately narrow: <strong>a release is listed only when the
+entry passed as it is.</strong> No adjusted tolerances, no extra quirk flags, no "passes if you skip
+the timestamp check". A release that needed any of that is not in the table. These rows also
+add no database to the compatibility count — they are the same engine, re-run.</p>
+<h2>What passed</h2>
+<p><strong>SQL Server 2017 (14.0.3540) and 2019 (15.0.4480)</strong>, through msodbcsql 18.6 on Linux. Both
+show the same <code>NVARCHAR(MAX)</code> chunked-read and <code>SQL_GD_BLOCK</code>-only behaviour as the 2022 row
+above them, which is the interesting part: the driver's handling of a wide unbounded column is
+a property of msodbcsql, not of the server generation behind it. 2017 reads at 2.27M rows/s and
+writes at 101k; 2019 at 2.43M and 106k. Neither was run on macOS.</p>
+<p><strong>PostgreSQL 9.6.24, 10.21 and 12.22</strong>, through psqlodbc 16 on Linux and psqlodbc 18 on macOS,
+all six cells PASS. The <code>unnest</code> array-ingest fast path — the bulk-write shape the entry uses
+against PostgreSQL — applies unchanged on all three. Linux fetch runs 1.58M / 1.70M / 2.13M
+rows/s and ingest 511k / 535k / 546k; macOS fetch 993k / 1.00M / 1.17M and ingest 555k / 423k /
+640k. The oldest of the three takes the same write path as a current one.</p>
+<p><strong>MariaDB 10.6.28</strong>, entry unchanged, PASS on both platforms — MariaDB Connector/ODBC 3.1 on
+Linux, 3.2.9 on macOS. Linux fetch 2.80M rows/s, ingest 104k. The macOS fetch figure, 57k
+against 237k ingest, is not the server: every MySQL-wire database read through MariaDB
+Connector/ODBC 3.2.9 on macOS arm64 lands in the same 39–47k band, in five languages and in
+pyodbc alike, which puts the ceiling in the connector's fetch path on that platform.</p>
+<p><strong>Firebird 3.0.14</strong>, through Firebird ODBC 3.5.0-rc1, PASS on Linux; the macOS cell is
+"driver unavailable", exactly as the Firebird 5 row is, because there is no macOS build of that
+driver. Every Firebird 5.0 quirk in the entry holds identically on 3.0 — the parameter-array
+stride defect, the NULL-then-<code>SQL_C_SBIGINT</code> rebind, the discarded
+<code>SQL_ATTR_ROWS_FETCHED_PTR</code> — and the three driver reports filed for them each reproduce on
+driver 3.0.1 as well as on 3.5.0-rc1. Fetch 231k rows/s, ingest 24k.</p>
+<p>Related: <a href="/notes/firebird-odbc-parameter-defects/">Three ways Firebird's ODBC driver loses your parameters without saying so</a></p>
+<h2>Why the driver, not the server, usually decides</h2>
+<p>The pattern across all seven rows is that what changes between releases is rarely what the
+matrix is testing. The entry's tolerances describe how a <em>driver</em> answers <code>SQLGetTypeInfo</code>, how
+it sizes a bound column, whether its parameter arrays step correctly — and a server upgrade
+moves none of that. Where a server generation does matter, it tends to matter in the SQL
+dialect rather than in the ODBC surface.</p>
+<p>Oracle is the clean example of that, and the reason its bulk-write path is written the way it
+is. The bridge carries an <code>INSERT ALL … SELECT 1 FROM dual</code> fallback for Oracle releases with
+no multi-row <code>VALUES</code> clause, but it is consulted <strong>only after the standard multi-row form has
+actually been refused</strong> — it is a probe, not a version check. Oracle 23.26 takes the plain
+<code>VALUES (…),(…)</code> form, so the verified row never reaches that fallback at all. The code path that exists for older Oracle is therefore live but untaken on the release in
+the table, which is a different thing from a release having been tested.</p>
+<p>That is the boundary this table respects. A version listed here was run; a version not listed
+here was not published, and the absence is not a claim in either direction.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
+database's ODBC driver on Linux, macOS and Windows and records each failure with its first
+error; the row for this database is at https://adbcbridge.org/matrix/#mssql, and the finding is
+on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');var saved=null;try{saved=localStorage.getItem('adbcbridge-theme');}catch(e){}
+if(saved==='light'||saved==='dark'){root.setAttribute('data-theme',saved);}
+function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();</script>
+</body>
+</html>

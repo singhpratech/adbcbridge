@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Five things OpenLink Virtuoso&#x27;s ODBC driver does silently and wrongly — adbcBridge notes</title>
+<meta name="description" content="virtodbc.so from libvirtodbc0 7.2.12 stores UTF-16 text as garbage, aborts on any Charset= but the literal UTF-8, stores every SQL_C_SBIGINT as 0, and strides date parameter arrays by ColumnSize.">
+<link rel="canonical" href="https://adbcbridge.org/notes/virtuoso-odbc-five-defects/">
+<meta property="og:type" content="article"><meta property="og:title" content="Five things OpenLink Virtuoso&#x27;s ODBC driver does silently and wrongly"><meta property="og:description" content="virtodbc.so from libvirtodbc0 7.2.12 stores UTF-16 text as garbage, aborts on any Charset= but the literal UTF-8, stores every SQL_C_SBIGINT as 0, and strides date parameter arrays by ColumnSize."><meta property="og:url" content="https://adbcbridge.org/notes/virtuoso-odbc-five-defects/">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#1f8a8a;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+nav .brand{font-weight:600;color:var(--ink);border:0;font-size:1.05rem}
+nav ul{list-style:none;margin:0;padding:0;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+nav ul a{border:0;color:var(--muted);font-size:.95rem}nav ul a:hover{color:var(--teal)}
+.theme{background:none;border:1px solid var(--line);border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}
+.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}
+.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article p,article li{max-width:70ch}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list p{margin:.3rem 0;color:var(--muted)}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a class="brand" href="/">adbcBridge</a><ul><li><a href="/docs/">Docs</a></li><li><a href="/matrix/">Matrix</a></li><li><a href="/notes/">Notes</a></li><li><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></li><li><button id="theme" class="theme" type="button" aria-label="Switch between light and dark" title="Light / dark"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></li></ul></nav>
+<article><div class="eyebrow">Notes · found 2026-08-29 · published 2026-09-04</div><h1>Five things OpenLink Virtuoso&#x27;s ODBC driver does silently and wrongly</h1><p class="meta">virtodbc.so from libvirtodbc0 7.2.12 stores UTF-16 text as garbage, aborts on any Charset= but the literal UTF-8, stores every SQL_C_SBIGINT as 0, and strides date parameter arrays by ColumnSize.</p><p>Virtuoso is ODBC-native: port 1111 carries its own binary wire protocol and <code>virtodbc.so</code>
+speaks it directly, so there is no separate client library between you and these defects.
+Three of the five below return <code>SQL_SUCCESS</code> with no diagnostic, which is what makes them
+worth writing down: nothing tells the application that the value it stored is not the value
+it sent.</p>
+<h2>1. <code>SQL_C_WCHAR</code> is a four-byte <code>wchar_t</code>, not the driver manager's <code>SQLWCHAR</code></h2>
+<p><code>virtodbc.so</code> is a pure ANSI driver — it exports no <code>…W</code> entry points at all — and implements
+<code>SQL_C_WCHAR</code> as four-byte <code>wchar_t</code> rather than the two-byte <code>SQLWCHAR</code> unixODBC's headers
+define, on both the parameter and the fetch side. A UTF-16 buffer is therefore consumed four
+bytes at a time. <code>hello</code> with indicator 10 stores as <code>??</code>; a one-character string stores as
+the empty string; <code>héllo 🚀</code> stores as the single character <code>0</code>. Every one of them
+<code>SQL_SUCCESS</code>, no diagnostic. On the read side a two-byte <code>SQLWCHAR</code> fetch widens each UTF-8
+<em>byte</em> to a four-byte unit (<code>68 00 00 00 c3 00 00 00 …</code>). Hand the same driver a <code>wchar_t</code>
+array and the text round-trips exactly, emoji included — which is the proof of the width.</p>
+<p>The narrow path is exact for UTF-8, so staying on it is the workaround. Reported on
+2026-08-29 as <a href="https://github.com/openlink/virtuoso-opensource/issues/1470">openlink/virtuoso-opensource#1470</a>,
+open. Its macOS counterpart was filed four days earlier as
+<a href="https://github.com/openlink/virtuoso-opensource/issues/1469">openlink/virtuoso-opensource#1469</a>: the Homebrew 7.2.17
+build is iODBC-width and nothing says so.</p>
+<p>Related: <a href="/notes/unixodbc-four-byte-sqlwchar/">The process dies with SIGABRT on the first SQL error, and it is the manager</a></p>
+<p>A second defect sits next to this one: <code>SQL_C_CHAR</code> bound against <code>SQL_WCHAR</code>/<code>SQL_WVARCHAR</code>
+with <code>SQL_NTS</code> stores the correct text followed by 100–150 characters of adjacent process
+memory, different on every run, again with no diagnostic. An explicit byte length in place of
+<code>SQL_NTS</code> stores the value correctly.</p>
+<h2>2. Any <code>Charset=</code> but the exact literal <code>UTF-8</code> aborts the process</h2>
+<pre><code>GPF: Dkbox.c:638 Double free
+</code></pre>
+<p>Client-side, inside <code>SQLDriverConnect</code>. <code>UTF8</code>, lowercase <code>utf-8</code>, <code>UTF-16</code>, and every charset
+Virtuoso itself lists in <code>DB.DBA.SYS_CHARSETS</code> — <code>ISO-8859-1</code>, <code>WINDOWS-1252</code>, <code>KOI8-R</code> — all
+abort. The one value that connects is not safe either: over a <code>Charset=UTF-8</code> connection wide
+<code>NVARCHAR</code> columns read back doubly encoded, each stored byte recoded as a single-byte
+character, so <code>héllo 🚀</code> comes back as <code>hÃ©llo ð…</code> while <code>SQLGetData</code> returns <code>SQL_SUCCESS</code>
+and reports the <em>original</em> byte length in <code>StrLen_or_Ind</code> — an application that honours the
+indicator gets the mojibake cut mid-sequence. The workaround is to put no <code>Charset=</code> in the
+connection string at all. <a href="https://github.com/openlink/virtuoso-opensource/issues/1471">openlink/virtuoso-opensource#1471</a>,
+open.</p>
+<h2>3. <code>SQL_C_SBIGINT</code> parameters store 0</h2>
+<p>Whatever the value — <code>42</code> as much as <code>1234567890123</code> — and whether it is declared <code>SQL_BIGINT</code>,
+<code>SQL_NUMERIC</code> or <code>SQL_DECIMAL</code>. The driver's conversion table has no <code>SQL_C_SBIGINT</code>. The read
+side matches: <code>SQLGetData</code> and <code>SQLBindCol</code> with <code>SQL_C_SBIGINT</code> return <code>SQL_SUCCESS</code> with an
+indicator of 0 and leave the buffer untouched, so a column declared <code>BIGINT</code> reads back as
+zeros.</p>
+<p>Sending the digits as <code>SQL_C_CHAR</code> text declared <code>SQL_NUMERIC</code> or <code>SQL_DECIMAL</code> is exact,
+<code>INT64_MIN</code> and <code>INT64_MAX</code> included. <code>SQL_NUMERIC</code> is what makes it exact, not the text: the
+same digits declared <code>SQL_BIGINT</code>, <code>SQL_VARCHAR</code> or <code>SQL_CHAR</code> also store <code>0</code>. On the read
+side <code>SQL_C_CHAR</code> and <code>SQL_C_DOUBLE</code> deliver the value; <code>SQL_C_SLONG</code> truncates silently
+(<code>9223372036854775807</code> arrives as <code>-1</code>). A related one: a <code>SQL_C_SLONG</code> parameter is read as
+eight bytes — a C <code>long</code> on LP64 — whatever <code>BufferLength</code> says, so an <code>int32</code> bound out of a
+packed array picks up the word after it (<code>SR346: Integer out of range for column i</code>).
+<a href="https://github.com/openlink/virtuoso-opensource/issues/1472">openlink/virtuoso-opensource#1472</a>, open.</p>
+<h2>4. Date parameter arrays are strided by <code>ColumnSize</code></h2>
+<p><code>virtodbc.so</code> accepts <code>SQL_ATTR_PARAMSET_SIZE</code>, executes every set, reports the right
+affected-row count and marks every element <code>SQL_PARAM_SUCCESS</code> — but for the datetime C
+structs it steps a column-wise array by <code>SQLBindParameter</code>'s <code>ColumnSize</code> argument rather than
+by <code>sizeof(SQL_DATE_STRUCT)</code>, which the specification says is what governs. <code>ColumnSize</code> 0
+gives a stride of zero, so row 0's date is inserted into every row. Other values read at the
+wrong offset and past the end of the buffer: four dates bound with <code>ColumnSize</code> 10 over a
+packed array come back as <code>2024-01-01</code>, <code>0197-08-05</code> and two more that change from run to run,
+and a timestamp array bound with <code>ColumnSize</code> 23 over 16-byte elements ends in
+<code>-17837-65534-65535</code>. <code>SQL_C_CHAR</code>, <code>SQL_C_DOUBLE</code> and <code>SQL_C_SLONG</code> arrays walk correctly, so
+the damage is invisible unless a date, time or timestamp column is in the batch. Laying the
+elements out <code>ColumnSize</code> bytes apart, or binding row-wise, is correct in every case; turning
+parameter arrays off is the blunter fix.
+<a href="https://github.com/openlink/virtuoso-opensource/issues/1473">openlink/virtuoso-opensource#1473</a>, open.</p>
+<h2>5. On Windows, <code>SQLSetPos</code> and a four-byte indicator stride</h2>
+<p><code>virtodbc.dll</code> 7.2.17 advertises the <code>SQL_GD_*</code> extensions, but <code>SQLSetPos(SQL_POSITION)</code>
+fails on a block cursor, and the bound-column indicator array is written at a four-byte
+stride there. Recorded with its conditions, not yet filed upstream.</p>
+<p>Related: <a href="/notes/thirty-two-bit-sqllen-on-64-bit-linux/">A NULL column that reads back as the previous row's value</a></p>
+<h2>Dates</h2>
+<p>The macOS width was found on 2026-08-25 and the four Linux defects on 2026-08-29. The
+Windows pair is recorded in <code>bench/BENCHMARKS-windows.md</code>.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
+database's ODBC driver on Linux, macOS and Windows and records each failure with its first
+error; the row for this database is at https://adbcbridge.org/matrix/#virtuoso, and the
+finding is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');var saved=null;try{saved=localStorage.getItem('adbcbridge-theme');}catch(e){}
+if(saved==='light'||saved==='dark'){root.setAttribute('data-theme',saved);}
+function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();</script>
+</body>
+</html>

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Three things Exasol&#x27;s ODBC driver gets wrong about C types and block cursors — adbcBridge notes</title>
+<meta name="description" content="Exasol ODBC 25.2/26.2 refuses SQL_C_BINARY outright (HY003), fails a NULL SQL_DECIMAL parameter bound SQL_C_DEFAULT (SI002), and claims SQL_GD_BLOCK it cannot deliver.">
+<link rel="canonical" href="https://adbcbridge.org/notes/exasol-odbc-three-quirks/">
+<meta property="og:type" content="article"><meta property="og:title" content="Three things Exasol&#x27;s ODBC driver gets wrong about C types and block cursors"><meta property="og:description" content="Exasol ODBC 25.2/26.2 refuses SQL_C_BINARY outright (HY003), fails a NULL SQL_DECIMAL parameter bound SQL_C_DEFAULT (SI002), and claims SQL_GD_BLOCK it cannot deliver."><meta property="og:url" content="https://adbcbridge.org/notes/exasol-odbc-three-quirks/">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#1f8a8a;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+nav .brand{font-weight:600;color:var(--ink);border:0;font-size:1.05rem}
+nav ul{list-style:none;margin:0;padding:0;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+nav ul a{border:0;color:var(--muted);font-size:.95rem}nav ul a:hover{color:var(--teal)}
+.theme{background:none;border:1px solid var(--line);border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}
+.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}
+.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article p,article li{max-width:70ch}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list p{margin:.3rem 0;color:var(--muted)}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a class="brand" href="/">adbcBridge</a><ul><li><a href="/docs/">Docs</a></li><li><a href="/matrix/">Matrix</a></li><li><a href="/notes/">Notes</a></li><li><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></li><li><button id="theme" class="theme" type="button" aria-label="Switch between light and dark" title="Light / dark"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></li></ul></nav>
+<article><div class="eyebrow">Notes · found 2026-09-03 · published 2026-09-04</div><h1>Three things Exasol&#x27;s ODBC driver gets wrong about C types and block cursors</h1><p class="meta">Exasol ODBC 25.2/26.2 refuses SQL_C_BINARY outright (HY003), fails a NULL SQL_DECIMAL parameter bound SQL_C_DEFAULT (SI002), and claims SQL_GD_BLOCK it cannot deliver.</p><p>Three defects in Exasol's own ODBC client, measured against Exasol 2025.1.14 with client
+25.2.1 on Linux (<code>libexaodbc.so</code>) and 26.2.8 on Windows (<code>EXAODBC.dll</code>). Each is
+reachable from plain ODBC: two of them fail the whole statement, and the third hands back
+no data with no diagnostic record.</p>
+<h2>1. <code>SQL_C_BINARY</code> is refused for every target</h2>
+<p>Exasol has no binary column type. <code>BLOB</code> is recognised and refused —</p>
+<pre><code>[0A000] [Exasol][Exasol Driver]Feature not supported: data type BLOB
+        (Session: ...) (-466560) (SQLExecDirectW)
+</code></pre>
+<p>— and <code>VARBINARY(10)</code>, <code>BINARY(10)</code>, <code>RAW(10)</code> and <code>BYTEA</code> are not words its parser knows
+(<code>42000</code>, "syntax error, unexpected IDENTIFIER_PART_"). That much is a server limitation
+you can design around. The driver-side half is not: <code>SQLBindParameter</code> rejects the C type
+outright, whatever the target column is.</p>
+<pre><code>[HY003] [Exasol][Exasol Driver]Invalid application buffer type: SQL_C_BINARY
+        (-30139779) (SQLBindParameter)
+</code></pre>
+<p>Measured against a <code>VARCHAR(50)</code> column and again against a <code>HASHTYPE</code> one. <code>SQLGetData</code>
+with <code>SQL_C_BINARY</code> is refused too, with <code>07006</code>. So a byte string cannot reach the server
+by any bound route. What works is <code>SQL_C_CHAR</code> into a <code>VARCHAR</code>: the same bytes store and
+read back byte for byte (<code>b"\x01\x02"</code> → <code>"\x01\x02"</code>).</p>
+<h2>2. A NULL parameter described <code>SQL_DECIMAL</code> cannot be bound <code>SQL_C_DEFAULT</code></h2>
+<p>The ordinary way to bind a NULL is to ask <code>SQLDescribeParam</code> what the server wants and
+then bind a NULL pointer with <code>SQL_C_DEFAULT</code>. Exasol answers, at <code>SQLExecute</code>, and fails
+the whole statement rather than the one parameter:</p>
+<pre><code>[SI002]  (-47869058) [Exasol][Exasol Driver]C-Type not supported.
+[HY010] (-30139812) [Exasol][Exasol Driver]Error creating prepared statement header.
+</code></pre>
+<p>A raw unixODBC probe, one NULL parameter per statement, isolates which type it is:</p>
+<table>
+<thead>
+<tr>
+<th>column type</th>
+<th>described as</th>
+<th><code>SQL_C_DEFAULT</code></th>
+<th><code>SQL_C_CHAR</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DECIMAL(10,3)</code></td>
+<td><code>SQL_DECIMAL</code> (12, 3)</td>
+<td><code>SI002</code></td>
+<td>OK</td>
+</tr>
+<tr>
+<td><code>INT</code></td>
+<td><code>SQL_DECIMAL</code> (20, 0)</td>
+<td><code>SI002</code></td>
+<td>OK</td>
+</tr>
+<tr>
+<td><code>VARCHAR(50)</code></td>
+<td><code>SQL_VARCHAR</code></td>
+<td>OK</td>
+<td>OK</td>
+</tr>
+<tr>
+<td><code>DATE</code></td>
+<td><code>SQL_TYPE_DATE</code></td>
+<td>OK</td>
+<td>OK</td>
+</tr>
+<tr>
+<td><code>TIMESTAMP(6)</code></td>
+<td><code>SQL_TYPE_TIMESTAMP</code></td>
+<td>OK</td>
+<td>OK</td>
+</tr>
+<tr>
+<td><code>BOOLEAN</code></td>
+<td><code>SQL_BIT</code></td>
+<td>OK</td>
+<td>OK</td>
+</tr>
+<tr>
+<td><code>DOUBLE</code></td>
+<td><code>SQL_DOUBLE</code></td>
+<td>OK</td>
+<td>OK</td>
+</tr>
+</tbody>
+</table>
+<p><code>SQL_DECIMAL</code> alone — which is much wider than it sounds, because Exasol has no narrow
+integer type. <code>INT</code>, <code>INTEGER</code>, <code>SMALLINT</code> and <code>BIGINT</code> are all aliases of <code>DECIMAL(18,0)</code>
+/ <code>DECIMAL(36,0)</code>, and <code>SQLDescribeParam</code> reports <code>SQL_DECIMAL</code> for every one of them, so
+a NULL in <em>any</em> numeric column takes this path. Bind those as <code>SQL_C_CHAR</code> with a NULL
+data pointer and they are accepted.</p>
+<h2>3. <code>SQL_GD_BLOCK</code> is claimed, and <code>SQLGetData</code> works once per <code>SQLFetch</code></h2>
+<p><code>SQL_GETDATA_EXTENSIONS</code> is <code>0xf</code> — <code>SQL_GD_ANY_COLUMN | ANY_ORDER | BLOCK | BOUND</code>. On
+the strength of that you would bind a wide text column into a modest buffer and repair
+clipped values with <code>SQLSetPos</code> + <code>SQLGetData</code>. On a five-row rowset with a
+32-byte buffer, one row carrying a 100-character value:</p>
+<pre><code>row 1 bound='v0'                   indicator=2
+row 3 bound='W...................' indicator=100     &lt;- clipped
+SQLSetPos(2) rc=0  SQLGetData rc=0            value='v1'
+SQLSetPos(3) rc=0  SQLGetData rc=SQL_NO_DATA  value=''   &lt;- the clipped row
+SQLSetPos(4) rc=0  SQLGetData rc=SQL_NO_DATA  value=''   &lt;- and the cursor stays there
+</code></pre>
+<p>A plain-ODBC probe on 2026-09-04, C against unixODBC, isolated the actual rule, and
+truncation is not part of it: <strong>only the first <code>SQLGetData</code> after each <code>SQLFetch</code>
+succeeds, whichever row <code>SQLSetPos</code> selected.</strong> With no long value anywhere, rows 2–5
+still answer <code>SQL_NO_DATA</code> — with no diagnostic record. With the clipped row visited
+first it returns its full 100 characters and the short rows after it fail. With
+<code>SQL_ATTR_ROW_ARRAY_SIZE</code> 1 and one <code>SQLFetch</code> per row, every row reads fine. <code>SQLFetch</code>
+resets the driver's per-column "already returned" state and <code>SQLSetPos</code> does not.</p>
+<p>The driver's own capability bits give no supported way round it either:
+<code>SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1</code> is <code>0x0</code> — not even <code>SQL_CA1_NEXT</code>, let alone
+<code>SQL_CA1_POS_POSITION</code> — yet <code>SQLSetPos(SQL_POSITION)</code> returns <code>SQL_SUCCESS</code> rather than
+refusing. Block fetching into <em>bound</em> columns is correct throughout: right data, right
+indicators, a proper <code>01004</code> on the truncated row. The workaround is to leave a long
+column unbound, at a real cost — 1.54M rows/s against the 3.32M/s the wrong bound read
+managed. It is not a corner case, because <code>SQLGetTypeInfo(SQL_LONGVARCHAR)</code> names
+<code>LONG VARCHAR</code>, which is <code>VARCHAR(2000000)</code> here, so an ordinary generated table has an
+unbindable text column in it.</p>
+<h2>One server-side trap worth the same page</h2>
+<p><code>exadt</code> records the container's Docker address in <code>/exa/etc/EXAConf</code> (<code>PrivateNet =
+172.17.0.2/16</code> on a default bridge) the first time the volume is initialised, and refuses
+to start when the container later comes up on a different one — <em>the private interface
+with address '172.17.0.2/16' either does not exist or is down</em>, container <code>Exited (1)</code>.
+Any reboot where another container claims that address first is enough. Fix it without
+re-initialising: edit <code>PrivateNet</code> to the address <code>docker inspect</code> now shows, set
+<code>Checksum = COMMIT</code> (the file refuses a silent edit), and restart. A fixed address on a
+user-defined network avoids it.</p>
+<h2>Status</h2>
+<p>Found on 2026-09-03; all three were reproduced on 2026-09-04 in C against unixODBC, with
+no bridge code in the stack. They are recorded in docs/UPSTREAM.md under
+"documented here, not yet reported"; no vendor issue is filed yet.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through
+every database's ODBC driver on Linux, macOS and Windows and records each failure with
+its first error; the row for this database is at https://adbcbridge.org/matrix/#exasol,
+and the finding is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');var saved=null;try{saved=localStorage.getItem('adbcbridge-theme');}catch(e){}
+if(saved==='light'||saved==='dark'){root.setAttribute('data-theme',saved);}
+function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();</script>
+</body>
+</html>

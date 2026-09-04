@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Two psqlodbc bugs that lost rows and narrowed integers, and two traps — adbcBridge notes</title>
+<meta name="description" content="psqlodbc silently discarded a committed transaction on servers without SAVEPOINT and narrowed an out-of-range int8 to -1; both are fixed, and two version-and-build traps remain.">
+<link rel="canonical" href="https://adbcbridge.org/notes/psqlodbc-two-fixes-and-two-traps/">
+<meta property="og:type" content="article"><meta property="og:title" content="Two psqlodbc bugs that lost rows and narrowed integers, and two traps"><meta property="og:description" content="psqlodbc silently discarded a committed transaction on servers without SAVEPOINT and narrowed an out-of-range int8 to -1; both are fixed, and two version-and-build traps remain."><meta property="og:url" content="https://adbcbridge.org/notes/psqlodbc-two-fixes-and-two-traps/">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#1f8a8a;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+nav .brand{font-weight:600;color:var(--ink);border:0;font-size:1.05rem}
+nav ul{list-style:none;margin:0;padding:0;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+nav ul a{border:0;color:var(--muted);font-size:.95rem}nav ul a:hover{color:var(--teal)}
+.theme{background:none;border:1px solid var(--line);border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}
+.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}
+.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article p,article li{max-width:70ch}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list p{margin:.3rem 0;color:var(--muted)}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a class="brand" href="/">adbcBridge</a><ul><li><a href="/docs/">Docs</a></li><li><a href="/matrix/">Matrix</a></li><li><a href="/notes/">Notes</a></li><li><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></li><li><button id="theme" class="theme" type="button" aria-label="Switch between light and dark" title="Light / dark"><svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></li></ul></nav>
+<article><div class="eyebrow">Notes · found 2026-08-25 · published 2026-09-04</div><h1>Two psqlodbc bugs that lost rows and narrowed integers, and two traps</h1><p class="meta">psqlodbc silently discarded a committed transaction on servers without SAVEPOINT and narrowed an out-of-range int8 to -1; both are fixed, and two version-and-build traps remain.</p><h2>Fourteen servers, one driver</h2>
+<p>Fourteen entries in this compatibility matrix reach their server through psqlodbc, and most
+of them are not PostgreSQL. Driving the same workload through all of them turned up two
+defects in the driver — both now fixed — and two traps that are still there.</p>
+<h2><code>SQLEndTran(SQL_COMMIT)</code> returns success for rows that are gone</h2>
+<p>On a manual-commit connection, a prepared <code>INSERT</code> executed through psqlodbc and then freed
+<em>before</em> the commit loses its rows. Two <code>SQLExecute</code>s return <code>SQL_SUCCESS</code>,
+<code>SQLEndTran(SQL_COMMIT)</code> returns <code>SQL_SUCCESS</code>, and <code>count(*)</code> is 0 — from the same
+connection and from a fresh one. Freed <em>after</em> the commit, both rows are there.</p>
+<p>The wire shows why. On <code>SQLFreeHandle</code> the driver sends</p>
+<pre><code>SAVEPOINT _per_query_svp_;DEALLOCATE &quot;_PLAN0x…&quot;;RELEASE _per_query_svp_
+</code></pre>
+<p>as one query, regardless of <code>Protocol=7.4-0</code> — the trailing digit is psqlodbc's level of
+rollback on errors, and <code>0</code> is what turns its per-statement savepoints off. A server
+without <code>SAVEPOINT</code> rejects it. QuestDB answers
+<code>ERROR: table does not exist [table=SAVEPOINT]</code>; the transaction is aborted, the
+error is never surfaced through ODBC, and the later <code>COMMIT</code> is answered with success.
+Driven through libpq directly (psycopg 3: named or unnamed statements, text or binary
+parameters, a plain <code>DEALLOCATE</code> inside the transaction) every combination keeps its rows,
+so this is the driver's own path meeting a server that has no savepoints.</p>
+<p>Found on 2026-08-25 and filed with a wire capture as
+<a href="https://github.com/postgresql-interfaces/psqlodbc/issues/208">postgresql-interfaces/psqlodbc#208</a>
+on 2026-08-29. <strong>Fixed</strong> by
+<a href="https://github.com/postgresql-interfaces/psqlodbc/pull/209">postgresql-interfaces/psqlodbc#209</a>,
+merged 2026-09-02:
+rollback level 0 no longer savepoint-wraps the internal <code>DEALLOCATE</code>. QuestDB is confirmed
+against the merged branch; Materialize waits on its own half of the pair. Until the fix is
+in your build, on a manual-commit connection to a server without <code>SAVEPOINT</code>, release
+statements after <code>Commit()</code>, never before.</p>
+<p>Related: <a href="/notes/postgresql-wire-servers-and-psqlodbc/">Where PostgreSQL-wire servers part company with PostgreSQL</a></p>
+<h2><code>9223372036854775807</code> reads back as <code>-1</code></h2>
+<p><code>SQLGetData</code> and <code>SQLBindCol</code> narrowed an out-of-range <code>int8</code> to <code>SQL_C_SLONG</code> — and to
+<code>SQL_C_SSHORT</code> — silently. <code>9223372036854775807::bigint</code> came back as <code>-1</code> under
+<code>SQL_SUCCESS</code>, where ODBC specifies <code>22003</code>. <code>pg_atol</code> and <code>pg_atoi</code> in <code>convert.c</code> stored
+the low bits with no range check. This is stock PostgreSQL 16, not a fork's doing; it
+matters most where a column you would expect to be 32-bit is not — CockroachDB's <code>INTEGER</code>
+is 64-bit and reports column size 19.</p>
+<p>Filed as
+<a href="https://github.com/postgresql-interfaces/psqlodbc/issues/207">postgresql-interfaces/psqlodbc#207</a>
+on 2026-08-29. <strong>Fixed</strong> by
+<a href="https://github.com/postgresql-interfaces/psqlodbc/pull/210">postgresql-interfaces/psqlodbc#210</a>,
+merged 2026-09-04:
+<code>SQLGetData</code> and <code>SQLBindCol</code> now return <code>SQL_ERROR</code> with <code>22003</code> for an out-of-range
+integer conversion instead of the wrapped low bits. A re-test against the merge commit is
+pending here.</p>
+<h2>Trap 1: psqlodbc 18 asks a question 16 did not</h2>
+<p>psqlodbc 18.00.0002 sends <code>SHOW DateStyle;</code> at connect (<code>connection.c:1109</code>). YDB's
+PostgreSQL layer answers</p>
+<pre><code>unrecognized configuration parameter &quot;datestyle&quot;
+</code></pre>
+<p>and the connect fails outright, so nothing downstream gets a chance to work around it. The
+16.x line does not issue the statement, and the YDB entry passes through psqlodbc 16 on
+every operating system. Arguably this one is YDB's to implement rather than the driver's to
+drop; either way, if a PostgreSQL-wire server that worked stops connecting after a driver
+upgrade, this is the first thing to check.</p>
+<h2>Trap 2: the ANSI library answers <code>HYC00</code> where the Unicode one works</h2>
+<p>A multi-row <code>executemany</code> (or <code>adbc_ingest</code>) fails with</p>
+<pre><code>[HYC00] (10) Unrecognized C_parameter type in copy_statement_with_parameters
+</code></pre>
+<p>while single statements and plain reads work. pyodbc through the same DSN fails the same way
+on an <code>executemany</code>, and with <code>07006 Received an unsupported type from Postgres (14)</code> on a
+fetch.</p>
+<p><code>make install</code> of psqlodbc installs two libraries: <code>psqlodbca.so</code>, the ANSI build, and
+<code>psqlodbcw.so</code>, the Unicode build. The ANSI build exports no <code>SQL*W</code> entry points and has no
+<code>SQL_C_WCHAR</code> case in its parameter-copy path, so any bound wide parameter — which is how
+text is sent here — is refused. Distro packages ship both files, and a DSN or a <code>Driver=</code>
+value can point at either, which is how a working setup becomes a broken one with no change
+to the code. Point <code>Driver=</code> (or the DSN's <code>Driver</code> line) at <code>psqlodbcw.so</code>.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
+database's ODBC driver on Linux, macOS and Windows and records each failure with its first
+error; the row for this database is at https://adbcbridge.org/matrix/#postgres, and the
+finding is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');var saved=null;try{saved=localStorage.getItem('adbcbridge-theme');}catch(e){}
+if(saved==='light'||saved==='dark'){root.setAttribute('data-theme',saved);}
+function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();</script>
+</body>
+</html>
