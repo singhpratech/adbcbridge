@@ -4,4 +4,6 @@
   <url><loc>https://adbcbridge.org/docs/</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
   <url><loc>https://adbcbridge.org/bench/</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>
   <url><loc>https://adbcbridge.org/matrix/</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://adbcbridge.org/notes/</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/notes/ingres-client-and-the-jvm/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
 </urlset>
