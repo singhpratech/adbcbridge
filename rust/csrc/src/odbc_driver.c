@@ -596,10 +596,15 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     conn->reader_opts.getdata_bound = (gd & SQL_GD_BOUND) != 0;
   }
 
-  // Can an earlier row of this cursor be read again?  SQL_CA1_ABSOLUTE on the
-  // forward-only cursor -- the cursor type the reader uses -- says SQLFetchScroll can
-  // reposition without asking for a scrollable (and, on a client/server driver, far
-  // more expensive) cursor type.
+  // Can an earlier row of this cursor be read again?  The reader sets no cursor type,
+  // so it gets the driver's default -- SQL_CURSOR_FORWARD_ONLY by the specification,
+  // SQL_CURSOR_STATIC on sqliteodbc, whose materialised result set is what makes the
+  // re-read work there.  SQL_CA1_ABSOLUTE in SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1 says
+  // SQLFetchScroll can reposition without asking for a scrollable (and, on a
+  // client/server driver, far more expensive) cursor type; sqliteodbc leaves it out of
+  // that bitmask and claims it for the static cursor only -- and means it: a cursor
+  // explicitly set forward-only answers SQLFetchScroll(SQL_FETCH_ABSOLUTE) with 01000
+  // "wrong fetch direction".  Since nothing here sets the type, the default carries it.
   SQLUINTEGER ca1 = 0;
   if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1, &ca1,
                                sizeof(ca1), NULL))) {
@@ -653,8 +658,11 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   if (strstr((const char*)name, "clickhouse")) {
     conn->reader_opts.null_param_as_varchar = true;
     conn->reader_opts.nullable_type_format = "Nullable(%s)";
-    // clickhouse-odbc applies only the first few sets of a parameter array and never
-    // writes SQL_ATTR_PARAMS_PROCESSED_PTR, so there is no way to tell what ran.
+    // clickhouse-odbc runs one parameter set per SQLExecute/SQLMoreResults call (its
+    // own protocol, clickhouse-odbc#324); a plain SQLExecute therefore runs set 0 only,
+    // and on 1.5.5 the first SQLMoreResults runs set 1 but answers SQL_NO_DATA, so
+    // nothing past set 1 ever runs (clickhouse-odbc#582).  SQL_ATTR_PARAMS_PROCESSED_PTR
+    // holds the index of the set being sent, not a count.
     conn->reader_opts.no_param_arrays = true;
     // clickhouse-odbc reports only the whole-second Time for SQL_TYPE_TIME, with no
     // CREATE_PARAMS; a "13:45:10.123456" parameter bound into such a column is stored as
@@ -755,6 +763,48 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // driver's reported maximum for SQL_VARCHAR would not be.  See ddl_string_type_name.
     conn->reader_opts.ddl_string_type_name = "VARCHAR(8191)";
   }
+  if (strstr((const char*)name, "altibase")) {
+    // Altibase's own driver (SQL_DRIVER_NAME is the library's file name,
+    // "libaltibase_odbc-64bit-ul64.so") disagrees with itself about characters above the
+    // BMP, and the two paths are not interchangeable for a single value.  On a UTF8
+    // database opened with NLS_USE=UTF8:
+    //   * a SQL_C_WCHAR parameter is stored as CESU-8 -- the surrogate pair is written as
+    //     two three-byte sequences, so "héllo <U+1F680>" occupies 13 bytes and LENGTH()
+    //     counts 8 characters -- and a SQL_C_CHAR fetch of it hands those bytes back
+    //     verbatim, which is not valid UTF-8 (it starts 0xED) and cannot be put into an
+    //     Arrow string array at all.
+    //   * a SQL_C_CHAR parameter is passed through byte for byte (11 bytes, LENGTH() 10:
+    //     the server counts each UTF-8 byte of the astral character separately), and a
+    //     SQL_C_CHAR fetch returns exactly those bytes -- "héllo <U+1F680>" round-trips.
+    //     A SQL_C_WCHAR fetch of the same value yields four U+FFFD.
+    // So keep both ends of the value on the narrow path, as the Informix branch below
+    // does: wchar_as_utf8 for the fetch (VARCHAR and NVARCHAR alike) and narrow_params
+    // for the parameter.  Measured on Linux/unixODBC; the Windows block at the end of
+    // this function switches wchar_as_utf8 off there, as it does for every driver but
+    // Ignite, and narrow_params holds everywhere.
+    conn->reader_opts.wchar_as_utf8 = true;
+    conn->reader_opts.narrow_params = true;
+    // Altibase has no SQL_LONGVARCHAR and no SQL_WLONGVARCHAR in SQLGetTypeInfo at all
+    // (its large-object character type, CLOB, is numbered 40), so generated ingest DDL
+    // for an Arrow string column reaches SQL_VARCHAR -- and there the driver reports
+    // CREATE_PARAMS "precision" where ODBC's convention for a character type, and every
+    // other driver in the matrix, says "length".  Nothing then supplies a length and the
+    // column is created as a bare VARCHAR, which in Altibase means VARCHAR(1): the first
+    // string longer than one byte fails the INSERT with 22026, "Invalid data type
+    // length : B. (135273)".  Name the type outright instead, at the widest VARCHAR the
+    // server takes (32,000; 32,001 is refused, and the length is in bytes, not
+    // characters).  See ddl_string_type_name, which Firebird uses the same way.
+    conn->reader_opts.ddl_string_type_name = "VARCHAR(32000)";
+    // The third driver whose parameter arrays beat a multi-row INSERT (after maodbc and
+    // Vertica's): Altibase applies a bound array in one round trip, while a multi-row
+    // INSERT stays one statement per row-group.  20,000-row ingests here (DDL + data +
+    // commit): arrays 778-816k rows/s against 30k for the multi-row form -- and pyodbc's
+    // fast_executemany, which is the same ODBC parameter array, measures 974k rows/s
+    // against 42k without it, so it is the driver and not this binder.  Keep arrays
+    // ahead of the multi-row form; that form is still what runs when the caller turns
+    // array binding off.
+    conn->reader_opts.prefer_param_arrays = true;
+  }
   if (strstr((const char*)name, "ignite")) {
     // Apache Ignite's ODBC driver (SQL_DRIVER_NAME "Apache Ignite") has no wide SQL type
     // at all: SQLBindParameter answers HYC00 "Data type is not supported. [typeId=-9]"
@@ -781,20 +831,22 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // read from the wrong row: Parameter::Write() tests `buffer.GetInputSize()` on the
     // whole bound array -- element offset 0 -- and only then copies the buffer and points
     // it at the row being written.  So every row of a chunk takes row 0's NULL-ness: a
-    // NULL in any later row is sent as whatever bytes sit in that row's data slot, which
-    // for a character or binary column is a length the server cannot parse -- it drops the
-    // connection mid-batch ("Failed to establish connection with any provided hosts" on
-    // the next statement).  One execute per row instead; there the indicator is element 0.
+    // NULL in any later row is written as a value -- a character column stores an empty
+    // string (GetString() reads that row's -1 indicator and returns ""), and a binary
+    // column hands the -1 to WriteInt8Array as a length and segfaults inside SQLExecute.
+    // The server never sees it.  One execute per row instead; there the indicator is
+    // element 0.  (Row-wise binding is refused with HYC00.)
     conn->reader_opts.no_param_arrays = true;
   }
   if (strstr((const char*)name, "virtodbc")) {
     // OpenLink Virtuoso ships both an ANSI driver (virtodbc.so) and a Unicode one
     // (virtodbcu.so); both answer SQL_DRIVER_NAME "virtodbc.so", so this keys on either.
-    // The ANSI driver has no SQL_C_WCHAR support worth the name: a bound SQL_C_WCHAR
-    // parameter is read as if it were narrow, so "héllo 🚀" stores as its first byte pair
-    // ("0\0"). Its narrow path is UTF-8 already -- Virtuoso's own charsets are all
-    // single-byte, and an unqualified connection passes narrow bytes through -- so stay
-    // on it.  That holds for the 2-byte-SQLWCHAR builds (unixODBC, Linux).  Built against
+    // The ANSI driver implements SQL_C_WCHAR as 4-byte wchar_t on both the parameter and
+    // the fetch side, so a UTF-16 buffer is consumed four bytes at a time: "héllo 🚀"
+    // stores as the single character "0", and a wide read of "héllo 🚀" widens each
+    // UTF-8 byte to a 4-byte unit.  Its narrow path is UTF-8 already -- Virtuoso's own
+    // charsets are all single-byte, and an unqualified connection passes narrow bytes
+    // through -- so stay on it.  That holds for the 2-byte-SQLWCHAR builds (unixODBC, Linux).  Built against
     // iODBC (4-byte SQLWCHAR, the width the macOS driver is compiled to) the picture is
     // the reverse, measured on macOS 26 with Homebrew 7.2.17: the narrow path's charset
     // is single-byte there (a 'héllo' statement literal never matches the NVARCHAR data,
@@ -803,11 +855,16 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // narrow route is taken only on a 2-byte build.
     if (sizeof(SQLWCHAR) < 4) conn->reader_opts.wchar_as_utf8 = true;
     // SQL_C_SBIGINT parameters are read as 0 without a diagnostic (the driver's
-    // conversion table has no 64-bit integer); numeric text converts exactly.
+    // conversion table has no 64-bit integer -- SQLGetData(SQL_C_SBIGINT) answers ind=0
+    // too); text declared SQL_NUMERIC converts exactly, INT64_MIN/MAX included.  The
+    // declaration matters: the same text as SQL_BIGINT or SQL_VARCHAR also stores 0.
     conn->reader_opts.bigint_param_as_string = true;
     // virtodbc accepts SQL_ATTR_PARAMSET_SIZE and reports the right number of affected
-    // rows, but binds SQL_C_TYPE_DATE from the first parameter set only: every row of a
-    // bound array gets row 0's date, silently.  One execute per row instead.
+    // rows, but steps a column-wise SQL_C_TYPE_DATE/TIME/TIMESTAMP array by the ColumnSize
+    // argument instead of by the size of the C struct.  We bind DATE32 with ColumnSize 0,
+    // so the stride is 0 and every row of a bound array gets row 0's date, silently; a
+    // timestamp array (ColumnSize 23, 16-byte elements) is corrupted rather than repeated.
+    // One execute per row instead.
     conn->reader_opts.no_param_arrays = true;
 #if defined(_WIN32)
     // virtodbc.dll reports the SQL_GD_* extensions that make the in-place truncation
@@ -837,6 +894,69 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // 17-20k for the multi-row form, so keep arrays ahead of it.  (The multi-row form is
     // still what runs when the caller turns array binding off.)
     conn->reader_opts.prefer_param_arrays = true;
+  }
+  if (strstr((const char*)name, "libodbchdb")) {
+    // SAP HANA's own client driver.  Three things it does differently:
+    //
+    // 1. It decodes narrow statement text as Latin-1, not as the UTF-8 bytes unixODBC
+    //    handed it, so a non-ASCII literal in a statement is stored double-encoded and
+    //    matches nothing sent as a parameter.  No connection property or locale changes
+    //    it; the W entry points do.  See OdbcReaderOptions::wide_sql.
+    conn->reader_opts.wide_sql = true;
+    // 2. SQLGetTypeInfo(SQL_LONGVARCHAR) names CLOB, and HANA bars a LOB column from
+    //    ORDER BY ("264 invalid datatype: LOB type in ORDER BY clause") and from
+    //    SELECT DISTINCT ("264 ... LOB type in distinct select clause"), so a table
+    //    adbcbridge created could not be sorted or de-duplicated on its own string
+    //    column -- the same trap as SQL Server's TEXT.  Its SQL_VARCHAR is VARCHAR,
+    //    5,000 characters wide and (HANA 2.0 having merged VARCHAR into NVARCHAR) fully
+    //    Unicode, so the widest-VARCHAR route Db2 uses gives a usable column here.
+    conn->reader_opts.ddl_string_as_max_varchar = true;
+    // 3. SQLGetTypeInfo(SQL_TYPE_TIMESTAMP) names SECONDDATE first -- HANA's
+    //    whole-second timestamp -- and TIMESTAMP, the 7-fractional-digit one, only in
+    //    its second and third rows.  Generated ingest DDL takes the first row, so an
+    //    Arrow timestamp column landed in a column that silently dropped every
+    //    sub-second value.  TIMESTAMP takes no precision argument here ("TIMESTAMP(6)"
+    //    is a syntax error, 42000/257), so the name is fixed rather than formatted.
+    conn->reader_opts.ddl_timestamp_type_name = "TIMESTAMP";
+    // 4. The third driver whose parameter arrays beat a multi-row INSERT, and here it is
+    //    the server's doing rather than the driver's: HANA has no multi-row VALUES at
+    //    all ("INSERT INTO t VALUES (1,'a'),(2,'b')" is 42000/257, "incorrect syntax
+    //    near ,"), so the multi-row path is refused at its probe and ingest falls back
+    //    to one execute per row.  20,000-row ingests here: 3,506 rows/s that way against
+    //    296,082 with a bound array.  (MultiRowSetup's UNION ALL fallback would fit --
+    //    HANA spells the one-row table DUMMY -- but a column store takes each such
+    //    INSERT as one row-store insert, which is the case arrays already beat.)
+    conn->reader_opts.prefer_param_arrays = true;
+  }
+  if (strstr((const char*)name, "kinetica")) {
+    // Kinetica has exactly one decimal type -- every DECIMAL(p, s) in DDL is stored as
+    // DECIMAL(18, 4) -- and its driver describes such a column as precision 38 scale 0,
+    // which would read the "12.3450" it hands over as a decimal128(38, 0) holding 12.
+    // Both halves of the real type are constants of the server, so name them.
+    conn->reader_opts.decimal_fixed_precision = 18;
+    conn->reader_opts.decimal_fixed_scale = 4;
+    // ... and its planner answers a provably false predicate from the empty pseudo-table
+    // SYSTEM.ITER, which cannot carry a BYTES column, so the zero-row SELECT that reads a
+    // table's columns off asks for no rows a way the planner does not fold.
+    conn->reader_opts.zero_row_suffix = "LIMIT 0";
+  }
+  if (strstr((const char*)name, "iiodbcdriver")) {
+    // Actian Ingres' own ODBC driver (SQL_DRIVER_NAME "iiodbcdriver.1.so",
+    // SQL_DBMS_NAME "INGRES").  Two things it cannot do:
+    //
+    //  * A SQL_C_WCHAR parameter is read as UCS-2 and each 16-bit unit is treated as a
+    //    code point, so a surrogate pair is rejected rather than combined: inserting
+    //    "héllo <U+1F680>" fails with SQLSTATE 5000B, "Unicode code point 0000D83D
+    //    cannot be mapped to local character set" (0xD83D being the high surrogate).
+    //    The narrow path is UTF-8 and stores and reads the same string back unchanged
+    //    against a Unicode-enabled database (createdb -n), so character parameters go
+    //    that way -- as they do for Firebird, Virtuoso and Informix.
+    //  * Ingres SQL has no multi-row VALUES: "INSERT INTO t VALUES (...),(...)" is a
+    //    syntax error ("Syntax error on ','", E_PS0442/2503), which is the ingest path's
+    //    default.  Parameter arrays are what it has, and it reports
+    //    SQL_PARAM_ARRAY_ROW_COUNTS = SQL_PARC_BATCH for them, so prefer those.  The
+    //    multi-row probe would settle on a batch of 1 and pay a round trip per row.
+    conn->reader_opts.wchar_as_utf8 = true;
   }
   if (strstr((const char*)name, "psqlodbc")) {
     // psqlodbc is the driver for every PostgreSQL-wire server (PostgreSQL itself,
@@ -914,7 +1034,9 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       // is the bare "14.0.5".  What YDB does do differently is map the server_version
       // *setting* to version() itself, so "SHOW server_version" hands back that whole
       // banner, where PostgreSQL -- and every other server reached over this wire --
-      // answers with a bare version number ("16.10").  So: ask, and compare.  One
+      // answers with a version string that is not the banner: a version number,
+      // possibly with a packager's suffix (Debian 16 answers "16.15 (Debian
+      // 16.15-1.pgdg13+2)").  So: ask, and compare.  One
       // small query, and only when version() matched no other marker.
       char setting[256];
       OdbcServerScalarString(conn->hdbc, "SHOW server_version", setting, sizeof(setting));
@@ -1049,7 +1171,9 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // one ODBC driver for any Arrow Flight SQL server.  Its SQLColumns builds a result
     // set and describes it, then segfaults inside the first SQLFetch on it -- with no
     // bound columns at all -- so GetObjects has to skip SQLColumns and describe a
-    // zero-row SELECT instead.
+    // zero-row SELECT instead.  That is against sqlflite and InfluxDB 3; against Dremio
+    // 26 the same call fetches cleanly, but a crash leaves no return code to detect the
+    // difference at run time, so the quirk stays keyed on the driver name.
     conn->reader_opts.no_sql_columns = true;
 #if defined(_WIN32)
     // On Windows its SQL_C_WCHAR conversion keeps the low 16 bits of a non-BMP code
@@ -1076,26 +1200,35 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
   if (strstr((const char*)name, "sqora")) {
     // Oracle Instant Client ODBC rejects SQL_C_SBIGINT parameters without a diagnostic.
     conn->reader_opts.bigint_param_as_string = true;
-    // Oracle has no multi-row VALUES clause ("INSERT INTO t VALUES (1),(2)" is ORA-00933,
-    // "SQL command not properly ended"); its spelling of the same thing is INSERT ALL.
-    // Only consulted once the plain form has actually been refused, so a future Oracle
-    // that grows one would simply use it.
+    // Older Oracle has no multi-row VALUES clause and answers "INSERT INTO t VALUES (1),(2)"
+    // with a syntax error; INSERT ALL is its spelling of the same thing.  Only consulted
+    // once the plain form has actually been refused, so a release that has one uses it --
+    // 23.26 (SQORA 23.9) takes `INSERT INTO t (a, b) VALUES (?, ?), (?, ?)` prepared or
+    // direct, at 1,998 parameters, with NULLs and CLOB columns, so the quirk is inert there.
     conn->reader_opts.multirow_insert_all = true;
-    // SQORA cannot be told a new SQL_ATTR_ROW_ARRAY_SIZE once a cursor is open.  Raising
-    // it on a cursor holding a LOB column segfaults inside the driver on the next
-    // SQLFetch -- bcoReturnColData dereferences a null entry of the per-rowset LOB state
-    // it sized when the statement was executed (SQLFetch -> bcoSQLFetch -> bcoSQLScroll
-    // -> bcoCacheFetch -> bcoCacheFetchNext -> bcoCacheReturnData -> bcoReturnUserData
-    // -> bcoReturnColData, all in libsqora 23.9).  Reproduced with plain SQLBindCol and
-    // SQLFetch and nothing else: a 20,000-row (NUMBER, CLOB) cursor fetched at 128 rows
-    // and then raised to 1,024 dies on the fetch after the raise, while the same cursor
-    // held at either size reads every row.  AddressSanitizer, which sees the driver's
-    // own allocations, reports no overflow of any buffer this driver hands out -- the
-    // fault is a read of address 0x1d8 inside libsqora, so there is nothing a caller can
-    // bind differently to avoid it.  Lowering the size is not safe either, and does not
-    // even crash: it ends the result set early and silently (100,000 rows of
-    // (TIMESTAMP, NUMBER, VARCHAR2) come back as 14,336 when the array size drops from
-    // 1,024 to 128 mid-cursor), which is worse than a crash.
+    // SQORA cannot be told a new SQL_ATTR_ROW_ARRAY_SIZE once a cursor is open.  It
+    // accepts the change and then goes wrong on a later SQLFetch.  Raising it segfaults
+    // inside the driver -- bcoReturnColData dereferences a null entry of the per-rowset
+    // state it sized when the statement was executed (SQLFetch -> bcoSQLFetch ->
+    // bcoSQLScroll -> bcoCacheFetch -> bcoCacheFetchNext -> bcoCacheReturnData ->
+    // bcoReturnUserData -> bcoReturnColData, all in libsqora 23.9).  Reproduced with
+    // plain SQLBindCol and SQLFetch and nothing else: a 20,000-row (NUMBER, CLOB) cursor
+    // fetched at 128 rows and then raised to 1,024 dies on the fetch after the raise at
+    // 17 of the first 20 switch points (the same 17 every run; it survives only where the
+    // raise lands exactly 128 + k*1,024 rows in), while the same cursor held at either
+    // size reads every row.  A LOB column is not required, only the likeliest way to
+    // meet it: the same raise kills a (NUMBER, VARCHAR2(50)) cursor after 8 to 15 rowsets
+    // and a (TIMESTAMP, NUMBER, VARCHAR2) one after 7 to 13, in the same frame, and
+    // where it does not crash it can rewind (64 -> 4,096 after 400 rowsets re-delivers
+    // 140 rows and drops 140 others).  AddressSanitizer, which sees the driver's own
+    // allocations, reports no overflow of any buffer this driver hands out, so there is
+    // nothing a caller can bind differently to avoid it.  Lowering the size is not safe
+    // either, and does not even crash: it silently drops rows -- the driver keeps
+    // stepping the cursor by the array size it was executed with and returns only the
+    // first N rows of each block, so a 100,000-row (TIMESTAMP, NUMBER, VARCHAR2) cursor
+    // read at 1,024 and dropped to 128 yields 13,440-14,336 rows depending on where the
+    // change falls, every SQLFetch SQL_SUCCESS, no diagnostic.  Which is worse than a
+    // crash.
     //   So the reader settles the rowset before the first fetch and never moves it: no
     // probe-then-restore for the bind-width adaptation, no collapse to one row to repair
     // a rowset.  Every result set here is fetched at the one size it was given before its
@@ -1108,12 +1241,16 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // bound buffer cannot be re-read where it sits; and with SQL_CA1_ABSOLUTE absent from
     // SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1 -- SQLFetchScroll(SQL_FETCH_ABSOLUTE) answers
     // HY106, "Fetch type out of range" -- it cannot be re-read by going back to its row
-    // either.  Nothing repairs a truncated value on this driver, so a column whose
-    // declared width is a type maximum rather than a real bound stays unbound and is read
-    // with SQLGetData, which does work once the cursor holds a single row.
+    // either.  Only a one-row rowset lets SQLGetData re-read a truncated bound value
+    // (asking for SQL_CURSOR_STATIC makes the calls succeed on a block cursor, but then a
+    // LOB slot past the first hands back an earlier row's value, rc=0, no diagnostic), so
+    // a column whose declared width is a type maximum rather than a real bound stays
+    // unbound and is read with SQLGetData, which does work once the cursor holds a
+    // single row.
     //   That is the whole cost of these two quirks, and it falls on exactly one shape of
-    // result set: one that selects a LOB column (CLOB, NCLOB, BLOB and LONG are all
-    // SQL_LONGVARCHAR/SQL_LONGVARBINARY of column_size 2,147,483,647 here) reads a row at
+    // result set: one that selects a LOB column (CLOB, NCLOB, BLOB, LONG and LONG RAW all
+    // describe with column_size 2,147,483,647 here -- CLOB and LONG as SQL_LONGVARCHAR,
+    // NCLOB as SQL_WLONGVARCHAR, BLOB and LONG RAW as SQL_LONGVARBINARY) reads a row at
     // a time instead of a rowset at a time.  It buys correctness for every CLOB width:
     // bound, the driver clips a value longer than adbc.odbc.long_bind_bytes to a prefix
     // and has no way to hand back the rest.  Result sets with no LOB column -- NUMBER,
@@ -1126,6 +1263,40 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // Server 2005 and that cannot be sorted, grouped, de-duplicated or compared.
     // See ddl_string_type_name.
     conn->reader_opts.ddl_string_type_name = "NVARCHAR(MAX)";
+  }
+  if (strstr((const char*)name, "exaodbc")) {
+    // Exasol's own driver (SQL_DRIVER_NAME "libexaodbc.so", SQL_DBMS_NAME "EXASolution").
+    // Exasol has no binary column type -- CREATE TABLE ... BLOB is 0A000, "Feature not
+    // supported: data type BLOB", and VARBINARY/BINARY/RAW are not words its parser
+    // knows -- and the driver refuses the matching C type outright: SQLBindParameter
+    // with SQL_C_BINARY answers HY003, "Invalid application buffer type: SQL_C_BINARY",
+    // for any target column.  Bound as SQL_C_CHAR into a VARCHAR the same bytes store
+    // and read back byte for byte, so that is the route an Arrow binary column takes
+    // here.  See binary_param_as_varchar.
+    conn->reader_opts.binary_param_as_varchar = true;
+    // A NULL parameter described as SQL_DECIMAL cannot be bound with SQL_C_DEFAULT: the
+    // driver answers SQLExecute with SI002, "C-Type not supported", and HY010, "Error
+    // creating prepared statement header".  Exasol has no narrow integer type -- INT and
+    // BIGINT are aliases of DECIMAL -- so SQLDescribeParam reports SQL_DECIMAL for every
+    // numeric parameter and a NULL in any of them hits it.  See null_decimal_param_as_char.
+    conn->reader_opts.null_decimal_param_as_char = true;
+    // SQL_GETDATA_EXTENSIONS is 0xf -- SQL_GD_ANY_COLUMN | ANY_ORDER | BLOCK | BOUND --
+    // and the block-cursor claim holds only for a value the bound buffer already fitted.
+    // For the one case getdata_repair exists for, a value the buffer *clipped*, it does
+    // not: measured on a five-row rowset with a 32-byte bound buffer and one 100-character
+    // value, SQLSetPos(SQL_POSITION) succeeds on every row, SQLGetData re-reads the short
+    // rows correctly, and on the clipped row it returns SQL_NO_DATA with no diagnostic at
+    // all -- the driver counts the truncated bound fetch as having delivered the column,
+    // so the "read the rest" call finds nothing left.  It then leaves the cursor in that
+    // state: the next short row answers SQL_NO_DATA too.  A clipped value is therefore
+    // unrecoverable and a long column has to stay unbound.  (SQL_FORWARD_ONLY_CURSOR_
+    // ATTRIBUTES1 is 0x1, SQL_CA1_NEXT alone, so refetch_repair is no way round it
+    // either.)  It costs real speed rather than being a corner case: Exasol's VARCHAR
+    // runs to 2,000,000 characters and SQLGetTypeInfo(SQL_LONGVARCHAR) names exactly
+    // that, which is the type generated ingest DDL gives an Arrow string column, so the
+    // common case is a table with an unbindable text column -- 1.5M rows/s against the
+    // 3.3M/s the (wrong) bound read managed.  Same shape as DuckDB's above.
+    conn->reader_opts.getdata_repair = false;
   }
   if (strstr((const char*)name, "db2")) {
     // IBM's CLI driver ("libdb2.a") speaks DRDA to Db2 *and* to Informix, whose DRDA
@@ -1165,6 +1336,36 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       conn->reader_opts.ddl_string_as_max_varchar = true;
     }
   }
+  if (strstr((const char*)name, "cwbodbc")) {
+    // IBM i Access ODBC ("libcwbodbc.so") reaches only Db2 for i, which answers
+    // SQL_DBMS_NAME "DB2/400 SQL" -- checked anyway, so the quirk is keyed on the engine
+    // like the Informix one above and not on the library alone.
+    SQLCHAR dbms[64] = {0};
+    SQLSMALLINT dbms_len = 0;
+    if (SQL_SUCCEEDED(SQLGetInfo(conn->hdbc, SQL_DBMS_NAME, dbms, sizeof(dbms), &dbms_len)) &&
+        strncmp((const char*)dbms, "DB2/400", 7) == 0) {
+      // SQLGetTypeInfo(SQL_LONGVARCHAR) names CLOB here, and a CLOB column is the worst
+      // of both worlds on this driver: it cannot be array-bound for writing and it has no
+      // declared width to bind for reading, so every row costs a network round trip.
+      // 3,000 rows of (INTEGER, DOUBLE, <string>, DATE) against IBM i 7.5 over a 110 ms
+      // link went in at 8 rows/s and came back at 8 rows/s as CLOB(1M), against 1,070 and
+      // 1,636 as VARCHAR(8000) CCSID 1208 -- 130x and 200x.
+      //
+      // The width is not the widest VARCHAR (ddl_string_as_max_varchar, the Db2 route
+      // above) because neither end of that works here: VARCHAR(32739) is what
+      // SQLGetTypeInfo reports, but a table with one of those and three ordinary columns
+      // is refused outright (SQL0101, "SQL statement too long or complex" -- Db2 for i's
+      // row is at most 32,766 bytes), and a column that wide describes too wide to bind
+      // (max_bind_bytes), which puts the *read* back on SQLGetData row by row: measured
+      // 120 rows/s at VARCHAR(16000) and 62 at VARCHAR(32700).  8,000 keeps the bound
+      // block cursor, and four such columns still fit one row.
+      //
+      // CCSID 1208 is UTF-8.  Without it the column takes the job's CCSID, which on a
+      // stock IBM i is a single-byte EBCDIC one (273 on the server this was measured on),
+      // and every character outside it is stored as a substitution character.
+      conn->reader_opts.ddl_string_type_name = "VARCHAR(8000) CCSID 1208";
+    }
+  }
   if (sizeof(SQLWCHAR) >= 4 && strstr((const char*)name, "myodbc") != NULL) {
     // MySQL Connector/ODBC built for iODBC (its macOS 26.x package links libiodbcinst)
     // is inconsistent about iODBC's four-byte SQLWCHAR.  Reading, it writes UTF-16 code
@@ -1187,10 +1388,15 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // MDB Tools writes bound-column indicators the same way: a NULL column's low four
     // bytes come back 0xffffffff with the high half untouched.  It is identified through
     // the SQL_DBMS_NAME fallback above, having no SQL_DRIVER_NAME of its own.
+    // Ingres' own driver ("iiodbcdriver.1.so") is the third: its SQLLEN is four bytes on
+    // 64-bit Linux too, so a NULL column read back as the value of the row before it (a
+    // NULL DOUBLE as 1e-323, a NULL VARCHAR as the previous row's text padded out to the
+    // bound width) until the indicators were read four bytes at a time.
     const char* n = (const char*)name;
     conn->reader_opts.sqllen_32bit = (strstr(n, "db2") != NULL && strstr(n, "libdb2o") == NULL &&
                                       strstr(n, "db2o.") == NULL) ||
-                                     strstr(n, "mdbtools") != NULL;
+                                     strstr(n, "mdbtools") != NULL ||
+                                     strstr(n, "iiodbcdriver") != NULL;
   }
 #if defined(_WIN32)
   // wchar_as_utf8 steers a driver whose SQLWCHAR is not UTF-16 onto the narrow path,
@@ -1601,12 +1807,15 @@ static AdbcStatusCode OdbcConnectionGetTableSchema(struct AdbcConnection* connec
   InternalAdbcStringBuilderAppend(&sb, "SELECT * FROM ");
   if (catalog && *catalog) InternalAdbcStringBuilderAppend(&sb, "%s%s%s.", (char*)q, catalog, (char*)q);
   if (db_schema && *db_schema) InternalAdbcStringBuilderAppend(&sb, "%s%s%s.", (char*)q, db_schema, (char*)q);
-  InternalAdbcStringBuilderAppend(&sb, "%s%s%s WHERE 1=0", (char*)q, table_name, (char*)q);
+  InternalAdbcStringBuilderAppend(&sb, "%s%s%s %s", (char*)q, table_name, (char*)q,
+                                  conn->reader_opts.zero_row_suffix
+                                      ? conn->reader_opts.zero_row_suffix
+                                      : "WHERE 1=0");
 
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
              "SQLAllocHandle(SQL_HANDLE_STMT)", error);
-  SQLRETURN ret = OdbcExecDirectSql(hstmt, sb.buffer, conn->reader_opts.narrow_sql);
+  SQLRETURN ret = OdbcExecDirectSql(hstmt, sb.buffer, &conn->reader_opts);
   InternalAdbcStringBuilderReset(&sb);
   AdbcStatusCode s;
   if (!SQL_SUCCEEDED(ret)) {
@@ -2112,7 +2321,7 @@ static AdbcStatusCode OdbcStatementDoPrepare(struct OdbcStatement* stmt,
                                              struct AdbcError* error) {
   if (stmt->prepared) return ADBC_STATUS_OK;
   RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
-  ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, stmt->reader_opts.narrow_sql), SQL_HANDLE_STMT,
+  ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, &stmt->reader_opts), SQL_HANDLE_STMT,
              stmt->ref->hstmt, "SQLPrepare", error);
   stmt->prepared = true;
   return ADBC_STATUS_OK;
@@ -2175,7 +2384,7 @@ static AdbcStatusCode OdbcStatementExecuteQuery(struct AdbcStatement* statement,
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecute", error);
     }
   } else {
-    ret = OdbcExecDirectSql(hstmt, stmt->query, stmt->reader_opts.narrow_sql);
+    ret = OdbcExecDirectSql(hstmt, stmt->query, &stmt->reader_opts);
     if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA) {
       return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLExecDirect", error);
     }

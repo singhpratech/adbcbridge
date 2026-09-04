@@ -367,8 +367,12 @@ static AdbcStatusCode SlotFromArrowValue(struct ParamSlot* p, const struct Arrow
       // temporal_binary_param_as_varchar: the bytes go across as a character
       // parameter, so the driver quotes them as an ordinary string literal instead
       // of a `_binary'...'` introducer the server cannot parse.
-      p->c_type = opts->temporal_binary_param_as_varchar ? SQL_C_CHAR : SQL_C_BINARY;
-      if (opts->temporal_binary_param_as_varchar) {
+      // binary_param_as_varchar: the same route, for a driver that has no SQL_C_BINARY
+      // at all (Exasol answers SQLBindParameter with HY003 for it).
+      const bool binary_as_text =
+          opts->temporal_binary_param_as_varchar || opts->binary_param_as_varchar;
+      p->c_type = binary_as_text ? SQL_C_CHAR : SQL_C_BINARY;
+      if (binary_as_text) {
         p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARCHAR : SQL_VARCHAR;
       } else {
         p->sql_type = b.size_bytes > 4000 ? SQL_LONGVARBINARY : SQL_VARBINARY;
@@ -771,7 +775,8 @@ static void ArrayParamPlan(struct ArrayParam* p, const struct ArrowSchemaView* s
       // SQL_C_CHAR array is transcoded from the driver's narrow charset and
       // mangles anything outside it (SQL Server stored "hello ?" for an emoji).
       // Drivers whose SQLWCHAR is not UTF-16 keep the narrow, UTF-8 path.
-      if (binary && opts->temporal_binary_param_as_varchar) {  // see DATE32 above
+      if (binary && (opts->temporal_binary_param_as_varchar ||
+                     opts->binary_param_as_varchar)) {  // see DATE32 above
         *supported = false;
         return;
       }
@@ -1049,17 +1054,42 @@ static bool ArrayParamsRowCount(SQLHSTMT hstmt, const struct OdbcReaderOptions* 
   return answered;
 }
 
+// Rows of a batch whose parameter set the driver marked SQL_PARAM_ERROR (or
+// SQL_PARAM_DIAG_UNAVAILABLE) inside an execute it otherwise reported as a
+// success.  The execute has moved past them, so they are neither applied nor
+// part of the remainder the caller replays; they are re-run one at a time
+// afterwards, where they either land or fail with their own diagnostics.
+struct RetryRows {
+  int64_t* idx;
+  int64_t n;
+  int64_t cap;
+};
+
+static bool RetryRowsAppend(struct RetryRows* r, int64_t row) {
+  if (r->n == r->cap) {
+    int64_t cap = r->cap ? r->cap * 2 : 16;
+    int64_t* idx = realloc(r->idx, sizeof(int64_t) * (size_t)cap);
+    if (!idx) return false;
+    r->idx = idx;
+    r->cap = cap;
+  }
+  r->idx[r->n++] = row;
+  return true;
+}
+
 /// Execute one Arrow batch using column-wise parameter arrays.
 ///
 /// On return *rows_done holds how many leading rows of the batch were applied;
 /// the caller replays the remainder row-at-a-time.  *use_array is cleared when
 /// the driver turns out not to support parameter arrays, or when it stops
-/// accounting for every parameter set it was handed.
+/// accounting for every parameter set it was handed.  Rows inside the applied
+/// range whose parameter set the driver rejected are appended to *retry.
 static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
                                         const struct ArrowSchemaView* svs,
                                         const struct ArrowArrayView* view, int64_t ncols,
                                         int64_t nrows, bool* use_array, int64_t* rows_done,
-                                        int64_t* total, struct AdbcError* error) {
+                                        int64_t* total, struct RetryRows* retry,
+                                        struct AdbcError* error) {
   SQLHSTMT hstmt = stmt->ref->hstmt;
   const struct OdbcReaderOptions* opts = &stmt->reader_opts;
   AdbcStatusCode status = ADBC_STATUS_OK;
@@ -1156,7 +1186,7 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     processed = 0;
     for (int64_t i = 0; i < n; i++) param_status[i] = SQL_PARAM_UNUSED;
     SQLRETURN r = stmt->prepared ? SQLExecute(hstmt)
-                                 : OdbcExecDirectSql(hstmt, stmt->query, stmt->reader_opts.narrow_sql);
+                                 : OdbcExecDirectSql(hstmt, stmt->query, &stmt->reader_opts);
     if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
       if (OdbcReadULen(&processed, opts->sqllen_32bit) == 0 && row == 0) {
         // Nothing was applied.  Let the row-at-a-time path run: it either
@@ -1182,14 +1212,46 @@ static AdbcStatusCode ExecuteBatchArray(struct OdbcStatement* stmt,
     if (nres > 0) SQLFreeStmt(hstmt, SQL_CLOSE);
 
     int64_t applied = 0;
+    int64_t unavailable = 0;
     bool status_filled = false;
     for (int64_t i = 0; i < n; i++) {
       if (param_status[i] == SQL_PARAM_UNUSED) continue;
       status_filled = true;
       if (param_status[i] == SQL_PARAM_SUCCESS || param_status[i] == SQL_PARAM_SUCCESS_WITH_INFO) {
         applied++;
+      } else if (param_status[i] == SQL_PARAM_DIAG_UNAVAILABLE) {
+        unavailable++;
       }
     }
+    // SQL_PARAM_DIAG_UNAVAILABLE says the driver cannot tell, not that the set
+    // failed.  Db2 11.5 through the 12.1 clidriver marks every set of a clean
+    // execute that way while SQLRowCount and SQL_ATTR_PARAMS_PROCESSED_PTR both
+    // say the whole array went in; re-running those sets inserted every row
+    // twice.  When the execute reported no diagnostic at all and the row count
+    // covers the sets marked success plus the unknowns, they landed.  Otherwise
+    // the unknowns are re-run one at a time like errors, where a duplicate is
+    // still the lesser risk than a silently dropped row.
+    bool unknown_landed = unavailable > 0 && r == SQL_SUCCESS && have_row_count &&
+                          affected >= applied + unavailable;
+    if (unknown_landed) applied += unavailable;
+    for (int64_t i = 0; i < n; i++) {
+      if (param_status[i] == SQL_PARAM_UNUSED) continue;
+      if (param_status[i] == SQL_PARAM_ERROR ||
+          (param_status[i] == SQL_PARAM_DIAG_UNAVAILABLE && !unknown_landed)) {
+        // A driver that walks the array set by set (MySQL Connector/ODBC) answers
+        // SQL_SUCCESS_WITH_INFO for the execute, counts the set in
+        // SQL_ATTR_PARAMS_PROCESSED_PTR and marks only its status.  Taking the
+        // processed count at face value would drop the row without a word (OceanBase
+        // refuses the first execute of a prepared INSERT that carries a NULL, so the
+        // leading rows of an ingest went missing there).  Re-run it on its own below.
+        if (!RetryRowsAppend(retry, row + i)) {
+          InternalAdbcSetError(error, "out of memory");
+          status = ADBC_STATUS_INTERNAL;
+          break;
+        }
+      }
+    }
+    if (status != ADBC_STATUS_OK) break;
 
     // How many parameter sets the driver owns up to having run.  ODBC requires
     // SQL_ATTR_PARAMS_PROCESSED_PTR to be written; the parameter-status array is
@@ -1253,6 +1315,12 @@ cleanup:
 static SQLSMALLINT NullParamCType(SQLSMALLINT sql_type, const struct OdbcReaderOptions* opts) {
   // bigint_param_as_string means the driver has no SQL_C_SBIGINT at all (Oracle).
   if (sql_type == SQL_BIGINT && !opts->bigint_param_as_string) return SQL_C_SBIGINT;
+  // null_decimal_param_as_char: the second exception, and the same shape as the first --
+  // a driver that has no SQL_C_DEFAULT for one SQL type.  See the flag in
+  // odbc_internal.h; SQL_C_CHAR with a NULL pointer is what it does take there.
+  if (opts->null_decimal_param_as_char && (sql_type == SQL_DECIMAL || sql_type == SQL_NUMERIC)) {
+    return SQL_C_CHAR;
+  }
   return SQL_C_DEFAULT;
 }
 
@@ -1294,7 +1362,7 @@ static AdbcStatusCode BindAndExecuteRow(SQLHSTMT hstmt, bool prepared, const cha
                                    (SQLPOINTER)p->data, p->buffer_length, &p->bound_indicator);
     if (!SQL_SUCCEEDED(r)) return OdbcSetError(SQL_HANDLE_STMT, hstmt, "SQLBindParameter", error);
   }
-  SQLRETURN r = prepared ? SQLExecute(hstmt) : OdbcExecDirectSql(hstmt, query, opts->narrow_sql);
+  SQLRETURN r = prepared ? SQLExecute(hstmt) : OdbcExecDirectSql(hstmt, query, opts);
   if (!SQL_SUCCEEDED(r) && r != SQL_NO_DATA) {
     return OdbcSetError(SQL_HANDLE_STMT, hstmt, prepared ? "SQLExecute" : "SQLExecDirect", error);
   }
@@ -1368,7 +1436,8 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
 // OdbcReaderOptions::no_param_arrays) and one -- MySQL Connector/ODBC -- accepts them
 // and then walks them row by row inside the driver.  On those, ingest costs one
 // SQLExecute, and for a client/server database one network round trip, per row:
-// clickhouse-odbc sends one HTTP request per row and manages sixteen rows a second.
+// clickhouse-odbc sends one HTTP request per execute and manages sixteen rows a second
+// one row at a time.
 //
 // The rewrite here needs no array support at all.  Instead of executing
 // `INSERT INTO t VALUES (?,?,?,?)` N times, it prepares
@@ -1472,7 +1541,7 @@ static SQLHSTMT MultiRowPrepareForm(struct OdbcConnection* conn, const char* int
     free(sql);
     return NULL;
   }
-  if (!SQL_SUCCEEDED(OdbcPrepareSql(hstmt, sql, conn->reader_opts.narrow_sql))) {
+  if (!SQL_SUCCEEDED(OdbcPrepareSql(hstmt, sql, &conn->reader_opts))) {
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
     hstmt = NULL;
   }
@@ -1814,7 +1883,7 @@ static AdbcStatusCode MultiRowExecGroup(struct MultiRowInsert* mr, SQLHSTMT hstm
   // An INSERT that did not raise has inserted every row-group it was given, so the group
   // size is the row count -- and it is a better one than the driver's: DuckDB answers
   // SQLRowCount with 1 for a multi-row INSERT however many row-groups it carried, and
-  // clickhouse-odbc answers -1.  (Only the INSERT that bulk ingest generates reaches
+  // clickhouse-odbc answers 0.  (Only the INSERT that bulk ingest generates reaches
   // here; there is no WHERE clause or conflict rule that could apply fewer.)
   SQLSMALLINT nres = 0;
   *total += n;
@@ -1910,10 +1979,13 @@ struct ArrayIngest {
 //
 // The spelling is derived from the Arrow type, never from the target column: an
 // `INSERT ... SELECT` assignment-casts each expression to its column, so a bigint array
-// lands correctly in an int, smallint or numeric column.  Where PostgreSQL has no
-// assignment cast at all (an Arrow date column against a text column, say) the prepared
-// statement is refused outright at SQLPrepare and the ingest falls back with nothing
-// applied.
+// lands correctly in an int, smallint or numeric column, and a string column takes any
+// element type through an I/O conversion cast.  Where PostgreSQL has no assignment
+// cast from the element type to the column (a date array against an int column, say)
+// psqlodbc still answers SQLPrepare with SQL_SUCCESS -- it never reports a server
+// parse error at prepare -- and the server's 42804 arrives at SQLExecute with nothing
+// applied; so the prepare-time fallback below cannot fire on this driver, and such a
+// table fails at execute instead (see ArrayIngestSetup).
 static const char* ArrayIngestElemType(const struct ArrowSchemaView* sv) {
   switch (sv->type) {
     case NANOARROW_TYPE_BOOL:
@@ -2051,7 +2123,7 @@ static void ArrayIngestSetup(struct ArrayIngest* ai, const struct ArrowSchemaVie
   // A refusal here is about this table -- a column PostgreSQL has no assignment cast to
   // from the Arrow type -- not about the server, so it is not remembered on the
   // connection; the ingest simply keeps the multi-row INSERT path.
-  if (!SQL_SUCCEEDED(OdbcPrepareSql(hstmt, sb.buffer, conn->reader_opts.narrow_sql))) {
+  if (!SQL_SUCCEEDED(OdbcPrepareSql(hstmt, sb.buffer, &conn->reader_opts))) {
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
     InternalAdbcStringBuilderReset(&sb);
     return;
@@ -2504,10 +2576,11 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
         if (seen > 1) OdbcAutoTxnBegin(&txn);
       }
     }
+    struct RetryRows retry = {NULL, 0, 0};
     if (use_array && row == 0 && batch.length > 1 && status == ADBC_STATUS_OK) {
       int64_t done = 0;
       status = ExecuteBatchArray(stmt, svs, &view, ncols, batch.length, &use_array, &done, &total,
-                                 error);
+                                 &retry, error);
       row = done;
     }
     // Parameter arrays gave up part way through the batch (or turned out not to work at
@@ -2533,6 +2606,19 @@ static AdbcStatusCode ExecuteRows(struct OdbcStatement* stmt, int64_t* rows_affe
       if (count > 0) total += count;
       if (nres > 0) SQLCloseCursor(hstmt);
     }
+    // Parameter sets the driver rejected inside an array execute it reported as a
+    // success: each gets its own execute, so it either lands or fails the ingest with
+    // that row's diagnostics instead of vanishing.
+    for (int64_t k = 0; k < retry.n && status == ADBC_STATUS_OK; k++) {
+      SQLSMALLINT nres = 0;
+      status = BindAndExecuteRow(hstmt, stmt->prepared, stmt->query, slots, svs, &view, ncols,
+                                 retry.idx[k], &stmt->reader_opts, &nres, error);
+      if (status != ADBC_STATUS_OK) break;
+      SQLLEN count = OdbcRowCount(hstmt, stmt->reader_opts.sqllen_32bit);
+      if (count > 0) total += count;
+      if (nres > 0) SQLCloseCursor(hstmt);
+    }
+    free(retry.idx);
     batch.release(&batch);
     if (status != ADBC_STATUS_OK) break;
   }
@@ -2860,7 +2946,7 @@ AdbcStatusCode OdbcStatementExecuteBound(struct OdbcStatement* stmt, struct Arro
                                          int64_t* rows_affected, struct AdbcError* error) {
   RAISE_ADBC(OdbcStatementEnsureHandle(stmt, error));
   if (!stmt->prepared) {
-    ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, stmt->reader_opts.narrow_sql), SQL_HANDLE_STMT,
+    ODBC_CHECK(OdbcPrepareSql(stmt->ref->hstmt, stmt->query, &stmt->reader_opts), SQL_HANDLE_STMT,
                stmt->ref->hstmt, "SQLPrepare", error);
     stmt->prepared = true;
   }
@@ -3061,6 +3147,12 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
       break;
     }
     case NANOARROW_TYPE_TIMESTAMP:
+      // ddl_timestamp_type_name: this driver's first SQL_TYPE_TIMESTAMP row is a
+      // whole-second type (SAP HANA's SECONDDATE), so the name is given outright.
+      if (opts->ddl_timestamp_type_name) {
+        snprintf(out, out_size, "%s", opts->ddl_timestamp_type_name);
+        break;
+      }
       CHAIN_P(&(const struct TypeParams){.frac_digits = FractionalDigits(sv->time_unit)},
               "TIMESTAMP", SQL_TYPE_TIMESTAMP);
       break;
@@ -3202,7 +3294,7 @@ static AdbcStatusCode ExecSimple(struct OdbcConnection* conn, const char* sql, b
   SQLHSTMT hstmt = NULL;
   ODBC_CHECK(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt), SQL_HANDLE_DBC, conn->hdbc,
              "SQLAllocHandle", error);
-  SQLRETURN ret = OdbcExecDirectSql(hstmt, sql, conn->reader_opts.narrow_sql);
+  SQLRETURN ret = OdbcExecDirectSql(hstmt, sql, &conn->reader_opts);
   AdbcStatusCode s = ADBC_STATUS_OK;
   if (!SQL_SUCCEEDED(ret) && ret != SQL_NO_DATA && !ignore_error) {
     s = OdbcSetError(SQL_HANDLE_STMT, hstmt, sql, error);

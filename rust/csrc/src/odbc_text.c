@@ -37,6 +37,55 @@
 #include <stdlib.h>
 #include <string.h>
 
+// UTF-8 -> SQLWCHAR units (UTF-16 when SQLWCHAR is two bytes, one code point per unit
+// when it is wchar_t, as on iODBC).  Self-contained rather than OdbcUtf8ToUtf16Into (odbc_bind.c),
+// because this file is also linked into the C unit tests, which do not carry
+// odbc_bind.c.  A malformed byte becomes U+FFFD and the scan moves on one byte, so
+// bad input can only shorten the output, never overrun it.
+static size_t Utf8ToUtf16(SQLWCHAR* o, const char* s, size_t n) {
+  size_t i = 0, u = 0;
+  while (i < n) {
+    unsigned char b = (unsigned char)s[i];
+    uint32_t c;
+    size_t k;
+    if (b < 0x80) { c = b; k = 1; }
+    else if ((b & 0xE0) == 0xC0 && i + 1 < n) { c = ((b & 0x1F) << 6) | (s[i + 1] & 0x3F); k = 2; }
+    else if ((b & 0xF0) == 0xE0 && i + 2 < n) {
+      c = ((b & 0x0F) << 12) | ((s[i + 1] & 0x3F) << 6) | (s[i + 2] & 0x3F); k = 3;
+    } else if ((b & 0xF8) == 0xF0 && i + 3 < n) {
+      c = ((b & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) | ((s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F);
+      k = 4;
+    } else { c = 0xFFFD; k = 1; }
+    if (c >= 0x10000 && sizeof(SQLWCHAR) < 4) {
+      c -= 0x10000;
+      o[u++] = (SQLWCHAR)(0xD800 + (c >> 10));
+      o[u++] = (SQLWCHAR)(0xDC00 + (c & 0x3FF));
+    } else {
+      o[u++] = (SQLWCHAR)c;
+    }
+    i += k;
+  }
+  return u;
+}
+
+// UTF-8 -> UTF-16, NUL-terminated, malloc'd; NULL stays NULL (a NULL catalog argument
+// means "no restriction" and must be passed through as NULL).  `len` is SQL_NTS or a
+// byte count.
+static SQLWCHAR* ToW(const char* s, SQLSMALLINT len, SQLSMALLINT* out_len) {
+  if (!s) {
+    if (out_len) *out_len = 0;
+    return NULL;
+  }
+  size_t n = len == SQL_NTS ? strlen(s) : (size_t)len;
+  // Every UTF-8 byte yields at most one SQLWCHAR unit.
+  SQLWCHAR* w = malloc((n + 1) * sizeof(SQLWCHAR));
+  if (!w) return NULL;
+  size_t units = Utf8ToUtf16(w, s, n);
+  w[units] = 0;
+  if (out_len) *out_len = (SQLSMALLINT)units;
+  return w;
+}
+
 #if !defined(_WIN32)
 
 SQLRETURN OdbcExecDirectUtf8(SQLHSTMT hstmt, const char* sql) {
@@ -47,13 +96,33 @@ SQLRETURN OdbcPrepareUtf8(SQLHSTMT hstmt, const char* sql) {
   return SQLPrepare(hstmt, (SQLCHAR*)sql, SQL_NTS);
 }
 
-SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, bool narrow) {
-  (void)narrow;  // the narrow call is the only one here
+// OdbcReaderOptions::wide_sql: a driver that reads narrow statement text as Latin-1
+// rather than as the UTF-8 bytes unixODBC handed it (SAP HANA's libodbcHDB.so) needs the
+// W entry point here, exactly as every driver does on Windows -- so these two are the
+// Windows implementations below, reached by one driver instead of by the platform.
+// narrow_sql is the platform default here, so it needs no test of its own.  The length
+// goes as SQL_NTS rather than ToW's out-length, which is a SQLSMALLINT: a multi-row
+// INSERT built for bulk ingest runs to hundreds of thousands of characters, and the
+// terminator is what carries that correctly.
+SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, const struct OdbcReaderOptions* opts) {
+  if (opts && opts->wide_sql) {
+    SQLWCHAR* w = ToW(sql, SQL_NTS, NULL);
+    if (!w) return SQL_ERROR;
+    SQLRETURN r = SQLExecDirectW(hstmt, w, SQL_NTS);
+    free(w);
+    return r;
+  }
   return SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS);
 }
 
-SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, bool narrow) {
-  (void)narrow;
+SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, const struct OdbcReaderOptions* opts) {
+  if (opts && opts->wide_sql) {
+    SQLWCHAR* w = ToW(sql, SQL_NTS, NULL);
+    if (!w) return SQL_ERROR;
+    SQLRETURN r = SQLPrepareW(hstmt, w, SQL_NTS);
+    free(w);
+    return r;
+  }
   return SQLPrepare(hstmt, (SQLCHAR*)sql, SQL_NTS);
 }
 
@@ -109,55 +178,6 @@ SQLRETURN OdbcGetDataStrUtf8(SQLHSTMT hstmt, SQLUSMALLINT col, char* buf, size_t
 }
 
 #else  // _WIN32
-
-// UTF-8 -> SQLWCHAR units (UTF-16 when SQLWCHAR is two bytes, one code point per unit
-// when it is wchar_t, as on iODBC).  Self-contained rather than OdbcUtf8ToUtf16Into (odbc_bind.c),
-// because this file is also linked into the C unit tests, which do not carry
-// odbc_bind.c.  A malformed byte becomes U+FFFD and the scan moves on one byte, so
-// bad input can only shorten the output, never overrun it.
-static size_t Utf8ToUtf16(SQLWCHAR* o, const char* s, size_t n) {
-  size_t i = 0, u = 0;
-  while (i < n) {
-    unsigned char b = (unsigned char)s[i];
-    uint32_t c;
-    size_t k;
-    if (b < 0x80) { c = b; k = 1; }
-    else if ((b & 0xE0) == 0xC0 && i + 1 < n) { c = ((b & 0x1F) << 6) | (s[i + 1] & 0x3F); k = 2; }
-    else if ((b & 0xF0) == 0xE0 && i + 2 < n) {
-      c = ((b & 0x0F) << 12) | ((s[i + 1] & 0x3F) << 6) | (s[i + 2] & 0x3F); k = 3;
-    } else if ((b & 0xF8) == 0xF0 && i + 3 < n) {
-      c = ((b & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) | ((s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F);
-      k = 4;
-    } else { c = 0xFFFD; k = 1; }
-    if (c >= 0x10000 && sizeof(SQLWCHAR) < 4) {
-      c -= 0x10000;
-      o[u++] = (SQLWCHAR)(0xD800 + (c >> 10));
-      o[u++] = (SQLWCHAR)(0xDC00 + (c & 0x3FF));
-    } else {
-      o[u++] = (SQLWCHAR)c;
-    }
-    i += k;
-  }
-  return u;
-}
-
-// UTF-8 -> UTF-16, NUL-terminated, malloc'd; NULL stays NULL (a NULL catalog argument
-// means "no restriction" and must be passed through as NULL).  `len` is SQL_NTS or a
-// byte count.
-static SQLWCHAR* ToW(const char* s, SQLSMALLINT len, SQLSMALLINT* out_len) {
-  if (!s) {
-    if (out_len) *out_len = 0;
-    return NULL;
-  }
-  size_t n = len == SQL_NTS ? strlen(s) : (size_t)len;
-  // Every UTF-8 byte yields at most one SQLWCHAR unit.
-  SQLWCHAR* w = malloc((n + 1) * sizeof(SQLWCHAR));
-  if (!w) return NULL;
-  size_t units = Utf8ToUtf16(w, s, n);
-  w[units] = 0;
-  if (out_len) *out_len = (SQLSMALLINT)units;
-  return w;
-}
 
 // SQLWCHAR units -> UTF-8 into a caller's buffer, NUL-terminated and truncated to fit.
 // Returns the length the full text would have, the way ODBC's own out-lengths do.
@@ -224,13 +244,14 @@ SQLRETURN OdbcPrepareUtf8(SQLHSTMT hstmt, const char* sql) {
 // OdbcReaderOptions::narrow_sql: an ANSI-only driver whose narrow path is UTF-8 gets
 // the bytes as they are -- the driver manager transcodes only on the way from a W call
 // to a narrow driver, never a narrow call.
-SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, bool narrow) {
-  if (narrow) return SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS);
+SQLRETURN OdbcExecDirectSql(SQLHSTMT hstmt, const char* sql, const struct OdbcReaderOptions* opts) {
+  // wide_sql needs no test here: the W entry point is already the default on Windows.
+  if (opts && opts->narrow_sql) return SQLExecDirect(hstmt, (SQLCHAR*)sql, SQL_NTS);
   return OdbcExecDirectUtf8(hstmt, sql);
 }
 
-SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, bool narrow) {
-  if (narrow) return SQLPrepare(hstmt, (SQLCHAR*)sql, SQL_NTS);
+SQLRETURN OdbcPrepareSql(SQLHSTMT hstmt, const char* sql, const struct OdbcReaderOptions* opts) {
+  if (opts && opts->narrow_sql) return SQLPrepare(hstmt, (SQLCHAR*)sql, SQL_NTS);
   return OdbcPrepareUtf8(hstmt, sql);
 }
 
