@@ -108,6 +108,7 @@ The macOS release asset is `adbcbridge-<tag>-osx-arm64.tar.gz`, containing
 Silicon.
 
 ```sh
+shasum -a 256 -c SHA256SUMS --ignore-missing   # SHA256SUMS is on the same release page
 tar xzf adbcbridge-v0.1.0-osx-arm64.tar.gz
 # → osx-arm64/libadbc_driver_odbc.dylib
 ```

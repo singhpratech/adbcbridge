@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Dependency updates for every package manifest and the Actions the workflows use.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: /python
+    schedule: { interval: weekly }
+  - package-ecosystem: cargo
+    directory: /rust
+    schedule: { interval: weekly }
+  - package-ecosystem: nuget
+    directory: /csharp
+    schedule: { interval: weekly }
+  - package-ecosystem: maven
+    directory: /java
+    schedule: { interval: weekly }
+  - package-ecosystem: gomod
+    directory: /go
+    schedule: { interval: weekly }

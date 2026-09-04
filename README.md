@@ -220,7 +220,8 @@ Everything below except the benchmark index lives under [`docs/`](docs/index.md)
 **Project** — [Compatibility, 53 databases × 3 operating systems](docs/COMPATIBILITY.md) ·
 [Benchmarks, by OS](bench/README.md) · [Upstream](docs/UPSTREAM.md) ·
 [Roadmap](docs/ROADMAP.md) · [FAQ](docs/community/faq.md) ·
-[Contributing](docs/community/contributing.md)
+[Contributing](docs/community/contributing.md) ·
+[Security and release verification](docs/community/security.md)
 
 ## What it does
 
@@ -302,7 +303,10 @@ filed or not yet, is [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 out, how to add a database to the matrix or a driver quirk, how to run the tests; the
 short version is [`CONTRIBUTING.md`](CONTRIBUTING.md). Bring a database with an ODBC
 driver that is not in the list, or a binding you want measured: the matrix is one Python
-file and a `docker-compose` service per database.
+file and a `docker-compose` service per database. Security problems go through
+[private vulnerability reporting](https://github.com/singhpratech/adbcbridge/security/advisories/new),
+not the issue tracker; [`SECURITY.md`](SECURITY.md) has the policy, the support window and
+how to verify a download.
 
 ## License
 

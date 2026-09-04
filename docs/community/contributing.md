@@ -3,7 +3,8 @@
 
 adbcBridge is a plain-C11 [ADBC](https://arrow.apache.org/adbc/) driver that
 bridges any ODBC data source to Apache Arrow. Contributions of every size are
-welcome: bug reports, driver-specific quirk fixes, type-mapping improvements,
+welcome (security problems excepted: those go through private vulnerability
+reporting, see [Security](security.md)): bug reports, driver-specific quirk fixes, type-mapping improvements,
 docs, and tests against ODBC drivers not yet covered. This page is the working
 guide; the short version and the bug-report checklist live in the repository's
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
