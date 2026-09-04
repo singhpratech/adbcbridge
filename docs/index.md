@@ -89,7 +89,7 @@ adbcBridge is early software — version **0.1.0**, published on
 
 | | Verified today |
 |---|---|
-| Databases (one workload: types, NULLs, Unicode, parameters, bulk ingest, batched reads, metadata, errors) | **53 on Linux**, **44 on macOS**, **45 on Windows** |
+| Databases (one workload: types, NULLs, Unicode, parameters, bulk ingest, batched reads, metadata, errors) | **53 on Linux**, **44 on macOS**, **48 on Windows** |
 | Language packages | **five** — Python, Rust, C#, Java, Go (R is smoke-tested) |
 | ADBC ABI | 1.0.0 and 1.1.0 |
 | Release | v0.1.0: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar |

@@ -41,7 +41,7 @@ you get native speed from the same install.
 
 ## Measured, not claimed
 
-- **53 databases on Linux, 44 on macOS (Apple Silicon), 45 on Windows** pass one
+- **53 databases on Linux, 44 on macOS (Apple Silicon), 48 on Windows** pass one
   workload — types, NULLs, Unicode in parameters and in statement text, bulk ingest,
   batched reads, catalog, error mapping — against a real server or file; every cell that
   is not a pass names its reason. [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
@@ -282,7 +282,7 @@ drivers, the Win32 thread shim; then a JDBC bridge on the same model —
 
 ## Upstream: giving back
 
-Running 53 databases through one driver, 46 of them on three operating systems, finds defects that
+Running 53 databases through one driver, 43 of them on three operating systems, finds defects that
 belong to other projects. They are reported with a reproduction that needs no adbcBridge
 in the stack — [lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239)
 (the driver manager aborts on the first SQL error from a 4-byte-`SQLWCHAR` driver; the
