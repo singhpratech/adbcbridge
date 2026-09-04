@@ -78,11 +78,11 @@ driver default, the same setting every other language here runs with — not its
   Python to 483k from Rust; the other four sit inside 1.22×). Where the server
   sets the pace more tightly the binding disappears: the five ingest rates are
   within 1.01× of each other on StarRocks and 1.09× on YDB.
-- **The fetch column is where the five bindings agree.** On the 42 rows below
+- **The fetch column is where the five bindings agree.** On the 47 rows below
   where all five languages measured, ADBC fetch spreads no more than 1.25×
-  across languages on 26 of them and no more than 1.5× on 34, and the ends of
-  that agreement are more than four times apart in absolute rate (546k–649k
-  rows/s on ydb against 2.28M–2.71M on mariadb). Re-measured, SQLite — where
+  across languages on 28 of them and no more than 1.5× on 38, and that agreement
+  holds across rates more than four times apart (546k–649k rows/s on ydb against
+  2.28M–2.71M on mariadb). Re-measured, SQLite — where
   the per-row database cost is near zero and the binding should show most —
   spreads 1.37× on fetch and 1.34× on ingest, not the 2.5× this file first
   recorded.
@@ -92,11 +92,11 @@ driver default, the same setting every other language here runs with — not its
   ingest cell as an order-of-magnitude reading and the agreement across a row as
   the real result.
 - **Java pays the most, by a little.** `adbc-driver-jni` has the slowest ADBC
-  fetch on 18 of those 42 rows — more than any other binding, Python next at
+  fetch on 20 of those 47 rows — more than any other binding, Python next at
   10 — and the slowest SQLite ingest. On ingest overall it is not the laggard:
-  of the 36 rows with an ingest number in all five languages, python is slowest
-  on 12 and rust on 8. Every one of these margins is inside this host's
-  run-to-run noise on any single row.
+  of the 40 rows with an ingest number in all five languages, python is slowest
+  on 13, java on 9 and rust on 8. Every one of these margins is inside this
+  host's run-to-run noise on any single row.
 - **ADBC ingest beats a row-at-a-time client comfortably.** Against the
   `System.Data.Odbc` and `database/sql` paths, which have no array-binding API,
   the bulk ingest is several times faster: the driver binds the whole batch as

@@ -54,8 +54,11 @@ you get native speed from the same install.
   [`docs/how-it-works/performance.md`](docs/how-it-works/performance.md)
 - **Four ordinary laptops, never idle** — every number names its host and the load it was
   taken under. [`bench/README.md`](bench/README.md)
-- **Bugs found upstream are filed with reproductions** — unixODBC, Virtuoso, Arrow Flight
-  SQL ODBC so far. [`docs/UPSTREAM.md`](docs/UPSTREAM.md)
+- **Bugs found upstream are filed with reproductions** — 27 reports so far across fifteen
+  projects (unixODBC, Virtuoso, Arrow Flight SQL ODBC, Firebird ODBC, taos-odbc, Doris,
+  clickhouse-odbc, MySQL Connector/ODBC, Ignite, OpenSearch, QuestDB, CrateDB, psqlodbc,
+  Materialize, SingleStore Connector/ODBC); three are already fixed by their maintainers.
+  [`docs/UPSTREAM.md`](docs/UPSTREAM.md)
 
 ## Quick start
 

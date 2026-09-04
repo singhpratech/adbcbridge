@@ -377,11 +377,15 @@ arrays are involved, so it works on every driver that can bind ordinary
 parameters, including those whose parameter arrays are unusable (DuckDB,
 MonetDB, clickhouse-odbc, QuestDB via psqlodbc) and those where an array is no
 cheaper than a loop (MySQL Connector/ODBC). It is the default for ingest;
-parameter arrays are kept ahead of it only for MariaDB Connector/ODBC before
-3.2, whose arrays go out as a single `COM_STMT_BULK_EXECUTE` (3.2 and later is
-switched to the multi-row form, because its arrays segfault on a NULL date and
-misreport row counts against MySQL), and for Vertica's own driver, whose arrays
-become a native bulk load. On PostgreSQL adbcBridge goes a step
+parameter arrays are kept ahead of it for four drivers only: MariaDB
+Connector/ODBC before 3.2, whose arrays go out as a single
+`COM_STMT_BULK_EXECUTE` (3.2 and later is switched to the multi-row form,
+because its arrays segfault on a NULL date and misreport row counts against
+MySQL); Vertica's own driver, whose arrays become a native bulk load;
+Altibase's, which applies a bound array in one round trip (778–816k rows/s
+against 30k for the multi-row form); and SAP HANA's client, where HANA has no
+multi-row `VALUES` at all, so without arrays ingest falls back to one execute
+per row (3,506 rows/s against 296,082). On PostgreSQL adbcBridge goes a step
 further and sends each column of a batch as a single array parameter, with the
 multi-row form as the fallback — see [PostgreSQL: one array parameter per
 column](../how-it-works/performance.md#postgresql-one-array-parameter-per-column).

@@ -268,7 +268,7 @@ The five-language rows are in [`LANGUAGE_BENCHMARKS-macos.md`](LANGUAGE_BENCHMAR
 
 Findings from this batch, for the docs: (1) the MariaDB Connector/C bulk-path NULL-`DATE` crash; (2) Oracle's `NLS_LANG` must precede `libsqora` loading; (3) Arrow Flight SQL ODBC 0.9.7 and Virtuoso 7.2.17 abort the process on the first statement error under unixODBC 2.3.12 on macOS 26 — four entries fail for that one reason, and it is not the bridge (isql and raw ODBC die identically); (4) IBM's arm64 clidriver makes Db2 and Informix first-class on Apple Silicon; (5) DuckDB's driver lets a C++ exception escape into Rust and faults Go's binding; (6) Go on macOS needs `CGO_CFLAGS`/`CGO_LDFLAGS` for unixODBC (the module hard-codes `/usr/local/opt/unixodbc`).
 
-## Batch 2 (in progress): tier 3, and the two connector follow-ups
+## Batch 2: tier 3, and the two connector follow-ups
 
 Docker Desktop's VM was raised from 7.65 GiB to 16 GiB for the heavy images (settings backed
 up, to be restored). Load 5–7 throughout.

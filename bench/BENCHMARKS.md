@@ -237,9 +237,9 @@ the repair is always available when we rely on it. What the drivers report:
 | SQLite3 ODBC, clickhouse-odbc | `0x0b` (no `SQL_GD_BLOCK`) | no — unchanged |
 | MS ODBC 18 for SQL Server | `0x04` (no `SQL_GD_BOUND`/`ANY_ORDER`) | no — unchanged |
 
-So on three of the eight drivers in the compat matrix the read path is
-byte-for-byte what it was, and the drivers that do get the new path are exactly
-the ones that advertise support for it.
+So on three of the eight drivers then in the compat matrix (the ones in the
+table above) the read path was byte-for-byte what it had been, and the drivers
+that did get the new path were exactly the ones that advertised support for it.
 
 **That gate turned out to be too trusting.** Three of those drivers advertise
 `SQL_GD_BLOCK | SQL_GD_BOUND | SQL_GD_ANY_ORDER` and then do not honour
@@ -584,7 +584,7 @@ becomes free:
 | `UseDeclareFetch=1;Fetch=1024` (caller's value, never overridden) | 0.7116 s | |
 
 `UseDeclareFetch=1` is **not** set by default: it needs a server that implements
-`DECLARE … CURSOR WITH HOLD` and `FETCH n IN …`, and psqlodbc drives eleven
+`DECLARE … CURSOR WITH HOLD` and `FETCH n IN …`, and psqlodbc drives fourteen
 PostgreSQL-wire databases in the compat matrix (CrateDB, QuestDB, Materialize,
 RisingWave, …) whose support for that is unknown and untested here. It is an
 opt-in with a documented cost, not a default.

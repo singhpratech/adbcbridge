@@ -10,9 +10,9 @@ ODBC is the first bridge; the name leaves room for the others.
 |---|---|
 | Query, types, NULLs, Unicode, parameters, bulk ingest, metadata, errors | done |
 | Compatibility matrix: **53 databases** verified on Linux by one workload (`docs/COMPATIBILITY.md`) | done |
-| Clients measured against all 46: Python, Rust, Go, Java, C# (`bench/LANGUAGE_BENCHMARKS.md`); R smoke-tested | done |
+| Clients measured against all 53: Python, Rust, Go, Java, C# (`bench/LANGUAGE_BENCHMARKS.md` — 261 of 265 Linux cells); R smoke-tested | done |
 | Array-bound and multi-row bulk ingest, probed per driver, default on | done |
-| Plug-and-play install: `install.sh`, driver manifest, `driver="odbc"` by name (Linux, macOS) | done |
+| Plug-and-play install: `install.sh` (Linux, macOS), driver manifest and `driver="odbc"` by name (Linux, macOS, Windows — there `cmake --install` writes the manifest) | done |
 | macOS verified on a real machine: SQLite, PostgreSQL 15, SQL Server 2022 (`bench/BENCHMARKS-macos.md`) | done |
 | Windows: first build 2026-08-24 (ten defects across driver, tests and harnesses, three of them the ANSI code page in three disguises); compat campaign on an 8 GB laptop, then the full 46-entry re-measure on a 32 GB machine on 2026-08-25 (45 pass; MySQL Connector/ODBC 26.7.1 retires the astral class) — `bench/BENCHMARKS-windows.md` | done |
 | macOS: 53 of 53 results (45 pass, 8 driver/server unavailable); a bridge built against iODBC is a supported configuration for vendor drivers that only ship iODBC builds (MySQL Connector/ODBC for macOS) — three width bugs found and fixed on the way (`docs/TROUBLESHOOTING.md`) | done |
@@ -27,7 +27,7 @@ ODBC is the first bridge; the name leaves room for the others.
 | Release workflow: Linux x86_64/aarch64 (manylinux_2_28), macOS arm64 and Windows x64 libraries + Python wheels built on tag, attached to the GitHub Release (`.github/workflows/release.yml`) | done — [v0.1.0](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0) on 2026-08-25: 4 libraries, 4 wheels + sdist, crate, nupkg, jar |
 | PyPI via trusted publishing (`.github/workflows/publish-pypi.yml`, dispatched by hand with the tag once the Release workflow has published it); NuGet the same way (`publish-nuget.yml`); crates.io from a checkout of the tag | done (0.1.0 on PyPI, crates.io and nuget.org, 2026-08-26) |
 | Language packages: Python wheel (`python/`), Rust crate (`rust/`), NuGet (`csharp/`), Maven (`java/`), Go module (`go/`) — built and attached to every release (the crate tested there, the others by their own suites under `tests/`); PyPI, crates.io and nuget.org carry 0.1.0; Maven Central is the remaining registry | in progress |
-| Databases that need vendor downloads behind a login: Teradata, SAP HANA, Snowflake, Databricks/Spark (Simba), Hive | help wanted |
+| Databases that need vendor downloads behind a login: Teradata, Snowflake, Databricks/Spark (Simba), Hive | help wanted |
 
 ## 2. JDBC bridge (`libadbc_driver_jdbc`) — next
 

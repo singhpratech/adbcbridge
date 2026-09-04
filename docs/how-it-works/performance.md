@@ -92,9 +92,12 @@ ordinary parameters. It is what makes ingest fast on the drivers whose parameter
 arrays are unusable (DuckDB, MonetDB, clickhouse-odbc, QuestDB via psqlodbc) and on
 the ones where an array is no cheaper than a loop (MySQL Connector/ODBC), and it is
 faster than arrays on most of the drivers where arrays do work — so it is the default
-for ingest, with parameter arrays kept ahead of it only for MariaDB Connector/ODBC, whose
-arrays go out as a single `COM_STMT_BULK_EXECUTE`, and Vertica's driver, which turns an
-array into one native bulk load.
+for ingest, with parameter arrays kept ahead of it only where they measurably win: MariaDB
+Connector/ODBC before 3.2, whose arrays go out as a single `COM_STMT_BULK_EXECUTE`;
+Vertica's driver, which turns an array into one native bulk load; Altibase's, where a bound
+array ingests at 778–816k rows/s against 30k for the multi-row form; and SAP HANA's client,
+whose dialect has no multi-row `VALUES` at all and whose bound arrays reach 296,082 rows/s
+against 3,506 one row at a time.
 
 Only the `INSERT` that bulk ingest generates is ever rewritten. A query you wrote is
 executed as written, whatever is bound to it.
@@ -209,7 +212,8 @@ unreachable through the ODBC API. See [bench/BENCHMARKS.md](../../bench/BENCHMAR
 measurements. A caller who needs native ingest speed against PostgreSQL should let the
 driver [delegate](delegation.md) to `adbc_driver_postgresql`.
 
-MariaDB and Vertica keep ODBC parameter arrays, which are faster there. Firebird has no
+MariaDB (Connector/ODBC before 3.2), Vertica, Altibase and SAP HANA keep ODBC parameter
+arrays, which are faster there. Firebird has no
 multi-row `VALUES` in its dialect and takes a `UNION ALL` of typed one-row `SELECT`s
 instead (5,974 → 7,924 rows/s).
 

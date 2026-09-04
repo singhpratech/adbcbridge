@@ -118,7 +118,10 @@ Two Windows-only quirks override that default for specific drivers:
   `SQL_C_CHAR` buffer alone, so the bytes arrive as written. On POSIX this same
   quirk is set for Firebird's OdbcFb, Virtuoso's ANSI driver (on 2-byte-SQLWCHAR
   builds only, i.e. unixODBC, not the iODBC/macOS build, where its wide path is
-  the correct one), Informix, and MySQL Connector/ODBC built for iODBC — drivers
+  the correct one), Informix, Altibase (with `narrow_params`, as Informix: its
+  `SQL_C_WCHAR` path stores a character above the BMP as CESU-8), Actian Ingres
+  (a four-byte-SQLWCHAR driver that rejects a surrogate pair outright, while its
+  narrow path is UTF-8), and MySQL Connector/ODBC built for iODBC — drivers
   whose SQLWCHAR handling is not UTF-16.
 
 ---
@@ -134,6 +137,7 @@ array binding is on and the driver supports it). Both send identical wire values
 | Arrow type | ODBC C type | ODBC SQL type | Notes |
 |---|---|---|---|
 | `null` | `SQL_C_CHAR` | `SQL_VARCHAR` | bound as a NULL varchar |
+| `null` in a `SQL_DECIMAL`/`SQL_NUMERIC` parameter under quirk `null_decimal_param_as_char` (Exasol) | `SQL_C_CHAR` | as described by `SQLDescribeParam` | Exasol fails the whole statement (`SI002`, then `HY010`) for `SQL_C_DEFAULT` on a decimal NULL, and every Exasol integer type is a DECIMAL alias, so any numeric NULL takes this route |
 | `bool` | `SQL_C_BIT` | `SQL_BIT` | see boolean quirks below |
 | `int8`/`int16`/`int32` and unsigned that fit in int32 | `SQL_C_SLONG` | `SQL_INTEGER` | `SQL_C_SLONG` is the most widely supported integer binding; narrower types are widened into a staging buffer |
 | `int64` (out of int32 range) | `SQL_C_SBIGINT` | `SQL_BIGINT` | |
@@ -143,6 +147,7 @@ array binding is on and the driver supports it). Both send identical wire values
 | `string`, `large_string`, `string_view` | `SQL_C_WCHAR` | `SQL_WVARCHAR` (≤ 4000) / `SQL_WLONGVARCHAR` (> 4000) | sent as UTF-16 by default |
 | `string` under quirk `wchar_as_utf8` / `narrow_params` | `SQL_C_CHAR` | `SQL_VARCHAR` / `SQL_LONGVARCHAR` | UTF-8 bytes for drivers whose SQLWCHAR is not UTF-16 |
 | `binary`, `large_binary`, `fixed_size_binary`, `binary_view` | `SQL_C_BINARY` | `SQL_VARBINARY` (≤ 4000) / `SQL_LONGVARBINARY` (> 4000) | |
+| the same under quirk `binary_param_as_varchar` (Exasol) | `SQL_C_CHAR` | `SQL_VARCHAR` | Exasol has no binary column type and answers `HY003` for `SQL_C_BINARY`; the bytes go as text into a VARCHAR and read back byte for byte |
 | `date32` | `SQL_C_TYPE_DATE` | `SQL_TYPE_DATE` | |
 | `time32[s]` | `SQL_C_TYPE_TIME` | `SQL_TYPE_TIME` | |
 | `time32`/`time64` sub-second | `SQL_C_CHAR` | `SQL_VARCHAR` | `"HH:MM:SS.ffffff"`; `TIME_STRUCT` has no fractional field, and several drivers reject `SQL_C_CHAR → SQL_TYPE_TIME` |
