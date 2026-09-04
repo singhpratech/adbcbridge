@@ -188,7 +188,7 @@ nav a.live{color:var(--teal);animation:navaura 1.7s ease-in-out infinite}
   <div class="nums">
     <div class="num-card"><b>53 <small>· 44 · 45</small></b><span><b>Linux 53 · macOS 44 · Windows 45</b> databases verified by one workload — types, NULLs, Unicode in parameters and in statement text, bulk ingest, batched reads, catalog, error mapping — with a read-only variant for the entries whose driver or server accepts no writes. Linux is the reference host; all three campaigns are closed, and every cell that is not a pass names its reason.</span></div>
     <div class="num-card"><b>1.2–1.5×</b><span>faster than the native PostgreSQL ADBC driver on a 1,000,000-row read, by splitting the query across eight connections — <b>on the Linux reference host, quiet</b>. On the same host busy it is 0.97×; on an M4 Max, where libpq alone streams 6.4 M rows/s, it is 0.60×. Bulk ingest does not beat native anywhere (0.50–1.02×) and cannot over ODBC: an <code>INSERT</code> writes twice the WAL of a <code>COPY</code>.</span></div>
-    <div class="num-card"><b>5 × 46</b><span><b>Linux 229 of 230 cells · macOS 191 · Windows 219 of 230</b> — Python, Rust, C#, Java and Go, each measured against the same binary, every empty cell explained with the exact error. On YDB all five languages land within 1,597–1,742 rows/s of each other; that agreement, not any one number, is the point.</span></div>
+    <div class="num-card"><b>5 × 53</b><span><b>Linux 261 of 265 cells · macOS 215 of 225 · Windows 219 of 240</b> — Python, Rust, C#, Java and Go, each measured against the same binary, every empty cell explained with the exact error. On YDB all five languages land within 1,597–1,742 rows/s of each other; that agreement, not any one number, is the point.</span></div>
   </div>
   <div class="matrix">
 <table class="mx">
@@ -322,7 +322,7 @@ cmake --build build --config Release
 
 <section id="languages">
   <div class="eyebrow">From every language</div>
-  <h2>One binary, loaded by name from six bindings.</h2>
+  <h2>One binary, loaded by name from five languages, and R.</h2>
   <p>Each binding <code>dlopen</code>s the same <code>libadbc_driver_odbc.so</code> and calls <code>AdbcDriverInit</code>. The numbers are PostgreSQL 16, 10,000 rows ingested in one transaction and 100,000 read back into that language's own Arrow batches, <code>adbc.odbc.delegate=never</code> so every row really travels over ODBC.</p>
   <div class="tablewrap"><table>
     <thead><tr><th>Language</th><th>ADBC binding</th><th class="num">ingest rows/s</th><th class="num">fetch rows/s</th><th>Name the driver</th></tr></thead>
