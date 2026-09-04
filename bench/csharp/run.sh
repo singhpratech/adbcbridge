@@ -15,7 +15,14 @@
 #
 # Needs the .NET 8 SDK. Set NUGET_PACKAGES if $HOME is not writable.
 #
-# Knobs: ROWS, FETCH_ROWS, REPS, PYTHON, DOTNET.
+# Knobs: ROWS, FETCH_ROWS, REPS, PYTHON, DOTNET, ADBC_BENCH_DYLD_LIBRARY_PATH.
+#
+# macOS: System.Data.Odbc dlopens libodbc.2.dylib by its bare name, so a unixODBC built
+# into a prefix of its own is not found ("Dependency unixODBC with minimum version 2.3.1
+# is required." is that DllNotFoundException's wording). DYLD_LIBRARY_PATH fixes it, but
+# SIP strips DYLD_* from /bin/bash's environment, so exporting it before calling this
+# script does nothing -- pass the directory as ADBC_BENCH_DYLD_LIBRARY_PATH instead and
+# the script exports it itself, after the shell has started.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,6 +49,8 @@ fi
 
 "$DOTNET" build -c Release --nologo -v quiet "$HERE/BenchCs.csproj"
 BIN="$HERE/bin/Release/net8.0/bench_cs"
+
+export DYLD_LIBRARY_PATH="${ADBC_BENCH_DYLD_LIBRARY_PATH:-${DYLD_LIBRARY_PATH:-}}"
 
 lang_init
 

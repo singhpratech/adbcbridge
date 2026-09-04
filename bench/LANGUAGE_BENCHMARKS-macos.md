@@ -9,7 +9,7 @@ Desktop; the ones marked emulated are amd64 images under Rosetta-class emulation
 was never idle (1-minute load 2.4–10.5, recorded per entry in `BENCHMARKS-macos.md`), so read
 rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's, whose
 `alexbrainman/odbc` binding faults on every server here except SQLite, Access and Informix
-(the same failure the Linux file records). The campaign is complete: 191 cells (the eight Spanner and ArcadeDB re-runs included), every empty one explained below.
+(the same failure the Linux file records). The campaign is complete: 191 cells (the eight Spanner and ArcadeDB re-runs included), every empty one explained below. A sixth batch on 2026-09-04 (macOS 26.6.2, adbcbridge at `530720e`, the same from-source unixODBC 2.3.12; Go 1.27.1, Temurin 21.0.12.1 with Maven 3.9.16, .NET SDK 8.0.424, cargo 1.95, every toolchain and driver checksum-verified against its publisher; Docker Desktop engine 29.1.3, VM 16 CPU / 7.65 GiB) filled the cells the file still lacked — **mssql**, the four harness cells of **postgres**, and the 2026-09-03 entries **singlestore**, **hana** and **exasol** — with `ADBC_MATRIX_SUFFIX=_mac`, 1-minute load 3.0–5.0.
 
 | Language | Database | ADBC ingest | ADBC fetch | Native ingest | Native fetch |
 |---|---|---:|---:|---:|---:|
@@ -28,6 +28,10 @@ rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's
 | java | access | — | 1,006,698 | — | — |
 | csharp | access | — | 2,107,038 | — | — |
 | python | postgres | 1,031,335 | 1,259,979 | 42,134 | 707,592 |
+| rust | postgres | 1,097,163 | 1,164,290 | 195,668 | 1,195,101 |
+| go | postgres | 1,104,306 | 1,225,115 | — | — |
+| java | postgres | 909,050 | 1,096,902 | 337,085 | 4,286,434 |
+| csharp | postgres | 1,132,464 | 1,168,714 | 22,392 | 684,012 |
 | python | azuresqledge | 42,577 | 590,525 | 61,371 | 555,073 |
 | rust | azuresqledge | 84,498 | 605,698 | 63,406 | 591,403 |
 | go | azuresqledge | 77,646 | 574,301 | — | — |
@@ -205,6 +209,26 @@ rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's
 | go | virtuoso | 2,985 | 244,246 | — | — |
 | java | virtuoso | 2,935 | 239,594 | — | — |
 | csharp | virtuoso | 2,874 | 257,790 | — | — |
+| python | mssql | 95,452 | 1,771,006 | 99,206 | 1,398,566 |
+| rust | mssql | 100,789 | 1,770,584 | 80,835 | 1,285,390 |
+| go | mssql | 105,919 | 1,776,951 | — | — |
+| java | mssql | 96,312 | 1,688,467 | — | — |
+| csharp | mssql | 110,059 | 1,752,836 | 2,723 | 1,582,126 |
+| python | singlestore | 60,816 | 52,851 | 2,726 | 48,959 |
+| rust | singlestore | 81,821 | 51,631 | 191,771 | 51,531 |
+| go | singlestore | 76,879 | 51,726 | — | — |
+| java | singlestore | 81,825 | 51,118 | — | — |
+| csharp | singlestore | 96,751 | 49,946 | 3,050 | 47,374 |
+| python | hana | 13,748 | 39,783 | 24,356 | 40,681 |
+| rust | hana | 18,477 | 45,125 | 28,900 | 41,806 |
+| go | hana | 18,408 | 43,972 | — | — |
+| java | hana | 23,464 | 44,399 | — | — |
+| csharp | hana | 23,466 | 40,694 | 59 | 35,515 |
+| python | exasol | 5,089 | 183,934 | 19,378 | 170,903 |
+| rust | exasol | 6,020 | 144,718 | 30,850 | 224,949 |
+| go | exasol | 5,361 | 256,356 | — | — |
+| java | exasol | 6,016 | 219,427 | — | — |
+| csharp | exasol | 5,952 | 202,085 | — | — |
 
 ## Why a cell is empty, and what was different on macOS
 
@@ -221,7 +245,12 @@ rows for cross-language agreement, not absolute rate. `-no-native` rows are Go's
 | **cockroachdb**, **yugabyte**, **citus** | Tier 3, psqlodbc 18 built from source; CockroachDB and YugabyteDB arm64 native, Citus amd64 emulated. All five languages agree within a few percent on fetch (0.70M–1.04M rows/s); Go is `-no-native`. |
 | **clickhouse** | 300 rows ingested, 2,000 fetched, as on Linux (one HTTP request per row). |
 | **oracle** | `NLS_LANG=.AL32UTF8` has to be in the environment before `libsqora` loads; the compat harness's in-process setting is too late on macOS. |
-| **mssql**, **postgres** | Python only so far; the four harnesses come with a later batch. |
+| **postgres** (batch 6) | The four harness cells, PostgreSQL 15.15 (Homebrew binaries, scratch cluster) through psqlodbc 18.00.0002 built from source. ADBC ingest 0.9–1.1M rows/s and fetch 1.1–1.2M in all five languages. Java's JDBC comparison ran (the pom carries the PostgreSQL driver): its 4.3M rows/s fetch is the JDBC binary protocol, not ODBC. Go's native path: `SIGABRT` in `alexbrainman/odbc` (`api._Cfunc_SQLFreeHandle`), so `-no-native`. |
+| **mssql** (batch 6) | SQL Server 2022 (16.00.4265, the amd64 image under emulation) through msodbcsql18 18.6.2.1 arm64. All five languages within 10% on fetch (1.69–1.84M rows/s) and on ingest (96–110k). Java: `no JDBC URL for mssql; set MSSQL_JDBC` — the pom carries no SQL Server JDBC driver, a harness gap, not a driver finding. Go's native path: `SIGSEGV` ("signal arrived during cgo execution") in `api._Cfunc_SQLBindParameter`, so `-no-native`. |
+| **singlestore** (batch 6) | SingleStore 9.1.1 (the `singlestoredb-dev` image, amd64 under emulation) through MariaDB Connector/ODBC 3.2.9 + Connector/C 3.4.9 built from source, `PLUGIN_DIR` beside the driver for `mysql_native_password`. Fetch is 50–53k rows/s in all five languages *and* in pyodbc and odbc-api — the connector's macOS read ceiling the tier-4 row above records, not the server (ingest 61–97k). Java: `no JDBC URL for singlestore; set SINGLESTORE_JDBC` (harness gap). Go's native path: `SIGSEGV` in `api._Cfunc_SQLExecute`, so `-no-native`. |
+| **hana** (batch 6) | SAP HANA Express 2.00.088 on the Linux box, reached over the LAN at the tenant's own SQL port (`SERVERNODE=<host>:39041`, no `DATABASENAME=` — that setting makes HANA redirect the client to the container-internal address), through the SAP HANA client 2.29.25 (`libodbcHDB.dylib`, arm64). Fetch is 40–45k rows/s in all five languages and in pyodbc and odbc-api alike: the round trip of SAP's driver over the wire, not the bridge (the same driver reads 1.4M rows/s on the Windows box beside its server). ADBC ingest 14–23k through the driver's parameter arrays; `matrix_bench`'s row-at-a-time column is 61 rows/s, one round trip per row. Java: `no JDBC URL for hana; set HANA_JDBC` (harness gap). Go's native path: `SIGSEGV` in `api._Cfunc_SQLGetData`, so `-no-native`. C#'s native ingest, a row-by-row prepared INSERT, is 59 rows/s for the same round-trip reason. |
+| **exasol** (batch 6) | Exasol 2025.1 on the Linux box over the LAN through Exasol's own ODBC 26.2.8 (the universal dmg, arm64 slice). Fetch 145–256k rows/s across the five languages; ADBC ingest 5–6k in every language against pyodbc's 19k and odbc-api's 31k — the bridge's Exasol write path trails the plain ODBC clients here as it does on Windows (42k against pyodbc's 107k there), a bridge/driver interaction the compatibility notes already track. Java: `no JDBC URL for exasol; set EXASOL_JDBC` (harness gap). Go's native path: `SIGSEGV` in the cgo call, so `-no-native`. C#'s native cells are the harness's, not the driver's: the row-by-row INSERT ran past the driver's query timeout (`[40011] [Exasol][Exasol Driver]Successfully reconnected after query timeout, transaction was rolled back.`), and the reader failed on `Unable to cast object of type 'System.Decimal' to type 'System.Int32'` — Exasol reports `INT` as `DECIMAL(18,0)`, which `OdbcDataReader` surfaces as `System.Decimal` where the bench expects an `int`. |
+| **csharp** native columns (batch 6) | Filled for the first time on macOS. `System.Data.Odbc` loads `libodbc.2.dylib` by bare name, and against a from-source unixODBC prefix that fails with its `Dependency unixODBC with minimum version 2.3.1 is required.` — which is why every earlier csharp row here has empty native cells. `DYLD_LIBRARY_PATH` fixes it, but SIP strips `DYLD_*` from `/bin/bash`, so the variable has to be exported *inside* `bench/csharp/run.sh` (`ADBC_BENCH_DYLD_LIBRARY_PATH`, which the script now exports itself). The earlier csharp rows were not re-measured — their servers are down, and that is a campaign of its own — but every one of those empty native cells is re-measurable with that variable set; nothing about the drivers or the bridge was involved. The numbers are `System.Data.Odbc`'s row-by-row prepared INSERT (2.7–22k rows/s) and its `OdbcDataReader` (0.68–1.58M). |
 | **access**, **tdengine**, **mongodbbi** | read-only entries: fetch of the fixture only. |
 | **flightsql**, **influxdb3**, **dremio**, **virtuoso** (batch 5) | Through a bridge built against iODBC — these drivers' macOS builds are iODBC-width, and under unixODBC the driver manager aborts the process on the first SQL error ([lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239)). The three Flight SQL entries are read-only, so ingest is empty by construction; their Rust odbc-api / arrow-odbc cells survived because a read-only workload never raises a diagnostic. Virtuoso's Rust row is `abort`: `bench_rs` runs its odbc-api comparison through unixODBC, the entry writes (a `DROP`/`CREATE` error on the way), and the driver-manager overflow takes the whole process — its ADBC cells go with it. 8 M rows/s on sqlflite and InfluxDB 3 is the fastest read anywhere in these files: Arrow batches straight off a Flight stream. |
 | **tidb**, **percona**, **dolt**, **matrixone**, **columnstore**, **oceanbase**, **mongodbbi** (tier 4) | Every MySQL-wire entry in tier 4 went through MariaDB Connector/ODBC 3.2.9 (arm64; MySQL's own connector for macOS arm64 exists — 26.7.1 — but is built for iODBC, see batch 4), and **every one of them fetches at 39–47k rows/s in all five languages and in pyodbc alike** — against 1.0–2.0M rows/s for the same servers on Linux through MySQL Connector/ODBC. Six servers, six clients, one number: the ceiling is the connector's fetch path on this platform, not the servers and not the bridge (ingest through the same connector runs 86–208k rows/s). |
