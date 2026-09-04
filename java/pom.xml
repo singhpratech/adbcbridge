@@ -82,6 +82,9 @@
     <adbcbridge.natives>${project.basedir}/natives</adbcbridge.natives>
     <!-- The flag Arrow's off-heap allocator needs on JDK 17+; surefire passes it to the tests. -->
     <arrow.add-opens>--add-opens=java.base/java.nio=ALL-UNNAMED -Dio.netty.tryReflectionSetAccessible=true</arrow.add-opens>
+    <!-- Whether the release profile publishes as soon as Central validates the bundle; the
+         Publish to Maven Central workflow sets it from its input. Off = staged for review. -->
+    <central.autoPublish>false</central.autoPublish>
   </properties>
 
   <dependencies>
@@ -276,7 +279,7 @@
             <extensions>true</extensions>
             <configuration>
               <publishingServerId>central</publishingServerId>
-              <autoPublish>false</autoPublish>
+              <autoPublish>${central.autoPublish}</autoPublish>
               <waitUntil>validated</waitUntil>
             </configuration>
           </plugin>
