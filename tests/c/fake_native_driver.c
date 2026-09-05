@@ -25,7 +25,10 @@
 //   SELECT options        -> one row per option, "key=value"
 //
 // Setting the option "fake.fail_init" makes AdbcDatabaseInit fail with that
-// message (and status ADBC_STATUS_IO, as a connection failure would).
+// message (and status ADBC_STATUS_IO, as a connection failure would);
+// "adbc.fake.fail_query" (the adbc.* prefix is what adbcbridge passes through)
+// makes every SELECT fail the same way, which is how a test
+// stands in for a server the native driver can connect to but not read from.
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -360,6 +363,22 @@ static AdbcStatusCode FakeStatementExecuteQuery(struct AdbcStatement* statement,
   if (rows_affected) *rows_affected = -1;
   if (!out) return ADBC_STATUS_OK;
   const char* query = stmt->query ? stmt->query : "";
+  if (strncmp(query, "SELECT ", 7) == 0 || strncmp(query, "select ", 7) == 0) {
+    // adbcbridge probes a delegated database with "SELECT version()" before
+    // handing it over.  A real server answers; this stand-in answers too, unless
+    // the test set "fake.fail_query" to stand in for a server that speaks the
+    // wire protocol but cannot serve the native driver's read path.
+    const char* fail = FakeOptionsGet(&stmt->db->options, "adbc.fake.fail_query");
+    if (!fail) fail = FakeOptionsGet(&stmt->db->options, "fake.fail_query");
+    if (fail) {
+      FakeError(error, fail);
+      return ADBC_STATUS_IO;
+    }
+    const char* version = FakeOptionsGet(&stmt->db->options, "adbc.fake.version");
+    if (!version) version = FakeOptionsGet(&stmt->db->options, "fake.version");
+    if (!version) version = "fake 1.0";
+    return FakeStringBatch(&version, 1, out);
+  }
   if (strcmp(query, "options") == 0) {
     size_t count = stmt->db->options.count;
     const char** rows = calloc(count ? count : 1, sizeof(char*));

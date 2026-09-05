@@ -143,6 +143,17 @@ never opened.
 - `adbc.odbc.delegate` = `auto` (try native, fall back to ODBC), `never` (always
   ODBC), or `always` (native required; fail if unavailable). The default comes
   from the `ADBC_ODBC_DELEGATE` environment variable, else `auto`.
+- In `auto` mode, once the native database is up, adbcBridge opens one connection
+  through it and runs `SELECT version()` before handing anything over. A server
+  that speaks the PostgreSQL wire protocol without being PostgreSQL — CockroachDB,
+  CrateDB, YDB, openGauss, Cloud Spanner's PGAdapter — lets the native driver
+  initialize and then fails its first result set (the native driver reads through
+  binary `COPY`, which those servers do not implement); the probe catches that at
+  `AdbcDatabaseInit` and the connection stays on ODBC, with the reason in
+  `adbc.odbc.delegate.last_error`. The probe runs only for a target translated
+  from an ODBC connection string, never for a native URI the caller passed, and
+  `always` skips it. Added in 0.1.1; before that, `auto` committed to the native
+  driver on those servers and every query failed.
 - `adbc.odbc.delegate.driver` names the native driver.
 - `adbc.odbc.delegate.search_path` adds directories to look in, but only when
   `adbc.odbc.delegate.allow_paths` is `true` — loading a driver from a
