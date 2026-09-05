@@ -123,7 +123,7 @@ its way. Full page: [`docs/languages/python.md`](docs/languages/python.md).
 
 ```toml
 [dependencies]
-adbcbridge = "0.1.0"                                    # crates.io; the default `bundled` feature compiles the driver
+adbcbridge = "0.1.1"                                    # crates.io; the default `bundled` feature compiles the driver
 ```
 ```rust
 let mut driver = adbcbridge::load()?;               // compiles the driver from bundled sources
@@ -137,7 +137,7 @@ Full page: [`docs/languages/rust.md`](docs/languages/rust.md).
 ### C#
 
 ```sh
-dotnet add package AdbcBridge --version 0.1.0          # nuget.org; the .nupkg is on the release page too
+dotnet add package AdbcBridge --version 0.1.1          # nuget.org; the .nupkg is on the release page too
 ```
 ```csharp
 using AdbcConnection connection = Driver.Connect("Driver=SQLite3;Database=first.db;");
@@ -151,7 +151,7 @@ Full page: [`docs/languages/csharp.md`](docs/languages/csharp.md).
 ### Java
 
 ```xml
-<dependency><groupId>org.adbcbridge</groupId><artifactId>adbcbridge</artifactId><version>0.1.0</version></dependency>
+<dependency><groupId>org.adbcbridge</groupId><artifactId>adbcbridge</artifactId><version>0.1.1</version></dependency>
 ```
 ```java
 try (RootAllocator allocator = new RootAllocator();
@@ -256,11 +256,11 @@ One driver library, five packages that find and load it. Four of them — the wh
 crate, the nupkg and the jar — are built and attached to every
 [release](https://github.com/singhpratech/adbcbridge/releases) together with the bare
 libraries (the release workflow tests the crate; the bindings' own suites live under
-`tests/`); the Go module is fetched with `go get` from the tagged source (`go/v0.1.0`,
+`tests/`); the Go module is fetched with `go get` from the tagged source (`go/v0.1.1`,
 the sub-module tag). The wheel is on [PyPI](https://pypi.org/project/adbcbridge/),
 the crate on [crates.io](https://crates.io/crates/adbcbridge) and the nupkg on
 [nuget.org](https://www.nuget.org/packages/AdbcBridge) and the jar on
-[Maven Central](https://central.sonatype.com/artifact/org.adbcbridge/adbcbridge) (all 0.1.0).
+[Maven Central](https://central.sonatype.com/artifact/org.adbcbridge/adbcbridge) (all 0.1.1).
 
 | Language | Package | What it gives you | Where |
 |---|---|---|---|
@@ -279,9 +279,9 @@ place they looked.
 
 ## Status and roadmap
 
-Early (0.1.0). Working: everything under *What it does*, on Linux, macOS (arm64) and
+Early (0.1.1). Working: everything under *What it does*, on Linux, macOS (arm64) and
 Windows (x64 and Win32 built and tested in CI on every push; the Windows build lacks
-prefetch and parallel ingest); 0.1.0 on PyPI, crates.io, nuget.org and Maven Central. Next: the ADBC Driver
+prefetch and parallel ingest); 0.1.1 on PyPI, crates.io, nuget.org and Maven Central. Next: the ADBC Driver
 Foundry validation suite, a driver bootstrap for the open-licence ODBC
 drivers, the Win32 thread shim; then a JDBC bridge on the same model —
 [`docs/ROADMAP.md`](docs/ROADMAP.md).

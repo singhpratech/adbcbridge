@@ -16,7 +16,7 @@
 
 [package]
 name = "adbcbridge"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Locate and load adbcbridge, the ADBC driver for any ODBC data source, through adbc_driver_manager"

@@ -28,7 +28,7 @@ own, only the ODBC connection string and a handful of `adbc.odbc.*` options.
 | | |
 |---|---|
 | Crate name | `adbcbridge` |
-| Version | `0.1.0` (early) |
+| Version | `0.1.1` (early) |
 | Edition | 2021 |
 | License | Apache-2.0 |
 | Dependencies | `adbc_core = "0.24"`, `adbc_driver_manager = "0.24"` |
@@ -98,7 +98,7 @@ adbc_core = "0.24"
 
 ```toml
 [dependencies]
-adbcbridge = { git = "https://github.com/singhpratech/adbcbridge", tag = "v0.1.0" }
+adbcbridge = { git = "https://github.com/singhpratech/adbcbridge", tag = "v0.1.1" }
 adbc_core = "0.24"
 ```
 
@@ -457,7 +457,7 @@ bounded identically.
 
 ## Known limitations
 
-- **Early release (0.1.0).** The API surface is small and may change. The
+- **Early release (0.1.1).** The API surface is small and may change. The
   ADBC Driver Foundry validation suite runs against the driver from
   `tests/validation/` (latest results in `tests/validation/RESULTS.md`; driver
   defects it found are still being worked through); prebuilt driver tarballs
@@ -490,7 +490,7 @@ back — all through the ADBC traits.
 ```toml
 [package]
 name = "adbcbridge-example"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
