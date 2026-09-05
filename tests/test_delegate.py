@@ -691,3 +691,70 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def test_probe_falls_back_when_native_cannot_query():
+    """A server the native driver can stand up but not read from stays on ODBC.
+
+    Stands in for CockroachDB, CrateDB, YDB, openGauss and Spanner behind psqlodbc:
+    adbc_driver_postgresql's DatabaseInit succeeds there and the first result set fails
+    on binary COPY.  With "adbc.fake.fail_query" the stand-in fails the probe query the
+    same way; in auto mode adbcbridge must notice at AdbcDatabaseInit and use ODBC.
+
+    The knob that makes the fake fail is itself a pass-through option, and a held
+    pass-through option on a connection that ends up on ODBC is reported as unknown
+    (see docs/reference/options.md) -- so what the test observes is that report, and
+    it must carry the probe's reason: the fallback happened, and it says why.
+    """
+    conn_str = pg_odbc_connection_string()
+    try:
+        dbapi.connect(
+            driver=DRIVER,
+            db_kwargs={
+                "uri": conn_str,
+                "adbc.odbc.delegate": "auto",
+                "adbc.odbc.delegate.allow_paths": "true",
+                "adbc.odbc.delegate.driver": fake_native("postgres"),
+                "adbc.fake.fail_query": "binary format for COPY TO not implemented",
+            },
+        ).close()
+    except dbapi.Error as e:
+        msg = str(e)
+    else:
+        raise AssertionError("the held adbc.fake.* option should have been reported once ODBC served the connection")
+    assert "served by ODBC" in msg, msg
+    assert "could not run a query" in msg, msg
+    assert "COPY TO not implemented" in msg, msg
+
+
+def test_probe_passes_and_delegation_proceeds():
+    """The probe is invisible when the native driver can read from the server."""
+    conn_str = pg_odbc_connection_string()
+    connection = dbapi.connect(
+        driver=DRIVER,
+        db_kwargs={
+            "uri": conn_str,
+            "adbc.odbc.delegate": "auto",
+            "adbc.odbc.delegate.allow_paths": "true",
+            "adbc.odbc.delegate.driver": fake_native("postgres"),
+        },
+    )
+    with connection as conn:
+        assert conn.adbc_connection.get_option("adbc.odbc.delegated_to") != "odbc"
+
+
+def test_probe_skipped_when_delegation_is_forced():
+    """delegate=always means the caller wants the native driver's own diagnostics."""
+    conn_str = pg_odbc_connection_string()
+    connection = dbapi.connect(
+        driver=DRIVER,
+        db_kwargs={
+            "uri": conn_str,
+            "adbc.odbc.delegate": "always",
+            "adbc.odbc.delegate.allow_paths": "true",
+            "adbc.odbc.delegate.driver": fake_native("postgres"),
+            "adbc.fake.fail_query": "would have failed the probe",
+        },
+    )
+    with connection as conn:
+        assert conn.adbc_connection.get_option("adbc.odbc.delegated_to") != "odbc"
