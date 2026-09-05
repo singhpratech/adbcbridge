@@ -126,6 +126,202 @@ const DATA = {"counts": {"linux": 53, "macos": 45, "windows": 48}, "entries": [{
 const CHIP = {pass:'✓ pass', read:'✓ read', platform:'platform', detail:'note'};
 const OSNAMES = {linux:'Linux', macos:'macOS arm64', windows:'Windows x64'};
 const NOTES = {
+ "cockroachdb": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "materialize": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "questdb": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "risingwave": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "opengauss": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "cratedb": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "spanner": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "arcadedb": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "ydb": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "databend": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
+   "url": "/notes/macos-iodbc-width-vendor-drivers/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "greptimedb": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "doris": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
+   "url": "/notes/macos-iodbc-width-vendor-drivers/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "starrocks": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
+   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
+  }
+ ],
+ "mongodbbi": [
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  },
+  {
+   "title": "SQLColumns segfaults on a NULL NUMERIC_PRECISION from mongosqld",
+   "url": "/notes/mongodb-bi-connector-through-mysql-odbc/"
+  }
+ ],
  "altibase": [
   {
    "title": "Altibase ODBC stores astral characters as CESU-8 on its wide path",
@@ -368,114 +564,10 @@ const NOTES = {
    "url": "/notes/mysql-connector-odbc-findings/"
   }
  ],
- "databend": [
-  {
-   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
-   "url": "/notes/macos-iodbc-width-vendor-drivers/"
-  },
-  {
-   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
-   "url": "/notes/mysql-connector-odbc-findings/"
-  },
-  {
-   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
-   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
-  }
- ],
- "doris": [
-  {
-   "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
-   "url": "/notes/macos-iodbc-width-vendor-drivers/"
-  },
-  {
-   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
-   "url": "/notes/mysql-connector-odbc-findings/"
-  },
-  {
-   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
-   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
-  }
- ],
  "opensearch": [
   {
    "title": "Any text read as a timestamp comes back as today's date, under SQL_SUCCESS",
    "url": "/notes/opensearch-sql-odbc-findings/"
-  }
- ],
- "cratedb": [
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "questdb": [
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "materialize": [
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "risingwave": [
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "arcadedb": [
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "spanner": [
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "ydb": [
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "cockroachdb": [
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
   }
  ],
  "timescaledb": [
@@ -485,12 +577,6 @@ const NOTES = {
   }
  ],
  "citus": [
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "opengauss": [
   {
    "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
    "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
@@ -546,16 +632,6 @@ const NOTES = {
    "url": "/notes/mysql-connector-odbc-findings/"
   }
  ],
- "starrocks": [
-  {
-   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
-   "url": "/notes/mysql-connector-odbc-findings/"
-  },
-  {
-   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
-   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
-  }
- ],
  "oceanbase": [
   {
    "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
@@ -574,26 +650,6 @@ const NOTES = {
   {
    "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
    "url": "/notes/mysql-wire-warehouses-prepared-statements/"
-  }
- ],
- "greptimedb": [
-  {
-   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
-   "url": "/notes/mysql-connector-odbc-findings/"
-  },
-  {
-   "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
-   "url": "/notes/mysql-wire-warehouses-prepared-statements/"
-  }
- ],
- "mongodbbi": [
-  {
-   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
-   "url": "/notes/mysql-connector-odbc-findings/"
-  },
-  {
-   "title": "SQLColumns segfaults on a NULL NUMERIC_PRECISION from mongosqld",
-   "url": "/notes/mongodb-bi-connector-through-mysql-odbc/"
   }
  ],
  "duckdb": [

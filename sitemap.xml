@@ -34,4 +34,5 @@
   <url><loc>https://adbcbridge.org/notes/oracle-instant-client-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://adbcbridge.org/notes/duckdb-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://adbcbridge.org/notes/mongodb-bi-connector-through-mysql-odbc/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/native-adbc-drivers-on-wire-compatible-databases/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
 </urlset>
