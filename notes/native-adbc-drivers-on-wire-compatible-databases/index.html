@@ -175,14 +175,17 @@ the native driver connects and the first <code>SELECT</code> then fails as in th
 Spanner reads work but <code>adbc_ingest</code> fails because the native driver's <code>CREATE TABLE</code> has no
 primary key (adbcBridge's own ingest adds one). Where the native driver cannot connect at
 all (Materialize, QuestDB, RisingWave, ArcadeDB) <code>auto</code> falls back to ODBC as designed.</p>
-<p>Workaround, effective immediately, on any 0.1.0 install:</p>
+<p><strong>Found on this run and fixed the same day: <a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.1">0.1.1</a>, released 2026-09-05,
+probes the native driver before handing a connection over</strong> — one <code>SELECT version()</code> through
+it at <code>AdbcDatabaseInit</code>, read back through its own result path — and stays on ODBC when
+that fails, with the reason in <code>adbc.odbc.delegate.last_error</code>. Re-run after the fix with
+delegation left on, all fourteen PostgreSQL-wire databases pass all seven steps through
+adbcBridge. On a 0.1.0 install the workaround is one database option:</p>
 <pre><code>adbc.odbc.delegate=never
 </code></pre>
-<p>as a database option (<code>adbcbridge.connect(..., delegate="never")</code> in Python, or
-<code>ADBC_ODBC_DELEGATE=never</code> in the environment). The fix, delegating only once the server is
-known to be a PostgreSQL that supports the native path and otherwise falling back to ODBC,
-is the reason for the 0.1.1 release. Until then the matrix's PostgreSQL-wire rows describe
-the ODBC path, which is what they always measured.</p></article>
+<p>(<code>adbcbridge.connect(..., delegate="never")</code> in Python, or <code>ADBC_ODBC_DELEGATE=never</code> in
+the environment). The matrix's PostgreSQL-wire rows describe the ODBC path either way,
+which is what they always measured.</p></article>
 </main>
 <footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>. Corrections and additions: <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/community/contributing.md">open an issue or a pull request</a> on the repository.</footer>
 </div>
