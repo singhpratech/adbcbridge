@@ -125,7 +125,7 @@ read · <code>adbc_ingest</code> of 1,000 rows (int32, float64, utf8, date32) wi
 <tr>
 <td>ArcadeDB</td>
 <td>connect</td>
-<td><code>Expected 5 or 6 columns from type resolver pg_type query but got 0</code></td>
+<td><code>Expected 5 or 6 columns from type resolver pg_type query but got 0</code> — answered by <a href="https://github.com/ArcadeData/arcadedb/pull/7179">ArcadeDB PR #7179</a> the same day, see below</td>
 </tr>
 <tr>
 <td>Spanner</td>
@@ -159,6 +159,7 @@ read · <code>adbc_ingest</code> of 1,000 rows (int32, float64, utf8, date32) wi
 </tr>
 </tbody>
 </table></div>
+<p><strong>Same-day follow-through from ArcadeDB.</strong> Within an hour of the follow-up comment, ArcadeDB's maintainer opened <a href="https://github.com/ArcadeData/arcadedb/issues/7178">#7178</a> with their own diagnosis (the emulated <code>pg_type</code> knew neither <code>typreceive</code> nor <code>typsend</code>, and its WHERE parser took a single equality only) and a fix, <a href="https://github.com/ArcadeData/arcadedb/pull/7179">PR #7179</a>. Built from that PR's CI artifact and probed again the same evening: the native driver now connects and builds its type resolver. It then stops at the first result set, because ArcadeDB has no <code>COPY (…) TO STDOUT (FORMAT binary)</code>, the same stop as CockroachDB, CrateDB and YDB above. The ODBC path is unchanged, seven of seven. The row above will say "connects" once the fix is in an ArcadeDB release.</p>
 <p>None of these is a defect in the native drivers as such. The PostgreSQL driver reads every
 result through <code>COPY … TO STDOUT (FORMAT binary)</code> and learns types from <code>pg_catalog</code>, which
 is the fastest possible path against a real PostgreSQL server and simply is not implemented
