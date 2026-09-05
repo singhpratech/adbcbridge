@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Compatibility matrix — adbcBridge</title>
+<link rel="canonical" href="https://adbcbridge.org/matrix/">
+<meta property="og:type" content="website"><meta property="og:site_name" content="adbcBridge"><meta property="og:title" content="Compatibility matrix — adbcBridge"><meta property="og:description" content="53 databases through one ADBC-over-ODBC driver: the verified compatibility matrix across Linux, macOS and Windows, with the quirks each stack needed."><meta property="og:url" content="https://adbcbridge.org/matrix/"><meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="description" content="53 databases through one ADBC-over-ODBC driver: the verified compatibility matrix across Linux, macOS and Windows, with the quirks each stack needed.">
 <link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48">
 <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="preload" href="/fonts/newsreader-normal-latin.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/public-sans-normal-latin.woff2" as="font" type="font/woff2" crossorigin><style>/* Newsreader, Public Sans, JetBrains Mono — SIL Open Font License 1.1; latin and latin-ext subsets, one variable file per face with a weight range, self-hosted. */@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}</style>
 <script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <style>
 :root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#146f6f;--teal-soft:#e3f1f0;--lamp:#d9843a;--lamp-ink:#ffffff;--code:#eef2f2}
@@ -44,7 +44,7 @@ h1{font-family:Newsreader,serif;font-weight:500;font-size:clamp(1.9rem,4vw,2.7re
 .dbname{font-weight:600}
 .dbname .rowtoggle{background:none;border:0;padding:6px 0;margin:-6px 0;min-height:24px;font:inherit;font-weight:600;color:var(--ink);cursor:pointer;text-align:left;display:inline-flex;align-items:center}
 .dbname .caret{display:inline-block;transition:transform .15s;color:var(--muted);margin-right:8px;font-size:.8em}
-tr.entry[aria-expanded="true"] .caret{transform:rotate(90deg)}
+tr.entry[data-open="true"] .caret{transform:rotate(90deg)}
 .drv{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--muted);display:block;max-width:30ch}
 .wiretag{font-size:12.5px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 9px;white-space:nowrap}
 .chip{display:inline-block;font-size:.8rem;font-weight:600;border-radius:999px;padding:3px 12px;white-space:nowrap}
@@ -85,12 +85,14 @@ ul.points li:first-child::before{top:.45em}
 .detail .links .read{background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 12px}
 .detail .links .src{color:var(--muted);margin-left:auto;font-size:.85rem;padding:4px 0;display:inline-block}
 .srclink a,.lede a,.detail a,footer a{padding:3px 0}
-.sitenav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-left:auto}.sitenav a{border:0;color:var(--muted);font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;padding:4px 2px;line-height:1.2;display:inline-block}.sitenav a:hover{color:var(--teal,var(--accent,inherit))}.sitenav a.on{color:var(--ink);font-weight:600}.sitenav a:focus-visible,.navmenu:focus-visible,.theme:focus-visible{outline:2px solid var(--teal,var(--accent,#146f6f));outline-offset:2px}.navmenu{display:none;margin-left:auto;min-width:44px;min-height:44px;padding:8px 14px;background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:8px;color:var(--ink);font:inherit;font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;cursor:pointer;align-items:center;justify-content:center}@media (max-width:760px){.navmenu{display:inline-flex;padding:8px 10px}.navmenu+.theme{margin-left:0}.sitenav{display:none;flex-basis:100%;width:100%;flex-direction:column;align-items:stretch;gap:0;margin:6px 0 0;border-top:1px solid var(--line,var(--rule,#d8dedf))}.sitenav.open{display:flex}.sitenav a{display:flex;align-items:center;min-height:44px;padding:10px 4px;border-bottom:1px solid var(--line,var(--rule,#d8dedf));font-size:1rem}nav:has(> .navmenu),header:has(> .navmenu),.topbar:has(> .navmenu),nav:has(> .sitenav),header:has(> .sitenav),.topbar:has(> .sitenav){flex-wrap:wrap}}.theme{background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:999px;padding:5px 7px;min-width:32px;min-height:32px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}nav .brand,header .brand,.topbar .brand{display:flex;align-items:center;gap:10px;border:0;color:var(--ink);font-family:"Newsreader",Georgia,serif;font-weight:400;font-size:1.3rem;text-decoration:none;letter-spacing:0}nav .brand img,header .brand img,.topbar .brand img{height:30px;width:auto;margin:0}.brand small{font-family:"Public Sans",system-ui,sans-serif;font-weight:500;color:var(--muted);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;margin-left:2px}@media (max-width:760px){nav .brand,header .brand,.topbar .brand{font-size:1.15rem;gap:6px}nav .brand img,header .brand img,.topbar .brand img{height:24px}}</style>
+.skip{position:absolute;left:-999px;top:8px;z-index:9;padding:8px 12px;border-radius:6px;background:var(--surface);color:var(--teal,var(--accent,#146f6f));border:1px solid var(--line,var(--rule,#d8dedf))}.skip:focus{left:8px}.sitenav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-left:auto}.sitenav a{border:0;color:var(--muted);font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;padding:4px 2px;line-height:1.2;display:inline-block}.sitenav a:hover{color:var(--teal,var(--accent,inherit))}.sitenav a.on{color:var(--ink);font-weight:600}.sitenav a:focus-visible,.navmenu:focus-visible,.theme:focus-visible{outline:2px solid var(--teal,var(--accent,#146f6f));outline-offset:2px}.navmenu{display:none;margin-left:auto;min-width:44px;min-height:44px;padding:8px 14px;background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:8px;color:var(--ink);font:inherit;font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;cursor:pointer;align-items:center;justify-content:center}@media (max-width:760px){.navmenu{display:inline-flex;padding:8px 10px}.navmenu+.theme{margin-left:0}.sitenav{display:none;flex-basis:100%;width:100%;flex-direction:column;align-items:stretch;gap:0;margin:6px 0 0;border-top:1px solid var(--line,var(--rule,#d8dedf))}.sitenav.open{display:flex}.sitenav a{display:flex;align-items:center;min-height:44px;padding:10px 4px;border-bottom:1px solid var(--line,var(--rule,#d8dedf));font-size:1rem}nav:has(> .navmenu),header:has(> .navmenu),.topbar:has(> .navmenu),nav:has(> .sitenav),header:has(> .sitenav),.topbar:has(> .sitenav){flex-wrap:wrap}}.theme{background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:999px;padding:5px 7px;min-width:32px;min-height:32px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}nav .brand,header .brand,.topbar .brand{display:flex;align-items:center;gap:10px;border:0;color:var(--ink);font-family:"Newsreader",Georgia,serif;font-weight:400;font-size:1.3rem;text-decoration:none;letter-spacing:0}nav .brand img,header .brand img,.topbar .brand img{height:30px;width:auto;margin:0}.brand small{font-family:"Public Sans",system-ui,sans-serif;font-weight:500;color:var(--muted);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;margin-left:2px}@media (max-width:760px){nav .brand,header .brand,.topbar .brand{font-size:1.15rem;gap:6px}nav .brand img,header .brand img,.topbar .brand img{height:24px}}</style>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <div class="wrap">
-<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark.png" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/" class="on">Matrix</a><a href="/notes/">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
+<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/" class="on">Matrix</a><a href="/notes/">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 
+<main id="main">
 <h1>The compatibility matrix</h1>
 <p class="lede">Every entry below ran one workload — types, NULLs, Unicode in parameters and statement text, bulk ingest, batched reads, catalog, error mapping — against a real server or file, on each operating system. Click a row for the quirks that stack needed and the full per-OS record. Generated from <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/COMPATIBILITY.md">docs/COMPATIBILITY.md</a>; a cell that is not a plain pass says exactly why, in its own words.</p>
 
@@ -109,11 +111,12 @@ ul.points li:first-child::before{top:.45em}
 
 <div class="tablewrap">
 <table class="matrix" id="tbl">
-<thead><tr><th>Database</th><th class="drvcol">Driver</th><th class="wirecol">Wire</th><th>Linux</th><th>macOS arm64</th><th>Windows x64</th></tr></thead>
+<thead><tr><th scope="col">Database</th><th scope="col" class="drvcol">Driver</th><th scope="col" class="wirecol">Wire</th><th scope="col">Linux</th><th scope="col">macOS arm64</th><th scope="col">Windows x64</th></tr></thead>
 <tbody id="tb"></tbody>
 </table>
 </div>
 <div class="empty" id="empty" hidden>Nothing matches — try a shorter search.</div>
+</main>
 
 <footer>Counts are derived from the source table at build time. Read-only entries (✓ read) are drivers that expose no write path; their cells say so. Platform notes record what a vendor ships for an OS — a fact about the platform, not the driver.</footer>
 </div>
@@ -606,7 +609,7 @@ function chip(o){ return `<span class="chip ${o.kind}">${CHIP[o.kind]}</span>`; 
 
 function render(list){
   tb.innerHTML = list.map((e,i)=>`
-  <tr class="entry" id="${e.slug}" data-i="${i}" aria-expanded="false">
+  <tr class="entry" id="${e.slug}" data-i="${i}" data-open="false">
     <td class="dbname"><button class="rowtoggle" type="button" aria-expanded="false" aria-controls="${e.slug}-detail"><span class="caret">▸</span>${e.name}</button></td>
     <td class="drvcol"><span class="drv">${e.driver.replace(/`/g,'')}</span></td>
     <td class="wirecol"><span class="wiretag">${e.wire}</span></td>
@@ -639,14 +642,14 @@ document.querySelectorAll('.chipbtn').forEach(b => b.addEventListener('click', (
   apply();
 }));
 function setOpen(tr, open){
-  tr.setAttribute('aria-expanded', String(open));
+  tr.setAttribute('data-open', String(open));
   const b = tr.querySelector('.rowtoggle'); if (b) b.setAttribute('aria-expanded', String(open));
   tr.nextElementSibling.classList.toggle('open', open);
 }
 tb.addEventListener('click', ev => {
   const tr = ev.target.closest('tr.entry');
   if (!tr || ev.target.closest('a')) return;
-  setOpen(tr, tr.getAttribute('aria-expanded') !== 'true');
+  setOpen(tr, tr.getAttribute('data-open') !== 'true');
 });
 
 const c = DATA.counts;

@@ -12,7 +12,7 @@
 <meta property="og:title" content="adbcBridge Docs">
 <meta property="og:description" content="Install adbcBridge, run a first query, then go deep in Python, Rust, .NET, Java, Go or C — with a reference for every option, connection string and driver quirk.">
 <meta property="og:url" content="https://adbcbridge.org/docs/">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
 <link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48">
 <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3">
 <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96.png?v=3">
@@ -25,20 +25,35 @@
 </head>
 <body>
 
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="preload" href="/fonts/newsreader-normal-latin.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/public-sans-normal-latin.woff2" as="font" type="font/woff2" crossorigin><style>/* Newsreader, Public Sans, JetBrains Mono — SIL Open Font License 1.1; latin and latin-ext subsets, one variable file per face with a weight range, self-hosted. */@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}</style>
 <style>
-:root{--toph:53px;--ink:#16202b;--paper:#f6f8f7;--surface:#ffffff;--rule:#d8dedf;--muted:#5b6772;--accent:#146f6f;--accent-soft:#e3f1f0;--code:#eef2f2;--code-ink:#16202b;--warn:#8a5a00;--warn-soft:#fbf1dc;--sel:#e3f1f0}
+/* Fallback faces cut to the web fonts' own metrics — ascent, descent and, through size-adjust,
+   advance width — so the first paint lays the text out where the web fonts will land. The
+   percentages were measured in the browser against this page's own prose at 390 and 1280 CSS
+   pixels: the fallback keeps the same line breaks through the first screen, so the swap moves
+   nothing. */
+@font-face{font-family:"Public Sans fb";font-weight:400 500;src:local("Arial"),local("Liberation Sans"),local("Helvetica Neue"),local("Helvetica");size-adjust:100.5%;ascent-override:94.5%;descent-override:22.9%;line-gap-override:0%}
+@font-face{font-family:"Public Sans fb";font-weight:600 900;src:local("Arial Bold"),local("Liberation Sans Bold"),local("Helvetica Neue Bold"),local("Helvetica Bold");size-adjust:99%;ascent-override:96%;descent-override:23.2%;line-gap-override:0%}
+@font-face{font-family:"Newsreader fb";font-weight:400 500;src:local("Times New Roman"),local("Liberation Serif"),local("Times");size-adjust:110%;ascent-override:67.3%;descent-override:24.5%;line-gap-override:0%}
+@font-face{font-family:"Newsreader fb";font-weight:600 900;src:local("Times New Roman Bold"),local("Liberation Serif Bold"),local("Times Bold");size-adjust:100.9%;ascent-override:73.3%;descent-override:26.8%;line-gap-override:0%}
+@font-face{font-family:"JetBrains Mono fb";src:local("Courier New"),local("Liberation Mono"),local("DejaVu Sans Mono");size-adjust:100%;ascent-override:102%;descent-override:30%;line-gap-override:0%}
+:root{--toph:59px;--ink:#16202b;--paper:#f6f8f7;--surface:#ffffff;--rule:#d8dedf;--muted:#5b6772;--accent:#146f6f;--accent-soft:#e3f1f0;--code:#eef2f2;--code-ink:#16202b;--warn:#8a5a00;--warn-soft:#fbf1dc;--sel:#e3f1f0}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--ink:#e6ebee;--paper:#10161d;--surface:#171f28;--rule:#2a3540;--muted:#9aa6b0;--accent:#4fc1b8;--accent-soft:#1a2f31;--code:#1d2732;--code-ink:#dfe4ea;--warn:#e0b05a;--warn-soft:#2a2418;--sel:#1a2f31}}
 :root[data-theme="dark"]{--ink:#e6ebee;--paper:#10161d;--surface:#171f28;--rule:#2a3540;--muted:#9aa6b0;--accent:#4fc1b8;--accent-soft:#1a2f31;--code:#1d2732;--code-ink:#dfe4ea;--warn:#e0b05a;--warn-soft:#2a2418;--sel:#1a2f31}
+/* Measured heights of the sticky header at each width where its rows re-wrap, so the sidebars
+   and scroll-margins sit right on the first paint; the script below re-measures and refines. */
+@media (max-width:760px){:root{--toph:109px}}
+@media (min-width:761px) and (max-width:799px){:root{--toph:136px}}
+@media (min-width:800px) and (max-width:879px){:root{--toph:91px}}
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 "Public Sans",system-ui,sans-serif}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 "Public Sans","Public Sans fb",system-ui,sans-serif}
 a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}a:hover{border-bottom-color:var(--accent)}
 a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:18px;padding:10px 20px;background:var(--paper);border-bottom:1px solid var(--rule)}
-.top .brand{font-family:"Newsreader",Georgia,serif;font-weight:400;font-size:1.3rem;color:var(--ink);border:0;display:flex;align-items:center;gap:10px}.brand img{height:28px;width:auto;vertical-align:middle;margin-right:6px}
-.top .brand small{font-family:"Public Sans",system-ui,sans-serif;font-weight:500;color:var(--muted);margin-left:8px;font-size:.8rem;letter-spacing:.06em;text-transform:uppercase}
+.top .brand{font-family:"Newsreader","Newsreader fb",Georgia,serif;font-weight:400;font-size:1.3rem;color:var(--ink);border:0;display:flex;align-items:center;gap:10px}.brand img{height:28px;width:auto;vertical-align:middle;margin-right:6px}
+.top .brand small{font-family:"Public Sans","Public Sans fb",system-ui,sans-serif;font-weight:500;color:var(--muted);margin-left:8px;font-size:.8rem;letter-spacing:.06em;text-transform:uppercase}
 .top .links{margin-left:auto;display:flex;gap:16px;font-size:.9rem}.top .links a{border:0;color:var(--muted)}.top .links a:hover{color:var(--ink)}
 .top input{width:240px;max-width:40vw;padding:6px 10px;border:1px solid var(--rule);border-radius:4px;background:var(--paper);color:var(--ink);font:inherit;font-size:.9rem}
 .top button.menu{display:none;background:none;border:1px solid var(--rule);border-radius:4px;color:var(--ink);padding:4px 8px;font:inherit;min-width:44px;min-height:44px}
@@ -53,13 +68,13 @@ aside{position:sticky;top:var(--toph);height:calc(100vh - var(--toph));overflow-
 aside ul{list-style:none;margin:0;padding:0 0 0 6px}aside li a{display:block;padding:5px 10px;border:0;border-radius:4px;color:var(--ink)}
 aside li a:hover{background:var(--accent-soft)}aside li a.on{background:var(--sel);color:var(--accent);font-weight:600}
 main{padding:28px 44px 80px;min-width:0}
-article{max-width:76ch}
-article h1{font-family:"Newsreader",Georgia,serif;font-weight:600;font-size:2.1rem;line-height:1.15;margin:0 0 .5rem;text-wrap:balance}
-article h2{font-family:"Newsreader",Georgia,serif;font-weight:600;font-size:1.45rem;margin:2.2rem 0 .6rem;padding-top:.6rem;border-top:1px solid var(--rule);text-wrap:balance}
+article{max-width:736px}/* 76ch of Public Sans at 16px */
+article h1{font-family:"Newsreader","Newsreader fb",Georgia,serif;font-weight:600;font-size:2.1rem;line-height:1.15;margin:0 0 .5rem;text-wrap:balance}
+article h2{font-family:"Newsreader","Newsreader fb",Georgia,serif;font-weight:600;font-size:1.45rem;margin:2.2rem 0 .6rem;padding-top:.6rem;border-top:1px solid var(--rule);text-wrap:balance}
 article h3{font-weight:600;font-size:1.1rem;margin:1.6rem 0 .4rem}article h4{font-weight:600;font-size:.95rem;margin:1.2rem 0 .3rem}
-article p,article li{max-width:72ch}
-article code{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.86em;background:var(--code);color:var(--code-ink);padding:1px 5px;border-radius:3px}
-article pre{background:var(--code);color:var(--code-ink);padding:14px 16px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0;border:1px solid var(--rule)}
+article p,article li{max-width:698px}/* 72ch of Public Sans at 16px */
+article code{font-family:"JetBrains Mono","JetBrains Mono fb",ui-monospace,monospace;font-size:.86em;background:var(--code);color:var(--code-ink);padding:1px 5px;border-radius:3px}
+article pre{background:var(--code);color:var(--code-ink);padding:14px 16px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono","JetBrains Mono fb",ui-monospace,monospace;margin:14px 0;border:1px solid var(--rule)}
 article pre code{background:none;padding:0;font-size:inherit}
 article th code{font-size:1em}
 .tw{overflow-x:auto;margin:14px 0;border:1px solid var(--rule);border-radius:6px;background:var(--surface)}
@@ -76,7 +91,7 @@ article p code,article li code{overflow-wrap:anywhere}article a{overflow-wrap:an
 .tw:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .skip{position:absolute;left:-999px;top:8px;z-index:9;padding:8px 12px;border-radius:6px;background:var(--surface);color:var(--accent);border:1px solid var(--rule)}.skip:focus{left:8px}
 .cw{position:relative;margin:14px 0}.cw pre{margin:0;padding-right:70px}
-.copy{position:absolute;top:8px;right:8px;min-width:24px;min-height:24px;padding:2px 8px;font:.75rem/1.4 "Public Sans",system-ui,sans-serif;border:1px solid var(--rule);border-radius:4px;background:var(--surface);color:var(--accent);cursor:pointer}.copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.copy{position:absolute;top:8px;right:8px;min-width:24px;min-height:24px;padding:2px 8px;font:.75rem/1.4 "Public Sans","Public Sans fb",system-ui,sans-serif;border:1px solid var(--rule);border-radius:4px;background:var(--surface);color:var(--accent);cursor:pointer}.copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .crumb{font-size:.8rem;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-bottom:10px}
 .pager{display:flex;justify-content:space-between;gap:16px;margin-top:48px;padding-top:16px;border-top:1px solid var(--rule);font-size:.95rem}
 .pager a{border:0}.pager small{display:block;color:var(--muted);font-size:.75rem;letter-spacing:.06em;text-transform:uppercase}
@@ -91,18 +106,241 @@ article a,.crumb a,.results a{padding-top:3px;padding-bottom:3px}.src a{padding:
 .srch{position:relative}
 @media (max-width:1100px){.shell{grid-template-columns:268px minmax(0,1fr)}.rail{display:none}}
 @media (max-width:780px){.shell{grid-template-columns:minmax(0,1fr)}aside{position:fixed;left:0;top:var(--toph);width:min(320px,90vw);background:var(--surface);transform:translateX(-100%);transition:transform .2s;z-index:4}aside.open{transform:none}.top button.menu{display:inline-flex;align-items:center;justify-content:center}main{padding:20px 18px 60px}}
-.sitenav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-left:auto}.sitenav a{border:0;color:var(--muted);font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;padding:4px 2px;line-height:1.2;display:inline-block}.sitenav a:hover{color:var(--teal,var(--accent,inherit))}.sitenav a.on{color:var(--ink);font-weight:600}.sitenav a:focus-visible,.navmenu:focus-visible,.theme:focus-visible{outline:2px solid var(--teal,var(--accent,#146f6f));outline-offset:2px}.navmenu{display:none;margin-left:auto;min-width:44px;min-height:44px;padding:8px 14px;background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:8px;color:var(--ink);font:inherit;font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;cursor:pointer;align-items:center;justify-content:center}@media (max-width:760px){.navmenu{display:inline-flex;padding:8px 10px}.navmenu+.theme{margin-left:0}.sitenav{display:none;flex-basis:100%;width:100%;flex-direction:column;align-items:stretch;gap:0;margin:6px 0 0;border-top:1px solid var(--line,var(--rule,#d8dedf))}.sitenav.open{display:flex}.sitenav a{display:flex;align-items:center;min-height:44px;padding:10px 4px;border-bottom:1px solid var(--line,var(--rule,#d8dedf));font-size:1rem}nav:has(> .navmenu),header:has(> .navmenu),.topbar:has(> .navmenu),nav:has(> .sitenav),header:has(> .sitenav),.topbar:has(> .sitenav){flex-wrap:wrap}}.theme{background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:999px;padding:5px 7px;min-width:32px;min-height:32px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}nav .brand,header .brand,.topbar .brand{display:flex;align-items:center;gap:10px;border:0;color:var(--ink);font-family:"Newsreader",Georgia,serif;font-weight:400;font-size:1.3rem;text-decoration:none;letter-spacing:0}nav .brand img,header .brand img,.topbar .brand img{height:30px;width:auto;margin:0}.brand small{font-family:"Public Sans",system-ui,sans-serif;font-weight:500;color:var(--muted);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;margin-left:2px}@media (max-width:760px){nav .brand,header .brand,.topbar .brand{font-size:1.15rem;gap:6px}nav .brand img,header .brand img,.topbar .brand img{height:24px}}</style>
+.skip{position:absolute;left:-999px;top:8px;z-index:9;padding:8px 12px;border-radius:6px;background:var(--surface);color:var(--teal,var(--accent,#146f6f));border:1px solid var(--line,var(--rule,#d8dedf))}.skip:focus{left:8px}.sitenav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-left:auto}.sitenav a{border:0;color:var(--muted);font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;padding:4px 2px;line-height:1.2;display:inline-block}.sitenav a:hover{color:var(--teal,var(--accent,inherit))}.sitenav a.on{color:var(--ink);font-weight:600}.sitenav a:focus-visible,.navmenu:focus-visible,.theme:focus-visible{outline:2px solid var(--teal,var(--accent,#146f6f));outline-offset:2px}.navmenu{display:none;margin-left:auto;min-width:44px;min-height:44px;padding:8px 14px;background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:8px;color:var(--ink);font:inherit;font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;cursor:pointer;align-items:center;justify-content:center}@media (max-width:760px){.navmenu{display:inline-flex;padding:8px 10px}.navmenu+.theme{margin-left:0}.sitenav{display:none;flex-basis:100%;width:100%;flex-direction:column;align-items:stretch;gap:0;margin:6px 0 0;border-top:1px solid var(--line,var(--rule,#d8dedf))}.sitenav.open{display:flex}.sitenav a{display:flex;align-items:center;min-height:44px;padding:10px 4px;border-bottom:1px solid var(--line,var(--rule,#d8dedf));font-size:1rem}nav:has(> .navmenu),header:has(> .navmenu),.topbar:has(> .navmenu),nav:has(> .sitenav),header:has(> .sitenav),.topbar:has(> .sitenav){flex-wrap:wrap}}.theme{background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:999px;padding:5px 7px;min-width:32px;min-height:32px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}nav .brand,header .brand,.topbar .brand{display:flex;align-items:center;gap:10px;border:0;color:var(--ink);font-family:"Newsreader",Georgia,serif;font-weight:400;font-size:1.3rem;text-decoration:none;letter-spacing:0}nav .brand img,header .brand img,.topbar .brand img{height:30px;width:auto;margin:0}.brand small{font-family:"Public Sans",system-ui,sans-serif;font-weight:500;color:var(--muted);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;margin-left:2px}@media (max-width:760px){nav .brand,header .brand,.topbar .brand{font-size:1.15rem;gap:6px}nav .brand img,header .brand img,.topbar .brand img{height:24px}}</style>
 <a class="skip" href="#art">Skip to content</a>
 <header class="top">
   <button class="menu" type="button" id="menu" aria-label="Open navigation" aria-expanded="false" aria-controls="side">☰</button>
-  <a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark.png" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge <small>Docs</small></a>
+  <a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge <small>Docs</small></a>
   <div class="srch"><input id="q" type="search" placeholder="Search the docs…" aria-label="Search the docs"><div class="results" id="res"></div></div>
   <nav class="links"><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/" class="on">Docs</a><a href="/matrix/">Matrix</a><a href="/notes/">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 </header>
 <div class="shell">
   <aside id="side"><div class="grp"><button class="grp-h" type="button" aria-expanded="true">Getting started</button><ul><li><a href="#index" data-page="index">Overview</a></li><li><a href="#getting-started-install-linux" data-page="getting-started-install-linux">Install on Linux</a></li><li><a href="#getting-started-install-macos" data-page="getting-started-install-macos">Install on macOS</a></li><li><a href="#getting-started-install-windows" data-page="getting-started-install-windows">Install on Windows</a></li><li><a href="#getting-started-first-query" data-page="getting-started-first-query">First query</a></li></ul></div><div class="grp"><button class="grp-h" type="button" aria-expanded="true">Languages</button><ul><li><a href="#languages-python" data-page="languages-python">Python</a></li><li><a href="#languages-rust" data-page="languages-rust">Rust</a></li><li><a href="#languages-csharp" data-page="languages-csharp">.NET (C#)</a></li><li><a href="#languages-java" data-page="languages-java">Java</a></li><li><a href="#languages-go" data-page="languages-go">Go</a></li><li><a href="#languages-c" data-page="languages-c">C and C++</a></li><li><a href="#languages-r" data-page="languages-r">R</a></li></ul></div><div class="grp"><button class="grp-h" type="button" aria-expanded="true">How it works</button><ul><li><a href="#how-it-works-performance" data-page="how-it-works-performance">Performance, with conditions</a></li><li><a href="#how-it-works-delegation" data-page="how-it-works-delegation">Native delegation</a></li><li><a href="#how-it-works-partitioned-reads" data-page="how-it-works-partitioned-reads">Partitioned reads</a></li><li><a href="#how-it-works-prefetch" data-page="how-it-works-prefetch">Prefetch</a></li><li><a href="#how-it-works-connection-keywords" data-page="how-it-works-connection-keywords">Connection keywords</a></li></ul></div><div class="grp"><button class="grp-h" type="button" aria-expanded="true">Reference</button><ul><li><a href="#reference-options" data-page="reference-options">Options</a></li><li><a href="#reference-connection-strings" data-page="reference-connection-strings">Connection strings</a></li><li><a href="#reference-types" data-page="reference-types">Type mapping</a></li><li><a href="#reference-quirks" data-page="reference-quirks">Driver quirks</a></li><li><a href="#reference-install" data-page="reference-install">Build, install, manifest</a></li><li><a href="#reference-building" data-page="reference-building">Building and testing</a></li><li><a href="#troubleshooting" data-page="troubleshooting">Troubleshooting</a></li></ul></div><div class="grp"><button class="grp-h" type="button" aria-expanded="true">Project</button><ul><li><a href="#compatibility" data-page="compatibility">Compatibility</a></li><li><a href="#roadmap" data-page="roadmap">Roadmap</a></li><li><a href="#upstream" data-page="upstream">Upstream</a></li><li><a href="#community-faq" data-page="community-faq">FAQ</a></li><li><a href="#community-contributing" data-page="community-contributing">Contributing</a></li><li><a href="#community-security" data-page="community-security">Security and verification</a></li></ul></div></aside>
-  <main><div class="crumb" id="crumb"></div><article id="art" tabindex="-1"></article><div class="pager" id="pager"></div><p class="src" id="src"></p></main>
-  <nav class="rail" id="rail" aria-label="On this page"></nav>
+  <main><div class="crumb" id="crumb">Getting started / Overview</div><article id="art" tabindex="-1"><h1 id="adbcbridge-documentation">adbcBridge documentation</h1>
+<p>adbcBridge is a single C library that turns <strong>any ODBC driver on your machine
+into an Apache Arrow ADBC driver</strong>. Point it at a database you already reach
+through ODBC — Db2, Oracle, SQL Server, SQLite, PostgreSQL, ClickHouse, Vertica,
+SAP HANA, or anything else with an ODBC driver — and read the results as Arrow
+record batches from Python, Rust, C#, Java, Go, R or C, with no per-database
+code of your own.</p>
+<p>Two acronyms show up on every page, so here they are once:</p>
+<ul>
+<li><strong>ODBC</strong> (Open Database Connectivity) — the decades-old C API almost every
+  database ships a driver for. You talk to a <em>driver manager</em> (a small system
+  library), which loads the <em>vendor driver</em> for your database.</li>
+<li><strong>ADBC</strong> (Arrow Database Connectivity) — a newer C API whose result sets are
+  Apache Arrow columnar batches instead of ODBC's row-at-a-time buffers. ADBC
+  clients exist for many languages.</li>
+</ul>
+<p>adbcBridge is the piece in between.</p>
+<h2 id="what-it-is">What it is</h2>
+<p>One shared library — <code>libadbc_driver_odbc.so</code> on Linux,
+<code>libadbc_driver_odbc.dylib</code> on macOS, <code>libadbc_driver_odbc.dll</code> on Windows —
+written in plain C11. It exposes the ADBC <strong>ABI</strong> (Application Binary Interface,
+the exact function-pointer layout an ADBC client expects) on top, and calls the
+ODBC driver manager underneath. It is exactly one file. The driver manager and
+the vendor ODBC drivers are already yours; adbcBridge does not replace them or
+bundle them.</p>
+<pre><code>   Python · Rust · C# · Java · Go · R · C          your application + its ADBC client
+                    │  ADBC ABI (1.0.0 / 1.1.0)
+                    ▼
+        libadbc_driver_odbc.{so,dylib,dll}          adbcBridge — one shared library
+                    │  ODBC API
+                    ▼
+   unixODBC · iODBC · the Windows driver manager     the driver manager (yours)
+                    │
+                    ▼
+   psqlodbc · msodbcsql · Db2 CLI · Oracle · …        the vendor ODBC driver (yours)
+                    │
+                    ▼
+              your database
+</code></pre>
+<p>A <code>SELECT</code> becomes Arrow record batches; parameters, prepared statements,
+transactions, bulk ingest, and catalog metadata all map onto the ODBC calls
+underneath. Where a database already has a first-class native ADBC driver
+(PostgreSQL, SQLite, DuckDB, and others), adbcBridge can hand the whole
+connection over to it — see <a href="#how-it-works-delegation">Native delegation</a>.</p>
+<h2 id="who-it-is-for">Who it is for</h2>
+<ul>
+<li>You need Arrow-native access to a database that has <strong>no</strong> native ADBC driver,
+  and you would rather not hand-roll ODBC-to-Arrow conversion.</li>
+<li>You already have ODBC drivers installed and configured, and want every
+  language's ADBC client to use them.</li>
+<li>You are building a data tool and want one code path that reaches hundreds of
+  databases instead of one integration per vendor.</li>
+</ul>
+<p>You do not need to know ODBC to use adbcBridge — the getting-started pages walk
+you through installing a driver manager and a driver from scratch — but the
+<a href="#index--which-page-do-i-need">reference pages</a> explain what is happening whenever you
+want to look under the hood.</p>
+<h2 id="how-it-works">How it works</h2>
+<ol>
+<li>Your language's ADBC client (for example <code>adbc_driver_manager</code> in Python)
+   loads <code>libadbc_driver_odbc</code> and calls its ADBC entry point, <code>AdbcDriverInit</code>.</li>
+<li>You pass an ODBC connection string as the ADBC <code>uri</code> option, for example
+   <code>Driver=SQLite3;Database=my.db;</code>. adbcBridge hands it to the ODBC driver
+   manager, which loads the vendor driver and connects.</li>
+<li>adbcBridge reads each result set through ODBC's block-fetch and column-wise
+   binding calls and builds Arrow record batches, which flow back to your
+   application through the ADBC ABI.</li>
+</ol>
+<p>The library is discoverable <strong>by name</strong>: an install writes a small ADBC <em>driver
+manifest</em> (<code>odbc.toml</code>) into a directory the ADBC driver manager already
+searches, so every binding can load it as <code>driver="odbc"</code> with nothing else set.
+See <a href="#reference-connection-strings">Connection strings</a> and
+<a href="#reference-options">Options</a> for the details.</p>
+<h2 id="current-status">Current status</h2>
+<p>adbcBridge is early software — version <strong>0.1.0</strong>, published on
+<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0">GitHub Releases</a>.</p>
+<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
+<thead>
+<tr>
+<th></th>
+<th>Verified as of 2026-09-04, v0.1.0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Databases (one workload: types, NULLs, Unicode, parameters, bulk ingest, batched reads, metadata, errors)</td>
+<td><strong>53 on Linux</strong>, <strong>45 on macOS</strong>, <strong>48 on Windows</strong></td>
+</tr>
+<tr>
+<td>Language packages</td>
+<td><strong>five</strong> — Python, Rust, C#, Java, Go (R is smoke-tested)</td>
+</tr>
+<tr>
+<td>ADBC ABI</td>
+<td>1.0.0 and 1.1.0</td>
+</tr>
+<tr>
+<td>Release</td>
+<td>v0.1.0: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; <code>SHA256SUMS</code> and its GPG signature on the release, and from the next release build provenance and an SBOM (<a href="#community-security--verifying-a-download">how to verify</a>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each verified database is listed, with the exact driver and any quirks handled,
+in <a href="#compatibility">COMPATIBILITY.md</a>. Reachability is far wider than
+verification: adbcBridge can talk to anything with an ODBC driver, and the ODBC
+ecosystem covers a few hundred data sources. What the numbers above count is what
+has actually been run end to end. See <a href="#roadmap">ROADMAP.md</a> for what is
+planned.</p>
+<blockquote>
+<p><strong>Tip:</strong> The three per-operating-system numbers differ because of driver and
+server availability on each machine, not because the bridge behaves
+differently. Where a database is missing on one platform it is almost always
+because, as of 2026-09-04, no obtainable ODBC driver or runnable server
+exists there.</p>
+</blockquote>
+<h2 id="which-page-do-i-need">Which page do I need?</h2>
+<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
+<thead>
+<tr>
+<th>I want to…</th>
+<th>Page</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Install on Linux</td>
+<td><a href="#getting-started-install-linux">getting-started/install-linux.md</a></td>
+</tr>
+<tr>
+<td>Install on macOS</td>
+<td><a href="#getting-started-install-macos">getting-started/install-macos.md</a></td>
+</tr>
+<tr>
+<td>Install on Windows</td>
+<td><a href="#getting-started-install-windows">getting-started/install-windows.md</a></td>
+</tr>
+<tr>
+<td>Run my first query, in any language</td>
+<td><a href="#getting-started-first-query">getting-started/first-query.md</a></td>
+</tr>
+<tr>
+<td>Use it from Python</td>
+<td><a href="#languages-python">languages/python.md</a></td>
+</tr>
+<tr>
+<td>Use it from Rust</td>
+<td><a href="#languages-rust">languages/rust.md</a></td>
+</tr>
+<tr>
+<td>Use it from C#</td>
+<td><a href="#languages-csharp">languages/csharp.md</a></td>
+</tr>
+<tr>
+<td>Use it from Java</td>
+<td><a href="#languages-java">languages/java.md</a></td>
+</tr>
+<tr>
+<td>Use it from Go</td>
+<td><a href="#languages-go">languages/go.md</a></td>
+</tr>
+<tr>
+<td>Use it from C</td>
+<td><a href="#languages-c">languages/c.md</a></td>
+</tr>
+<tr>
+<td>Look up a driver option (<code>adbc.odbc.*</code>)</td>
+<td><a href="#reference-options">reference/options.md</a></td>
+</tr>
+<tr>
+<td>Write an ODBC connection string</td>
+<td><a href="#reference-connection-strings">reference/connection-strings.md</a></td>
+</tr>
+<tr>
+<td>Understand the Arrow type mapping</td>
+<td><a href="#reference-types">reference/types.md</a></td>
+</tr>
+<tr>
+<td>Understand a per-driver quirk</td>
+<td><a href="#reference-quirks">reference/quirks.md</a></td>
+</tr>
+<tr>
+<td>Understand native delegation</td>
+<td><a href="#how-it-works-delegation">how-it-works/delegation.md</a></td>
+</tr>
+<tr>
+<td>Build from source</td>
+<td><a href="#reference-building">reference/building.md</a></td>
+</tr>
+<tr>
+<td>Use the command line</td>
+<td><a href="#languages-python--the-command-line-tool">languages/python.md</a></td>
+</tr>
+<tr>
+<td>Use environment variables</td>
+<td><a href="#reference-options--environment-variables">reference/options.md</a></td>
+</tr>
+<tr>
+<td>Fix an error</td>
+<td><a href="#troubleshooting">TROUBLESHOOTING.md</a></td>
+</tr>
+<tr>
+<td>See exactly which databases are verified</td>
+<td><a href="#compatibility">COMPATIBILITY.md</a></td>
+</tr>
+<tr>
+<td>See what is planned</td>
+<td><a href="#roadmap">ROADMAP.md</a></td>
+</tr>
+<tr>
+<td>See the upstream bugs this project reported</td>
+<td><a href="#upstream">UPSTREAM.md</a></td>
+</tr>
+<tr>
+<td>Contribute</td>
+<td><a href="#community-contributing">community/contributing.md</a></td>
+</tr>
+<tr>
+<td>Read frequently asked questions</td>
+<td><a href="#community-faq">community/faq.md</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="license">License</h2>
+<p>adbcBridge is Apache-2.0.</p></article><div class="pager" id="pager"><span></span><a href="#getting-started-install-linux" style="text-align:right"><small>Next</small>Install on Linux →</a></div><p class="src" id="src">Source: <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/index.md">docs/index.md</a> — improvements welcome.</p></main>
+  <nav class="rail" id="rail" aria-label="On this page"><p class="railhead">On this page</p><ul><li><a href="#index--what-it-is">What it is</a></li><li><a href="#index--who-it-is-for">Who it is for</a></li><li><a href="#index--how-it-works">How it works</a></li><li><a href="#index--current-status">Current status</a></li><li><a href="#index--which-page-do-i-need">Which page do I need?</a></li><li><a href="#index--license">License</a></li></ul></nav>
 </div>
 <template class="page" id="p-index" data-key="index" data-title="Overview" data-path="index.md"><h1 id="adbcbridge-documentation">adbcBridge documentation</h1>
 <p>adbcBridge is a single C library that turns <strong>any ODBC driver on your machine
@@ -11847,9 +12085,13 @@ driver library itself depends only on a C11 compiler and an ODBC driver manager.
   var GH='https://github.com/singhpratech/adbcbridge/blob/main/';
   var menu=document.getElementById('menu'), side=document.getElementById('side');
   function setSide(o){side.classList.toggle('open',o);menu.setAttribute('aria-expanded',o?'true':'false');menu.setAttribute('aria-label',o?'Close navigation':'Open navigation');}
+  // The first page is already in the document (rendered at build time), so the first route
+  // only re-writes <article> when the hash names a different page.
+  var built=true;
   function show(key, frag){
     if(!P[key]) key=order[0];
-    var p=P[key]; art.innerHTML=p.html; document.title=p.title+' · adbcBridge Docs';
+    var p=P[key]; if(!(built&&key===order[0])) art.innerHTML=p.html; built=false;
+    document.title=p.title+' · adbcBridge Docs';
     art.querySelectorAll('pre').forEach(function(pre){
       var w=document.createElement('div');w.className='cw';pre.parentNode.insertBefore(w,pre);w.appendChild(pre);
       var b=document.createElement('button');b.type='button';b.className='copy';b.textContent='Copy';b.setAttribute('aria-label','Copy to clipboard');
