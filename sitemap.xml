@@ -35,4 +35,58 @@
   <url><loc>https://adbcbridge.org/notes/duckdb-odbc-findings/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://adbcbridge.org/notes/mongodb-bi-connector-through-mysql-odbc/</loc><lastmod>2026-09-04</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://adbcbridge.org/notes/native-adbc-drivers-on-wire-compatible-databases/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+<url><loc>https://adbcbridge.org/db/</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://adbcbridge.org/db/ingres/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/altibase/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/cloudberry/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/doris/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/ignite/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/arcadedb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/flightsql/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/azuresqledge/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/citus/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/clickhouse/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/cockroachdb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/cratedb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/databend/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/ibmi/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/dolt/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/dremio/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/duckdb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/exasol/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/firebird/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/spanner/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/greptimedb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/db2/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/informix/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/influxdb3/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/kinetica/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/mariadb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/columnstore/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/materialize/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/matrixone/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/access/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/monetdb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/mongodbbi/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/mysql/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/oceanbase/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/opengauss/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/virtuoso/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/opensearch/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/oracle/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/percona/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/postgres/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/questdb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/risingwave/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/hana/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/singlestore/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/mssql/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/sqlite/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/starrocks/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/tdengine/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/tidb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/timescaledb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/vertica/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/ydb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/db/yugabyte/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
 </urlset>

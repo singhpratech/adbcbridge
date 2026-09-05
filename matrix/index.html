@@ -96,7 +96,7 @@ ul.points li:first-child::before{top:.45em}
 <h1>The compatibility matrix</h1>
 <p class="lede">Every entry below ran one workload — types, NULLs, Unicode in parameters and statement text, bulk ingest, batched reads, catalog, error mapping — against a real server or file, on each operating system. Click a row for the quirks that stack needed and the full per-OS record. Generated from <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/COMPATIBILITY.md">docs/COMPATIBILITY.md</a>; a cell that is not a plain pass says exactly why, in its own words.</p>
 
-<p class="lede"><a href="/bench/">Full benchmark tables</a></p>
+<p class="lede"><a href="/db/">One page per database</a> · <a href="/bench/">Full benchmark tables</a></p>
 
 <div class="countline" id="counts"></div>
 
@@ -677,7 +677,7 @@ function render(list){
     ${e.measured?`<div class="measured"><b>Measured</b>${e.measured}</div>`:''}
     <h4>Per operating system</h4>
     <div class="osgrid">${Object.entries(e.os).map(([k,o])=>`<div class="oscard"><div class="oshead"><span class="osname">${OSNAMES[k]}</span>${chip(o)}</div><p>${o.text}</p></div>`).join('')}</div>
-    <div class="links">${(NOTES[e.slug]||[]).map(n=>`<a class="read" href="${n.url}">Read: ${n.title}</a>`).join('')}<a class="src" href="https://github.com/singhpratech/adbcbridge/blob/main/docs/COMPATIBILITY.md">Row source: docs/COMPATIBILITY.md</a></div>
+    <div class="links"><a class="read" href="/db/${e.slug}/">Full page for this database</a>${(NOTES[e.slug]||[]).map(n=>`<a class="read" href="${n.url}">Read: ${n.title}</a>`).join('')}<a class="src" href="https://github.com/singhpratech/adbcbridge/blob/main/docs/COMPATIBILITY.md">Row source: docs/COMPATIBILITY.md</a></div>
   </div></td></tr>`).join('');
   document.getElementById('empty').hidden = list.length > 0;
 }
