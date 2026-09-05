@@ -37,7 +37,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 "Source Sa
 a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}a:hover{border-bottom-color:var(--accent)}
 a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:18px;padding:10px 20px;background:var(--surface);border-bottom:1px solid var(--rule)}
-.top .brand{font-family:"Source Serif 4",Georgia,serif;font-weight:600;font-size:1.15rem;color:var(--ink);border:0}
+.top .brand{font-family:"Source Serif 4",Georgia,serif;font-weight:600;font-size:1.15rem;color:var(--ink);border:0}.brand img{height:28px;width:auto;vertical-align:middle;margin-right:6px}
 .top .brand small{font-family:"Source Sans 3",sans-serif;font-weight:500;color:var(--muted);margin-left:8px;font-size:.8rem;letter-spacing:.06em;text-transform:uppercase}
 .top .links{margin-left:auto;display:flex;gap:16px;font-size:.9rem}.top .links a{border:0;color:var(--muted)}.top .links a:hover{color:var(--ink)}
 .top input{width:240px;max-width:40vw;padding:6px 10px;border:1px solid var(--rule);border-radius:4px;background:var(--paper);color:var(--ink);font:inherit;font-size:.9rem}
@@ -85,7 +85,7 @@ article img{max-width:100%}
 </style>
 <header class="top">
   <button class="menu" type="button" id="menu" aria-label="Open navigation">☰</button>
-  <a class="brand" href="/" title="adbcBridge home">adbcBridge <small>Docs</small></a>
+  <a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark.png" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge <small>Docs</small></a>
   <div class="srch"><input id="q" type="search" placeholder="Search the docs…" aria-label="Search the docs"><div class="results" id="res"></div></div>
   <nav class="links"><a href="/">Home</a><a href="https://github.com/singhpratech/adbcbridge/releases">Download</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></nav>
 </header>
