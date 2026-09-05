@@ -59,6 +59,12 @@ a[href*="/issues/"]::after,a[href*="/pull/"]::after{content:" ↗";font-size:.8e
 .tw{overflow-x:auto}
 .links{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:18px;font-size:.88rem}
 .links a{background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 12px;text-decoration:none;min-height:24px}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:18px 0 0}
+.controls input{flex:1;min-width:220px;background:var(--surface);border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:9px 13px;font:inherit;font-size:.95rem}
+.chipbtn{background:var(--surface);border:1px solid var(--line);border-radius:999px;color:var(--muted);padding:6px 14px;font:inherit;font-size:.86rem;cursor:pointer;min-height:24px}
+.chipbtn[aria-pressed="true"]{background:var(--teal);border-color:var(--teal);color:var(--bg);font-weight:600}
+.empty{padding:40px;text-align:center;color:var(--muted)}
+.card[hidden]{display:none}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin:14px 0 0}
 .card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface);text-decoration:none;color:var(--ink);display:flex;flex-direction:column;gap:6px}
 .card:hover{border-color:var(--teal)}.card b{font-weight:600}.card .chips{display:flex;gap:6px;flex-wrap:wrap}.card small{color:var(--muted);font-size:.8rem}
