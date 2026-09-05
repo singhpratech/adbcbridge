@@ -48,7 +48,7 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <div class="wrap">
-<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
+<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
 <article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-08-24</div><h1>Oracle&#x27;s SQORA driver takes a rowset change, then crashes or loses rows</h1><p class="meta">Oracle Instant Client ODBC 23 (SQORA) accepts SQL_ATTR_ROW_ARRAY_SIZE on an open cursor and then segfaults in bcoReturnColData or silently drops rows; CLOB columns read a row at a time.</p><h2>What this covers</h2>
 <p>Findings against Oracle Instant Client ODBC 23 (<code>libsqora</code>, the SQORA driver) driving

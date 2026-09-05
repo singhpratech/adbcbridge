@@ -48,7 +48,7 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <div class="wrap">
-<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
+<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
 <article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-08-25</div><h1>SQL_ERROR with no diagnostic, and a status array nobody writes</h1><p class="meta">sqliteodbc 0.99991 fails SQLGetData(SQL_C_NUMERIC) with a bare SQL_ERROR and zero diagnostic records, and accepts SQL_ATTR_PARAM_STATUS_PTR without ever writing to it.</p><p>Two defects in sqliteodbc 0.99991 on Linux, both of the kind that make a caller doubt its
 own code rather than the driver, because in both cases the driver's answer is silence

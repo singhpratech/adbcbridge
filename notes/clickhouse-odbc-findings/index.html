@@ -48,7 +48,7 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <div class="wrap">
-<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
+<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
 <article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-08-29</div><h1>A bound NULL becomes an empty string, and a parameter array stops at set 1</h1><p class="meta">What clickhouse-odbc 1.5.5 does when you write through it - SQL_NULL_DATA ignored when a value buffer is bound, parameter arrays that land two rows of five, and no affected-row count.</p><h2>Writing through clickhouse-odbc</h2>
 <p>Reading through clickhouse-odbc 1.5.5 is uneventful. Writing is where the surprises are, and

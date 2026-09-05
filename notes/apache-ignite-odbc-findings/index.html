@@ -48,7 +48,7 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <div class="wrap">
-<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
+<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
 <article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-08-29</div><h1>A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0</h1><p class="meta">Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute.</p><h2>What you see</h2>
 <p>Bind a two-column, three-row column-wise parameter array on <code>INSERT INTO t (a, b) VALUES
