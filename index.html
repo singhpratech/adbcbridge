@@ -54,7 +54,7 @@ header.hero{padding:40px 0 0}
 .heroimg{display:block;width:100%;height:auto;border-radius:6px;border:1px solid var(--line)}
 .cap{color:var(--muted);font-size:.82rem;margin-top:8px}
 section{padding:56px 0 8px;border-top:1px solid var(--line);margin-top:48px}
-.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+.upnote{margin:0 0 18px}.uppill{display:inline-flex;align-items:center;gap:8px;padding:9px 18px;background:var(--teal);border-radius:999px;color:var(--bg);font-size:1rem;font-weight:700;text-decoration:none;letter-spacing:.01em;line-height:1.35;max-width:100%}.uppill .arrowmark{flex:none;margin-right:2px}.uppill:hover{filter:brightness(1.08)}.uppill:focus-visible{outline:2px solid var(--teal);outline-offset:3px}.upsub{margin:10px 0 0;max-width:640px;font-size:1rem;line-height:1.5;color:var(--ink)}.eyebrow{font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
 pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
 code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.9em}
 p code,li code,td code{background:var(--code);padding:1px 5px;border-radius:3px}
@@ -182,7 +182,7 @@ pre .copy{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.25);co
 
 <main id="main">
 <header class="hero" id="top">
-  <p style="margin:0 0 16px"><a href="https://arrow.apache.org/adbc/main/integrations.html" style="display:inline-flex;align-items:center;gap:8px;padding:9px 18px;background:var(--teal);border-radius:999px;color:var(--bg);font-size:1rem;font-weight:700;text-decoration:none;letter-spacing:.01em">Now in the Apache Arrow ADBC documentation&nbsp;🚀</a></p>
+  <div class="upnote"><a class="uppill" href="https://arrow.apache.org/adbc/main/integrations.html#adbcbridge"><svg class="arrowmark" width="18" height="15" viewBox="168.75 168.75 1012.5 843.75" fill="currentColor" aria-hidden="true"><polygon points="168.75,168.75 590.62,590.62 168.75,1012.50 168.75,843.75 421.88,590.62 168.75,337.50"/><polygon points="464.06,168.75 885.94,590.62 464.06,1012.50 464.06,843.75 717.19,590.62 464.06,337.50"/><polygon points="759.38,168.75 1181.25,590.62 759.38,1012.50 759.38,843.75 1012.50,590.62 759.38,337.50"/></svg>Apache Arrow ADBC docs&nbsp;·&nbsp;Tools &amp; Integrations&nbsp;🚀</a><p class="upsub">adbcBridge is documented upstream as the way to reach a database over ADBC when it has an ODBC driver but no native ADBC one.</p></div>
   <h1 class="tag">Every ODBC driver, <em>an Arrow driver.</em></h1>
   <p class="lede">adbcBridge is one plain-C shared library that turns whatever ODBC driver is on your machine into an <a href="https://arrow.apache.org/adbc/">ADBC</a> driver — columnar Arrow batches out, bulk ingest in, from Python, Rust, Go, Java, C# and R. No per-database driver to write, no rows to convert by hand.</p>
   <p class="lede gloss"><b>ODBC</b> (Open Database Connectivity) is the decades-old C API almost every database ships a driver for; <b>ADBC</b> (Arrow Database Connectivity) is the newer C API whose result sets are Apache Arrow columnar batches instead of row-at-a-time buffers. adbcBridge is the piece in between.</p>
