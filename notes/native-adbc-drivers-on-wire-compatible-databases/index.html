@@ -35,6 +35,7 @@ th{font-size:.78rem;letter-spacing:.05em;text-transform:uppercase;color:var(--mu
 pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
 code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}p code,li code{overflow-wrap:anywhere}pre code{background:none;padding:0;font-size:inherit}
 blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.callout{background:var(--teal-soft);border-left:4px solid var(--teal);border-radius:0 8px 8px 0;margin:22px 0;padding:14px 18px;max-width:var(--measure,66ch)}.callout p{margin:0 0 10px}.callout p:last-child{margin-bottom:0}.callout code{background:var(--surface)}
 .list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
 .list h2{margin:0 0 .3rem;font-size:1.35rem}.list h2 a{display:inline-block;padding:2px 0}.list p{margin:.3rem 0;color:var(--muted)}.list article[hidden]{display:none}
 .correct{margin-top:36px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:.92rem}
@@ -175,12 +176,15 @@ the native driver connects and the first <code>SELECT</code> then fails as in th
 Spanner reads work but <code>adbc_ingest</code> fails because the native driver's <code>CREATE TABLE</code> has no
 primary key (adbcBridge's own ingest adds one). Where the native driver cannot connect at
 all (Materialize, QuestDB, RisingWave, ArcadeDB) <code>auto</code> falls back to ODBC as designed.</p>
-<p><strong>Found on this run and fixed the same day: <a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.1">0.1.1</a>, released 2026-09-05,
-probes the native driver before handing a connection over</strong> — one <code>SELECT version()</code> through
+<div class="callout">
+<p><strong>Found on this run, fixed the same day.</strong> <a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.1">0.1.1</a>, released 2026-09-05,
+probes the native driver before handing a connection over — one <code>SELECT version()</code> through
 it at <code>AdbcDatabaseInit</code>, read back through its own result path — and stays on ODBC when
 that fails, with the reason in <code>adbc.odbc.delegate.last_error</code>. Re-run after the fix with
 delegation left on, all fourteen PostgreSQL-wire databases pass all seven steps through
-adbcBridge. On a 0.1.0 install the workaround is one database option:</p>
+adbcBridge.</p>
+</div>
+<p>On a 0.1.0 install the workaround is one database option:</p>
 <pre><code>adbc.odbc.delegate=never
 </code></pre>
 <p>(<code>adbcbridge.connect(..., delegate="never")</code> in Python, or <code>ADBC_ODBC_DELEGATE=never</code> in
