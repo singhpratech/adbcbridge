@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # R
 
-adbcBridge from R through the `adbcdrivermanager` package. R has a smoke test in the repository ([`tests/r/`](../../tests/r/README.md)) and no benchmark row yet.
+adbcBridge from R through the `adbcdrivermanager` package. R has a smoke test in the repository ([`tests/r/`](../../tests/r/README.md)) and, as of 2026-09-04, no benchmark row.
 
 ```r
 install.packages(c("adbcdrivermanager", "nanoarrow"))

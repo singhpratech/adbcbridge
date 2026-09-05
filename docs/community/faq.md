@@ -411,7 +411,7 @@ Driving 53 databases across three operating systems turns up defects that belong
 to other projects. Each is reported upstream with a reproduction that needs no
 adbcBridge in the stack, and the whole record — filed reports and findings
 documented but not yet filed — is kept in
-[`docs/UPSTREAM.md`](../UPSTREAM.md). Filed so far: 27 reports across fifteen
+[`docs/UPSTREAM.md`](../UPSTREAM.md). Filed as of 2026-09-04: 27 reports across fifteen
 projects — unixODBC, OpenLink Virtuoso, Dremio / Arrow Flight SQL ODBC, Firebird
 ODBC, taos-odbc, Apache Doris, clickhouse-odbc, MySQL Connector/ODBC, Apache
 Ignite, OpenSearch SQL ODBC, QuestDB, CrateDB, psqlodbc, Materialize and

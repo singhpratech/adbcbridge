@@ -11,7 +11,7 @@ set (in the connection string or in the DSN) is never overridden, nothing that
 changes what a query returns is ever set, and `adbc.odbc.tune=false` turns the
 whole thing off.
 
-The complete list today is one keyword:
+The complete list in v0.1.0 is one keyword:
 
 | driver | condition | what is added | why |
 |---|---|---|---|
