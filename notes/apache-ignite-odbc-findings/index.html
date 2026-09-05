@@ -6,6 +6,7 @@
 <title>A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0 — adbcBridge notes</title>
 <meta name="description" content="Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute.">
 <link rel="canonical" href="https://adbcbridge.org/notes/apache-ignite-odbc-findings/">
+<link rel="alternate" type="application/atom+xml" title="adbcBridge notes" href="/notes/feed.xml">
 <meta property="og:type" content="article"><meta property="og:title" content="A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0"><meta property="og:description" content="Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute."><meta property="og:url" content="https://adbcbridge.org/notes/apache-ignite-odbc-findings/">
 <link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -36,6 +37,7 @@ code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBr
 blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
 .list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
 .list h2{margin:0 0 .3rem;font-size:1.35rem}.list p{margin:.3rem 0;color:var(--muted)}
+.correct{margin-top:36px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:.92rem}
 footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
 footer a{border:0}
 </style>
@@ -116,7 +118,7 @@ client-side and with no warning, so pass the real width.</p>
 database's ODBC driver on Linux, macOS and Windows and records each failure with its first
 error; the row for this database is at https://adbcbridge.org/matrix/#ignite, and the finding
 is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
-<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>.</footer>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>. Corrections and additions: <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/community/contributing.md">open an issue or a pull request</a> on the repository. Written by the maintainer of adbcBridge; more from the same author at <a href="https://theaivibe.org">theaivibe.org</a>.</footer>
 </div>
 <script>(function(){var root=document.documentElement,btn=document.getElementById('theme');var saved=null;try{saved=localStorage.getItem('adbcbridge-theme');}catch(e){}
 if(saved==='light'||saved==='dark'){root.setAttribute('data-theme',saved);}
