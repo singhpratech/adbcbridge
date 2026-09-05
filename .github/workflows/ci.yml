@@ -39,6 +39,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: python3 scripts/bump_version.py --check
+      # The Rust crate ships a copy of the C sources (rust/csrc, kept by
+      # rust/sync-csrc.sh); a change to src/ that is not copied there would only
+      # surface in the Release workflow's crate job, after the tag.
+      - name: Bundled C sources match src/
+        run: diff -rq src rust/csrc/src
 
   build:
     name: Build (${{ matrix.os }}${{ matrix.arch && format(' {0}', matrix.arch) || '' }})
