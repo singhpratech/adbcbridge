@@ -29,7 +29,7 @@ SPDX-License-Identifier: Apache-2.0
 
   <PropertyGroup Label="Package">
     <PackageId>AdbcBridge</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Authors>the adbcbridge authors</Authors>
     <Company>the adbcbridge authors</Company>
     <Copyright>Copyright 2026 the adbcbridge authors</Copyright>

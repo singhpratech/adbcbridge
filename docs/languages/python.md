@@ -67,11 +67,11 @@ pip install adbcbridge
 ```
 
 That installs the wheel from [PyPI](https://pypi.org/project/adbcbridge/). The same
-wheels are attached to the GitHub Release (`adbcbridge-0.1.0-py3-none-<platform>.whl`),
+wheels are attached to the GitHub Release (`adbcbridge-0.1.1-py3-none-<platform>.whl`),
 so an offline machine can install one directly:
 
 ```sh
-pip install ./adbcbridge-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+pip install ./adbcbridge-0.1.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 ```
 
 Or install from a source checkout:

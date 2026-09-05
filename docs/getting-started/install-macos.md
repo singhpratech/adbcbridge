@@ -109,7 +109,7 @@ Silicon.
 
 ```sh
 shasum -a 256 -c SHA256SUMS --ignore-missing   # SHA256SUMS is on the same release page
-tar xzf adbcbridge-v0.1.0-osx-arm64.tar.gz
+tar xzf adbcbridge-v0.1.1-osx-arm64.tar.gz
 # → osx-arm64/libadbc_driver_odbc.dylib
 ```
 
@@ -123,7 +123,7 @@ tag normalises to).
 ```sh
 pip install adbcbridge          # from PyPI
 # or a downloaded release wheel:
-pip install adbcbridge-0.1.0-py3-none-macosx_14_0_arm64.whl
+pip install adbcbridge-0.1.1-py3-none-macosx_14_0_arm64.whl
 pip install adbc-driver-manager pyarrow
 ```
 

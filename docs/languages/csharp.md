@@ -45,7 +45,7 @@ This page assumes you are comfortable in C# but new to ODBC and ADBC.
 | Item | Value |
 |---|---|
 | Package id | `AdbcBridge` |
-| Version | `0.1.0` |
+| Version | `0.1.1` |
 | Target frameworks | `netstandard2.0`, `net8.0` |
 | Dependency | `Apache.Arrow.Adbc` `0.24.0` |
 | Public type | `AdbcBridge.Driver` (static), `AdbcBridge.DriverNotFoundException` |
@@ -88,7 +88,7 @@ automatically.
 ### From nuget.org
 
 ```sh
-dotnet add package AdbcBridge --version 0.1.0
+dotnet add package AdbcBridge --version 0.1.1
 ```
 
 The package carries the native library for `linux-x64`, `linux-arm64`, `osx-arm64`
@@ -108,7 +108,7 @@ mkdir -p localnuget
 dotnet nuget add source "$PWD/localnuget" --name adbcbridge-local
 
 # 3. Add the package to your project.
-dotnet add package AdbcBridge --version 0.1.0 --source adbcbridge-local
+dotnet add package AdbcBridge --version 0.1.1 --source adbcbridge-local
 ```
 
 The release `.nupkg` is available on the project's GitHub Releases page at
@@ -606,7 +606,7 @@ result.
   <ItemGroup>
     <!-- From nuget.org; for a release .nupkg instead, add a local source:
          dotnet nuget add source "$PWD/localnuget" --name adbcbridge-local -->
-    <PackageReference Include="AdbcBridge" Version="0.1.0" />
+    <PackageReference Include="AdbcBridge" Version="0.1.1" />
   </ItemGroup>
 
 </Project>

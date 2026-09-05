@@ -84,15 +84,15 @@ See [Connection strings](reference/connection-strings.md) and
 
 ## Current status
 
-adbcBridge is early software — version **0.1.0**, published on
-[GitHub Releases](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0).
+adbcBridge is early software — version **0.1.1**, published on
+[GitHub Releases](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.1).
 
-| | Verified as of 2026-09-04, v0.1.0 |
+| | Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changes native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05) |
 |---|---|
 | Databases (one workload: types, NULLs, Unicode, parameters, bulk ingest, batched reads, metadata, errors) | **53 on Linux**, **45 on macOS**, **48 on Windows** |
 | Language packages | **five** — Python, Rust, C#, Java, Go (R is smoke-tested) |
 | ADBC ABI | 1.0.0 and 1.1.0 |
-| Release | v0.1.0: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; `SHA256SUMS` and its GPG signature on the release, and from the next release build provenance and an SBOM ([how to verify](community/security.md#verifying-a-download)) |
+| Release | v0.1.1: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; `SHA256SUMS`, its GPG signature, build provenance and an SBOM on the release ([how to verify](community/security.md#verifying-a-download)) |
 
 Each verified database is listed, with the exact driver and any quirks handled,
 in [COMPATIBILITY.md](COMPATIBILITY.md). Reachability is far wider than

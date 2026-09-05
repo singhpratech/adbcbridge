@@ -49,7 +49,7 @@ This page assumes you are comfortable in Java but new to ODBC and ADBC.
 |---|---|
 | groupId | `org.adbcbridge` |
 | artifactId | `adbcbridge` |
-| version | `0.1.0` |
+| version | `0.1.1` |
 | Automatic-Module-Name | `org.adbcbridge` |
 | Minimum Java | 11 |
 | License | Apache-2.0 |
@@ -146,7 +146,7 @@ java --add-opens=java.base/java.nio=ALL-UNNAMED \
 <dependency>
   <groupId>org.adbcbridge</groupId>
   <artifactId>adbcbridge</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
 </dependency>
 ```
 
@@ -167,7 +167,7 @@ mvn install:install-file \
     -Dfile=adbcbridge-0.1.0.jar \
     -DgroupId=org.adbcbridge \
     -DartifactId=adbcbridge \
-    -Dversion=0.1.0 \
+    -Dversion=0.1.1 \
     -Dpackaging=jar
 ```
 
@@ -176,7 +176,7 @@ mvn install:install-file \
   <dependency>
     <groupId>org.adbcbridge</groupId>
     <artifactId>adbcbridge</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
   </dependency>
   <!-- Only needed for a locally installed jar; Maven Central resolves them transitively. -->
   <dependency>
@@ -654,7 +654,7 @@ through the SQLite ODBC driver, runs a query, and reads the Arrow result.
   <dependency>
     <groupId>org.adbcbridge</groupId>
     <artifactId>adbcbridge</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
   </dependency>
 
   <!-- Only needed when adbcbridge was installed from a downloaded jar;

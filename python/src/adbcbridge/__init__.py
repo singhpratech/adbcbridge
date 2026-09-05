@@ -58,7 +58,7 @@ __all__ = [
     "preload_odbc_driver",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # Local alias: the `driver_path` parameter of connect() shadows the function.
 _find_driver = driver_path

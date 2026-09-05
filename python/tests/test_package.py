@@ -119,7 +119,7 @@ def test_the_installed_manifest_template_parses(driver):
     text = template.read_text(encoding="utf-8")
     text = text.replace("@ADBCBRIDGE_MANIFEST_PLATFORM@", _locate._platform_tuple())
     text = text.replace("@ADBCBRIDGE_MANIFEST_DRIVER_PATH@", driver)
-    text = text.replace("@PROJECT_VERSION@", "0.1.0")
+    text = text.replace("@PROJECT_VERSION@", "0.1.1")
     assert _locate._manifest_library(text) == driver
 
 

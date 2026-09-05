@@ -89,11 +89,11 @@ run on any reasonably recent glibc-based distribution.
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing     # SHA256SUMS is on the same release page
-tar xzf adbcbridge-v0.1.0-linux-x64.tar.gz
+tar xzf adbcbridge-v0.1.1-linux-x64.tar.gz
 # → linux-x64/libadbc_driver_odbc.so
 ```
 
-The checksum file is signed by the release key (`SHA256SUMS.asc`); releases after v0.1.0 also
+The checksum file is signed by the release key (`SHA256SUMS.asc`); releases after v0.1.1 also
 carry a build-provenance attestation for every asset and an SBOM; [Security](../community/security.md#verifying-a-download)
 shows how to check each.
 
@@ -110,7 +110,7 @@ you both the binding and the driver in one step:
 ```sh
 pip install adbcbridge          # from PyPI
 # or, from a downloaded release wheel (the aarch64 wheel is named likewise):
-pip install adbcbridge-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+pip install adbcbridge-0.1.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 pip install adbc-driver-manager pyarrow
 ```
 
