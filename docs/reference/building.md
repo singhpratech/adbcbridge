@@ -86,10 +86,10 @@ silently fall through to some other library called "odbc".
 
 | Option | Default | Meaning |
 |---|---|---|
-| `ADBC_ODBC_BUILD_SHARED` | `ON` | Accepted but currently has no effect: the library is always built shared. |
+| `ADBC_ODBC_BUILD_SHARED` | `ON` | Accepted but has no effect in v0.1.0: the library is always built shared. |
 | `ADBC_ODBC_BUILD_TESTS` | `ON` | Build the C smoke test and the C unit tests. |
 | `ADBC_ODBC_ASAN` | `OFF` | Build with AddressSanitizer and UndefinedBehaviorSanitizer (requires GCC or Clang). |
-| `ADBCBRIDGE_BUILD_SHARED` | `ON` | Accepted but currently has no effect, like `ADBC_ODBC_BUILD_SHARED`. |
+| `ADBCBRIDGE_BUILD_SHARED` | `ON` | Accepted but has no effect in v0.1.0, like `ADBC_ODBC_BUILD_SHARED`. |
 | `ADBCBRIDGE_INSTALL_MANIFEST` | `ON` | Install the `odbc.toml` ADBC driver manifest. |
 | `ADBCBRIDGE_MANIFEST_DIR` | `etc/adbc/drivers` | Where to install the manifest, relative to the install prefix (or an absolute path, as `install.sh` uses to place it in the user config dir). |
 

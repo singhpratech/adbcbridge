@@ -21,7 +21,7 @@ for the matrix: `docker compose -f tests/compat/docker-compose.yml up -d`. Per-d
 driver setup (root-free) and run commands:
 [`tests/compat/README.md`](../tests/compat/README.md).
 
-### A note on the PostgreSQL-wire rows
+## A note on the PostgreSQL-wire rows
 
 Fourteen entries below reach their server through psqlodbc, and most of them are not
 PostgreSQL. One behaviour is keyed on being PostgreSQL rather than on speaking its wire:
@@ -47,7 +47,7 @@ Note that being excluded is not evidence the form would have failed: CockroachDB
 YugabyteDB both answer the semantic check correctly. The rule is the brief's — default to
 off for anything not verified — not a claim that each excluded server is broken.
 
-### A note on partitioned reads
+## A note on partitioned reads
 
 [`ExecutePartitions`](how-it-works/partitioned-reads.md) splits one query
 across N connections, which is where adbcBridge's read-path win against the native

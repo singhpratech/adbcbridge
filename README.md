@@ -55,7 +55,7 @@ you get native speed from the same install.
   [`docs/how-it-works/performance.md`](docs/how-it-works/performance.md)
 - **Four ordinary laptops, never idle** — every number names its host and the load it was
   taken under. [`bench/README.md`](bench/README.md)
-- **Bugs found upstream are filed with reproductions** — 27 reports so far across fifteen
+- **Bugs found upstream are filed with reproductions** — 27 reports as of 2026-09-04 across fifteen
   projects (unixODBC, Virtuoso, Arrow Flight SQL ODBC, Firebird ODBC, taos-odbc, Doris,
   clickhouse-odbc, MySQL Connector/ODBC, Ignite, OpenSearch, QuestDB, CrateDB, psqlodbc,
   Materialize, SingleStore Connector/ODBC); three are already fixed by their maintainers.
@@ -259,8 +259,8 @@ libraries (the release workflow tests the crate; the bindings' own suites live u
 `tests/`); the Go module is fetched with `go get` from the tagged source (`go/v0.1.0`,
 the sub-module tag). The wheel is on [PyPI](https://pypi.org/project/adbcbridge/),
 the crate on [crates.io](https://crates.io/crates/adbcbridge) and the nupkg on
-[nuget.org](https://www.nuget.org/packages/AdbcBridge) (all 0.1.0); the jar is not on Maven
-Central yet — install it from the release assets.
+[nuget.org](https://www.nuget.org/packages/AdbcBridge) and the jar on
+[Maven Central](https://central.sonatype.com/artifact/org.adbcbridge/adbcbridge) (all 0.1.0).
 
 | Language | Package | What it gives you | Where |
 |---|---|---|---|

@@ -87,7 +87,7 @@ See [Connection strings](reference/connection-strings.md) and
 adbcBridge is early software — version **0.1.0**, published on
 [GitHub Releases](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0).
 
-| | Verified today |
+| | Verified as of 2026-09-04, v0.1.0 |
 |---|---|
 | Databases (one workload: types, NULLs, Unicode, parameters, bulk ingest, batched reads, metadata, errors) | **53 on Linux**, **45 on macOS**, **48 on Windows** |
 | Language packages | **five** — Python, Rust, C#, Java, Go (R is smoke-tested) |
@@ -104,7 +104,8 @@ planned.
 > **Tip:** The three per-operating-system numbers differ because of driver and
 > server availability on each machine, not because the bridge behaves
 > differently. Where a database is missing on one platform it is almost always
-> because no obtainable ODBC driver or runnable server exists there yet.
+> because, as of 2026-09-04, no obtainable ODBC driver or runnable server
+> exists there.
 
 ## Which page do I need?
 
