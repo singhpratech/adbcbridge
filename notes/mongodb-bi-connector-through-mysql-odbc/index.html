@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SQLColumns segfaults on a NULL NUMERIC_PRECISION from mongosqld — adbcBridge notes</title>
 <meta name="description" content="MySQL Connector/ODBC 9.4 runs strtol() on the NULL NUMERIC_PRECISION the MongoDB BI Connector reports for a DECIMAL column, and the process dies inside SQLColumns.">

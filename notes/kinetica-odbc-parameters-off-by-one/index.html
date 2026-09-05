@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kinetica&#x27;s ODBC driver executes parameter N with the value bound at N+1 — adbcBridge notes</title>
 <meta name="description" content="Kinetica ODBC 7.1.9 accepts every SQLBindParameter and then shifts the values one position, sending the last as NULL under SQL_SUCCESS with an empty diagnostic queue.">

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Two ways a Go ODBC program dies before it prints anything — adbcBridge notes</title>
 <meta name="description" content="alexbrainman/odbc takes an access violation inside api.SQLGetDiagRec on Windows; on Linux and macOS an arrow-go finalizer releases an ArrowArrayStream mid-cgo and takes the process down.">

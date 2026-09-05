@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Five things OpenLink Virtuoso&#x27;s ODBC driver does silently and wrongly — adbcBridge notes</title>
 <meta name="description" content="virtodbc.so from libvirtodbc0 7.2.12 stores UTF-16 text as garbage, aborts on any Charset= but the literal UTF-8, stores every SQL_C_SBIGINT as 0, and strides date parameter arrays by ColumnSize.">

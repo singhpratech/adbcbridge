@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0 — adbcBridge notes</title>
 <meta name="description" content="Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute.">

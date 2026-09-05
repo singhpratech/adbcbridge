@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Any text read as a timestamp comes back as today&#x27;s date, under SQL_SUCCESS — adbcBridge notes</title>
 <meta name="description" content="OpenSearch SQL ODBC 1.5.0.0 converts any character value to today&#x27;s date when asked for SQL_C_TYPE_TIMESTAMP, and its SQLError never returns SQL_NO_DATA, so a failed connect hangs unixODBC forever.">

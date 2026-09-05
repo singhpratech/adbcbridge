@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Two psqlodbc bugs that lost rows and narrowed integers, and two traps — adbcBridge notes</title>
 <meta name="description" content="psqlodbc silently discarded a committed transaction on servers without SAVEPOINT and narrowed an out-of-range int8 to -1; both are fixed, and two version-and-build traps remain.">
