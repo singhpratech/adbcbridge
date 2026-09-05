@@ -61,6 +61,18 @@ jobs:
       dryrun: ${{ steps.tag.outputs.dryrun }}
     steps:
       - uses: actions/checkout@v7
+      # A tag that does not name the version the manifests carry stops here, before
+      # any asset is built or any release created.  Dry runs and re-runs on an existing
+      # tag still check that the manifests agree with each other.
+      - name: Version agreement
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            python3 scripts/bump_version.py --check --tag "${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            python3 scripts/bump_version.py --check --tag "${{ inputs.tag }}"
+          else
+            python3 scripts/bump_version.py --check
+          fi
       - id: tag
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
