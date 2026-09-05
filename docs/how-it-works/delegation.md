@@ -33,7 +33,7 @@ fetches measure the same as calling the native driver directly (the same
 | `dsn=…` | whatever the DSN's `Driver=` in `odbc.ini` maps to |
 | anything else (Db2, Oracle, SQL Server, Teradata, …) | nobody — plain ODBC |
 
-### The delegated connection is the connection you configured
+## The delegated connection is the connection you configured
 
 Rebuilding a native URI out of an ODBC connection string is only safe if every
 keyword is accounted for. Dropping `SSLmode=verify-full` would turn a verified
@@ -64,7 +64,7 @@ parameters. `Server=/var/run/postgresql` becomes `?host=/var/run/postgresql`,
 `Server=::1` becomes `[::1]`, and the ODBC `}}` escape inside a brace-quoted
 value is a literal `}`.
 
-### When delegation does not happen
+## When delegation does not happen
 
 Delegation is a best-effort optimization: if no native driver is installed, if
 it cannot be loaded, or if the target cannot be represented, `auto` falls back
@@ -94,7 +94,7 @@ through the same typed setter it was set with, or reported by
 by it. All `adbc.odbc.delegate*` options are frozen once `AdbcDatabaseInit` has
 run: setting them afterwards is `INVALID_STATE`, not a silent no-op.
 
-### Finding the native driver
+## Finding the native driver
 
 adbcBridge never links against the ADBC driver manager (that would be a
 circular dependency); it resolves `AdbcLoadDriver` from whichever manager is
