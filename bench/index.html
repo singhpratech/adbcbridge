@@ -42,7 +42,7 @@
   --bar:#3c7f7a;--bar2:#4f6880;--bar3:#5b5953;--code:#1d2732;}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:"Public Sans",system-ui,sans-serif;line-height:1.5;font-size:15px}
-main{max-width:1180px;margin:0 auto;padding:32px 24px 64px}
+main{max-width:1080px;margin:0 auto;padding:32px 24px 64px}
 h1{font-family:"Newsreader",Georgia,serif;font-weight:600;font-size:2rem;margin:0 0 4px;text-wrap:balance}
 h2{font-family:"Newsreader",Georgia,serif;font-weight:600;font-size:1.35rem;margin:40px 0 12px;text-wrap:balance}
 p{max-width:70ch}
@@ -76,8 +76,24 @@ ul{padding-left:20px}li{margin:4px 0;max-width:80ch}
 .small{font-size:.85rem}
 footer{color:var(--muted);font-size:.8rem;margin-top:40px;border-top:1px solid var(--line);padding-top:12px}
 @media (prefers-reduced-motion:no-preference){th:hover{color:var(--accent)}}
-.brand img{height:28px;width:auto;vertical-align:middle;margin-right:6px}.sitenav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-left:auto}.sitenav a{border:0;color:var(--muted);font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif}.sitenav a:hover{color:var(--teal,var(--accent,inherit))}.sitenav a.on{color:var(--ink);font-weight:600}.theme{background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}nav .brand,header .brand,.topbar .brand{display:flex;align-items:center;gap:10px;border:0;color:var(--ink);font-family:"Newsreader",Georgia,serif;font-weight:400;font-size:1.3rem;text-decoration:none;letter-spacing:0}nav .brand img,header .brand img,.topbar .brand img{height:30px;width:auto;margin:0}.brand small{font-family:"Public Sans",system-ui,sans-serif;font-weight:500;color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;margin-left:2px}</style>
-<nav class="topbar" style="max-width:1180px;margin:0 auto;padding:14px 24px 0;display:flex;align-items:center;gap:18px;font-size:.92rem">
+.brand img{height:28px;width:auto;vertical-align:middle;margin-right:6px}.sitenav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-left:auto}.sitenav a{border:0;color:var(--muted);font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif}.sitenav a:hover{color:var(--teal,var(--accent,inherit))}.sitenav a.on{color:var(--ink);font-weight:600}.theme{background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:999px;padding:5px 7px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center}.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}nav .brand,header .brand,.topbar .brand{display:flex;align-items:center;gap:10px;border:0;color:var(--ink);font-family:"Newsreader",Georgia,serif;font-weight:400;font-size:1.3rem;text-decoration:none;letter-spacing:0}nav .brand img,header .brand img,.topbar .brand img{height:30px;width:auto;margin:0}.brand small{font-family:"Public Sans",system-ui,sans-serif;font-weight:500;color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;margin-left:2px}
+/* --- alignment with the matrix and notes pages --- */
+body{font:16px/1.6 "Public Sans",system-ui,sans-serif}
+nav.topbar{max-width:1080px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--line);font-size:.92rem}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:clamp(1.9rem,4vw,2.7rem);line-height:1.15;margin:38px 0 8px}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:40px 0 12px}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500}
+.kpis{gap:14px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 18px}
+.kpi b{font-family:"Public Sans",system-ui,sans-serif;font-size:1.35rem;font-weight:600;color:var(--accent);display:block;margin-bottom:2px}
+.kpi span{color:var(--muted);font-size:.9rem}
+.caveat{border-radius:0 10px 10px 0;border-left-color:var(--accent)}
+.wrap{border-radius:10px}
+table{font-size:.9rem}th{font-size:.78rem;letter-spacing:.06em;padding:11px 14px;border-bottom:1px solid var(--line)}td{padding:9px 12px;vertical-align:middle}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.85em}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 40%,transparent)}
+</style>
+<nav class="topbar">
   <a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark.png" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge <small>Bench</small></a>
   <span style="flex:1"></span><span class="sitenav"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/notes/">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span>
 </nav>
