@@ -22,6 +22,7 @@ a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(-
 .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
 nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
 .eyebrow{font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+.back{margin:0 0 18px;font-size:.92rem}.back a{color:var(--teal);text-decoration:none;font-weight:600;display:inline-block;min-height:24px;line-height:24px}.back a:hover{text-decoration:underline}
 h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
 h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
 h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
@@ -48,7 +49,7 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><div class="eyebrow">Notes · 2026-08-25</div><h1>Any text read as a timestamp comes back as today&#x27;s date, under SQL_SUCCESS</h1><p class="meta">OpenSearch SQL ODBC 1.5.0.0 converts any character value to today&#x27;s date when asked for SQL_C_TYPE_TIMESTAMP, and its SQLError never returns SQL_NO_DATA, so a failed connect hangs unixODBC forever.</p><h2>What you see</h2>
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-08-25</div><h1>Any text read as a timestamp comes back as today&#x27;s date, under SQL_SUCCESS</h1><p class="meta">OpenSearch SQL ODBC 1.5.0.0 converts any character value to today&#x27;s date when asked for SQL_C_TYPE_TIMESTAMP, and its SQLError never returns SQL_NO_DATA, so a failed connect hangs unixODBC forever.</p><h2>What you see</h2>
 <p>Read a character column as <code>SQL_C_TYPE_TIMESTAMP</code> or <code>SQL_C_TYPE_DATE</code> and you get <em>today's</em>
 date at midnight, under <code>SQL_SUCCESS</code>, whatever the string held. It happens to a text column,
 a numeric-looking one and a real timestamp alike. ODBC specifies <code>22018</code> for a value that

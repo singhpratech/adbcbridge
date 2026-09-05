@@ -22,6 +22,7 @@ a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(-
 .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
 nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
 .eyebrow{font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+.back{margin:0 0 18px;font-size:.92rem}.back a{color:var(--teal);text-decoration:none;font-weight:600;display:inline-block;min-height:24px;line-height:24px}.back a:hover{text-decoration:underline}
 h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
 h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
 h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
@@ -48,7 +49,7 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><div class="eyebrow">Notes · 2026-08-29</div><h1>A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0</h1><p class="meta">Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute.</p><h2>What you see</h2>
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-08-29</div><h1>A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0</h1><p class="meta">Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute.</p><h2>What you see</h2>
 <p>Bind a two-column, three-row column-wise parameter array on <code>INSERT INTO t (a, b) VALUES
 (?, ?)</code> with <code>SQL_ATTR_PARAMSET_SIZE=3</code> and indicators <code>{SQL_NTS, SQL_NULL_DATA, SQL_NTS}</code>.
 Everything reports success: <code>rc=0</code>, <code>SQL_ATTR_PARAMS_PROCESSED_PTR</code> 3, every entry of the

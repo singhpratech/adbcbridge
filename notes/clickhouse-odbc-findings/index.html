@@ -22,6 +22,7 @@ a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(-
 .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
 nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
 .eyebrow{font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+.back{margin:0 0 18px;font-size:.92rem}.back a{color:var(--teal);text-decoration:none;font-weight:600;display:inline-block;min-height:24px;line-height:24px}.back a:hover{text-decoration:underline}
 h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
 h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
 h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
@@ -48,7 +49,7 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><div class="eyebrow">Notes · 2026-08-29</div><h1>A bound NULL becomes an empty string, and a parameter array stops at set 1</h1><p class="meta">What clickhouse-odbc 1.5.5 does when you write through it - SQL_NULL_DATA ignored when a value buffer is bound, parameter arrays that land two rows of five, and no affected-row count.</p><h2>Writing through clickhouse-odbc</h2>
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-08-29</div><h1>A bound NULL becomes an empty string, and a parameter array stops at set 1</h1><p class="meta">What clickhouse-odbc 1.5.5 does when you write through it - SQL_NULL_DATA ignored when a value buffer is bound, parameter arrays that land two rows of five, and no affected-row count.</p><h2>Writing through clickhouse-odbc</h2>
 <p>Reading through clickhouse-odbc 1.5.5 is uneventful. Writing is where the surprises are, and
 each of the three below can pass unnoticed: the call returns <code>SQL_SUCCESS</code> and the wrong
 data, or no data, is what lands in the table. They were found running one workload through
