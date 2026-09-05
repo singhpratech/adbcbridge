@@ -259,8 +259,8 @@ libraries (the release workflow tests the crate; the bindings' own suites live u
 `tests/`); the Go module is fetched with `go get` from the tagged source (`go/v0.1.0`,
 the sub-module tag). The wheel is on [PyPI](https://pypi.org/project/adbcbridge/),
 the crate on [crates.io](https://crates.io/crates/adbcbridge) and the nupkg on
-[nuget.org](https://www.nuget.org/packages/AdbcBridge) (all 0.1.0); the jar is not on Maven
-Central yet — install it from the release assets.
+[nuget.org](https://www.nuget.org/packages/AdbcBridge) and the jar on
+[Maven Central](https://central.sonatype.com/artifact/org.adbcbridge/adbcbridge) (all 0.1.0).
 
 | Language | Package | What it gives you | Where |
 |---|---|---|---|
