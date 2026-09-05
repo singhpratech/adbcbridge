@@ -23,6 +23,7 @@
 #include "odbc_delegate.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1931,6 +1932,85 @@ static AdbcStatusCode DelegateGiveUp(struct OdbcDelegateOptions* opts, char* why
   return ADBC_STATUS_OK;
 }
 
+// ---------------------------------------------------------------------------
+// Probing a delegated database before handing it over
+
+/// The one statement the probe runs.  Every PostgreSQL-wire server answers it;
+/// what matters is the *path*: the native driver reads the result through
+/// COPY ... TO STDOUT (FORMAT binary), which is exactly what the wire-compatible
+/// servers that are not PostgreSQL do not implement.
+static const char kProbeQuery[] = "SELECT version()";
+
+/// Open one connection on a freshly initialized native database, run kProbeQuery
+/// and read its first batch.  Returns false, with *why set, when the native driver
+/// can stand the database up but cannot actually query the server.
+///
+/// Why this exists: adbc_driver_postgresql's DatabaseInit succeeds against any
+/// server that speaks libpq and answers its pg_catalog bootstrap -- CockroachDB,
+/// CrateDB, YDB and openGauss all do -- and the first result set then fails on
+/// binary COPY.  Without the probe "auto" would commit to the native driver and
+/// every query on the connection would fail; with it, the same case is a clean
+/// fallback to ODBC at AdbcDatabaseInit, one round trip earlier.
+static bool ProbeNative(struct OdbcDelegateProxy* proxy, char** why) {
+  struct AdbcDriver* native = proxy->native;
+  struct AdbcError ne = ADBC_ERROR_INIT;
+  struct AdbcConnection conn;
+  struct AdbcStatement stmt;
+  struct ArrowArrayStream stream;
+  struct ArrowSchema schema;
+  struct ArrowArray array;
+  memset(&conn, 0, sizeof(conn));
+  memset(&stmt, 0, sizeof(stmt));
+  memset(&stream, 0, sizeof(stream));
+  memset(&schema, 0, sizeof(schema));
+  memset(&array, 0, sizeof(array));
+  const char* stage = "open a connection to";
+  char* stream_error = NULL;
+
+  AdbcStatusCode status = native->ConnectionNew(&conn, &ne);
+  if (status == ADBC_STATUS_OK) status = native->ConnectionInit(&conn, &proxy->db, &ne);
+  if (status == ADBC_STATUS_OK) {
+    stage = "run a query on";
+    status = native->StatementNew(&conn, &stmt, &ne);
+    if (status == ADBC_STATUS_OK) status = native->StatementSetSqlQuery(&stmt, kProbeQuery, &ne);
+    if (status == ADBC_STATUS_OK) status = native->StatementExecuteQuery(&stmt, &stream, NULL, &ne);
+  }
+  if (status == ADBC_STATUS_OK) {
+    stage = "read a result from";
+    int rc = stream.get_schema ? stream.get_schema(&stream, &schema) : EINVAL;
+    if (rc == 0) rc = stream.get_next(&stream, &array);
+    if (rc != 0) {
+      const char* msg = stream.get_last_error ? stream.get_last_error(&stream) : NULL;
+      stream_error = DupString(msg && *msg ? msg : strerror(rc));
+      status = ADBC_STATUS_IO;
+    }
+  }
+
+  if (array.release) array.release(&array);
+  if (schema.release) schema.release(&schema);
+  if (stream.release) stream.release(&stream);
+  if (stmt.private_data) (void)native->StatementRelease(&stmt, NULL);
+  if (conn.private_data) (void)native->ConnectionRelease(&conn, NULL);
+
+  if (status == ADBC_STATUS_OK) {
+    if (ne.release) ne.release(&ne);
+    return true;
+  }
+  struct InternalAdbcStringBuilder sb;
+  InternalAdbcStringBuilderInit(&sb, 256);
+  InternalAdbcStringBuilderAppend(&sb,
+                                  "the native \"%s\" driver initialized but could not %s the "
+                                  "server, so the connection stays on ODBC",
+                                  proxy->name, stage);
+  const char* detail = stream_error ? stream_error : ne.message;
+  if (detail && *detail) InternalAdbcStringBuilderAppend(&sb, ": %s", detail);
+  *why = DupString(sb.buffer);
+  InternalAdbcStringBuilderReset(&sb);
+  free(stream_error);
+  if (ne.release) ne.release(&ne);
+  return false;
+}
+
 AdbcStatusCode OdbcDelegateTryInit(struct AdbcDatabase* database,
                                    AdbcStatusCode (*self_database_init)(struct AdbcDatabase*,
                                                                         struct AdbcError*),
@@ -2135,6 +2215,20 @@ AdbcStatusCode OdbcDelegateTryInit(struct AdbcDatabase* database,
     return DelegateGiveUp(opts, why, status, error);
   }
   if (ne.release) ne.release(&ne);
+  // The native database is up.  For a target translated from an ODBC connection
+  // string (not a native URI the caller named), make sure the native driver can
+  // actually query this server before handing the database over -- see ProbeNative.
+  // "always" skips the probe: the caller asked for the native driver and gets its
+  // own diagnostics.
+  if (!target_info.uri_verbatim && opts->mode != ODBC_DELEGATE_ALWAYS &&
+      target_info.family == FAMILY_POSTGRESQL) {
+    char* probe_why = NULL;
+    if (!ProbeNative(proxy, &probe_why)) {
+      OdbcDelegateProxyRelease(proxy);
+      NativeTargetFree(&target_info);
+      return DelegateGiveUp(opts, probe_why, ADBC_STATUS_IO, error);
+    }
+  }
   NativeTargetFree(&target_info);
   ReplaceString(&opts->delegated_to, proxy->name);
   *out_proxy = proxy;
