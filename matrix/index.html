@@ -27,7 +27,7 @@ nav a:hover{color:var(--ink)}
 nav .spacer{flex:1}
 h1{font-family:Newsreader,serif;font-weight:500;font-size:clamp(1.9rem,4vw,2.7rem);line-height:1.15;margin:38px 0 8px}
 .lede{color:var(--muted);max-width:64ch;margin:0 0 6px}
-.pillrow{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:14px 0 6px}.dbpill{display:inline-flex;align-items:center;gap:8px;padding:9px 18px;background:var(--teal);border-radius:999px;color:var(--bg);font-size:1rem;font-weight:700;text-decoration:none;letter-spacing:.01em;line-height:1.35;max-width:100%}.dbpill:hover{filter:brightness(1.08)}.dbpill:focus-visible{outline:2px solid var(--teal);outline-offset:3px}
+.pillrow{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:14px 0 6px}.dbpill{display:inline-flex;align-items:center;gap:8px;padding:9px 18px;background:var(--teal);border-radius:999px;color:var(--bg);font-size:1rem;font-weight:700;text-decoration:none;letter-spacing:.01em;line-height:1.35;max-width:100%}.dbpill.alt{background:transparent;color:var(--teal);border:2px solid var(--teal);padding:7px 16px}.dbpill.alt:hover{background:var(--teal-soft);filter:none}.dbpill:hover{filter:brightness(1.08)}.dbpill:focus-visible{outline:2px solid var(--teal);outline-offset:3px}
 .countline{display:flex;gap:22px;flex-wrap:wrap;margin:22px 0 26px}
 .count{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 18px}
 .count b{font-size:1.35rem;font-weight:600;color:var(--teal);margin-right:7px}
@@ -97,7 +97,7 @@ ul.points li:first-child::before{top:.45em}
 <h1>The compatibility matrix</h1>
 <p class="lede">Every entry below ran one workload — types, NULLs, Unicode in parameters and statement text, bulk ingest, batched reads, catalog, error mapping — against a real server or file, on each operating system. Click a row for the quirks that stack needed and the full per-OS record. Generated from <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/COMPATIBILITY.md">docs/COMPATIBILITY.md</a>; a cell that is not a plain pass says exactly why, in its own words.</p>
 
-<p class="pillrow"><a class="dbpill" href="/db/">53 databases&nbsp;·&nbsp;one page each&nbsp;→</a><a class="lede" href="/bench/">Full benchmark tables</a></p>
+<p class="pillrow"><a class="dbpill" href="/db/">53 databases&nbsp;·&nbsp;one page each&nbsp;→</a><a class="dbpill alt" href="/bench/">Full benchmark tables&nbsp;→</a></p>
 
 <div class="countline" id="counts"></div>
 
