@@ -30,6 +30,16 @@ permissions:
   contents: read
 
 jobs:
+  # One version, everywhere: every manifest and install snippet must agree with
+  # CMakeLists.txt (scripts/bump_version.py lists them).  Cheap, and it turns a
+  # half-bumped release into a red check instead of a wrong number on PyPI.
+  version:
+    name: Version agreement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 scripts/bump_version.py --check
+
   build:
     name: Build (${{ matrix.os }}${{ matrix.arch && format(' {0}', matrix.arch) || '' }})
     runs-on: ${{ matrix.os }}
