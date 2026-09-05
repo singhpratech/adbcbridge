@@ -320,6 +320,29 @@ report are marked as such, and a reproduction contributed by anyone is welcome.
 
 ---
 
+## Sending a pull request
+
+1. Fork the repository and branch from `main`.
+2. Make the change with its test: a driver quirk comes with a matrix entry or a
+   `tests/compat` note that shows the symptom, a reader change with a case in
+   `tests/test_sqlite.py`, a docs change with the source it cites.
+3. Run `cmake --build build && ctest --test-dir build`, and `python tests/test_sqlite.py`
+   with `ADBC_ODBC_DRIVER` pointing at the build; if you touched `src/`, run
+   `rust/sync-csrc.sh` so the crate's copy of the sources stays in step (CI checks it).
+4. Open the pull request against `main`. CI builds on Linux, macOS and Windows and runs
+   the C, Python, Go, Rust, .NET and Java suites; a maintainer reviews and squash-merges.
+
+Every merged change is credited in the commit history under your own name.
+
+## Correcting a note or a matrix row
+
+The write-ups at <https://adbcbridge.org/notes/> and the rows of `docs/COMPATIBILITY.md`
+are the same record. If a note is wrong, or a finding differs on a driver version you have,
+open an issue with the *Driver finding* template (or a pull request against
+`docs/COMPATIBILITY.md` / `docs/UPSTREAM.md`); the note is regenerated from the corrected
+record. Security problems go through private vulnerability reporting instead, see
+[Security](security.md).
+
 ## Reporting bugs
 
 ODBC drivers differ wildly, so a good report names the moving parts: the ODBC

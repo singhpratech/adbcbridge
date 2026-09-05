@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security problem
+    url: https://github.com/singhpratech/adbcbridge/security/advisories/new
+    about: Report privately; see SECURITY.md for the policy and response times.
+  - name: Add a database to the matrix
+    url: https://github.com/singhpratech/adbcbridge/blob/main/docs/community/contributing.md#adding-a-database-to-the-compatibility-matrix
+    about: The matrix is one Python file and a compose service per database; the guide walks through it.
