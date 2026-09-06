@@ -21,7 +21,8 @@
 
 This directory wires adbcBridge into the
 [ADBC Driver Foundry validation suite](https://github.com/adbc-drivers/validation),
-running it against SQLite through the SQLite ODBC driver.
+running it against SQLite through the SQLite ODBC driver and against PostgreSQL 16
+through psqlodbc.
 
 Latest results: [RESULTS.md](RESULTS.md).
 
@@ -71,6 +72,41 @@ cd <repo>/tests/validation && \
 Delete the database file between runs for a clean slate; the suite drops and
 recreates its own tables, so reusing it is fine.
 
+### PostgreSQL backend
+
+Start the compat compose service and create the second schema the suite lists:
+
+```shell
+docker compose -f tests/compat/docker-compose.yml up -d postgres
+docker exec compat-postgres-1 psql -U adbc -d adbc -c "CREATE SCHEMA IF NOT EXISTS validation2;"
+```
+
+Then run with the backend selected:
+
+```shell
+cd tests/validation && \
+  ADBCBRIDGE_VALIDATION_BACKEND=odbc_postgres \
+  POSTGRES_ODBC_DRIVER=/path/to/psqlodbcw.so \
+  ../../.venv-validation/bin/python -m pytest -q -rA --vendor-version odbc_postgres
+```
+
+`ADBCBRIDGE_VALIDATION_PG` overrides the server part of the connection string
+(default `Server=127.0.0.1;Port=15432;Database=adbc;Uid=adbc;Pwd=adbc;`).
+PostgreSQL-specific query overrides live in `queries/odbc_postgres/` (BYTEA and
+`decode()` for the binary tests; skips for nanosecond precision and negative
+decimal scale, which PostgreSQL does not have).
+
+### macOS and Windows
+
+The suite is pure Python; nothing in `tests/validation/` is platform-specific.
+Build the driver on the machine, create the Python 3.13 virtualenv the same way,
+point `SQLITE_ODBC_DRIVER` (or `POSTGRES_ODBC_DRIVER`) at that platform's ODBC
+driver library (`.dylib` on macOS, `.dll` on Windows), and set
+`ADBC_ODBC_DRIVER` to the built library if it is not at the default path
+(`build/libadbc_driver_odbc.dylib`, `build/Debug/adbc_driver_odbc.dll`). On
+Windows use the SQLite ODBC driver's registered name (`SQLite3 ODBC Driver`) or
+its DLL path, and a database path with forward slashes.
+
 ### Environment variables
 
 | Variable | Default | Meaning |
@@ -78,6 +114,9 @@ recreates its own tables, so reusing it is fine.
 | `SQLITE_ODBC_DRIVER` | `SQLite3` | Path to `libsqlite3odbc.so` (or a registered driver name). |
 | `ADBCBRIDGE_VALIDATION_DB` | `/tmp/adbcbridge-validation.sqlite` | SQLite database file the suite runs against. |
 | `ADBC_ODBC_DRIVER` | `<repo>/build/libadbc_driver_odbc.so` | Path to the built adbcBridge shared library. |
+| `ADBCBRIDGE_VALIDATION_BACKEND` | `odbc_sqlite` | `odbc_sqlite` or `odbc_postgres`; also pass the same name as `--vendor-version`. |
+| `POSTGRES_ODBC_DRIVER` | `PostgreSQL Unicode` | Path to `psqlodbcw.so` (or a registered driver name), PostgreSQL backend only. |
+| `ADBCBRIDGE_VALIDATION_PG` | `Server=127.0.0.1;Port=15432;Database=adbc;Uid=adbc;Pwd=adbc;` | Server part of the PostgreSQL connection string. |
 | `ADBCBRIDGE_VALIDATION_URI` | derived from the two above | Full ODBC connection string. Set it to override completely. |
 
 ### Useful flags

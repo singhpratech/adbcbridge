@@ -17,7 +17,10 @@
 
 """
 Driver quirks for adbcbridge (the ADBC-over-ODBC driver) talking to SQLite
-through the SQLite ODBC driver.
+through the SQLite ODBC driver, and to PostgreSQL through psqlodbc.
+
+Select the backend with ADBCBRIDGE_VALIDATION_BACKEND=odbc_sqlite|odbc_postgres
+(default odbc_sqlite) and pass the same name as --vendor-version.
 
 The quirks object describes the driver + backend combination to the ADBC
 Driver Foundry validation suite (https://github.com/adbc-drivers/validation).
@@ -47,6 +50,23 @@ def _database_path() -> str:
     return os.environ.get(
         "ADBCBRIDGE_VALIDATION_DB", "/tmp/adbcbridge-validation.sqlite"
     )
+
+
+def _postgres_odbc_driver() -> str:
+    """The psqlodbc shared object (or a registered driver name)."""
+    return os.environ.get("POSTGRES_ODBC_DRIVER", "PostgreSQL Unicode")
+
+
+def _postgres_conn() -> str:
+    """Server part of the PostgreSQL connection string (compat compose service)."""
+    return os.environ.get(
+        "ADBCBRIDGE_VALIDATION_PG",
+        "Server=127.0.0.1;Port=15432;Database=adbc;Uid=adbc;Pwd=adbc;",
+    )
+
+
+def backend_name() -> str:
+    return os.environ.get("ADBCBRIDGE_VALIDATION_BACKEND", "odbc_sqlite")
 
 
 def _split_sql(statement: str) -> list[str]:
@@ -281,13 +301,88 @@ class OdbcSqliteQuirks(model.DriverQuirks):
         return super().query_override(context, default)
 
 
+class OdbcPostgresQuirks(OdbcSqliteQuirks):
+    """adbcbridge (ADBC -> ODBC) driving PostgreSQL 16 through psqlodbc."""
+
+    name = "odbc_postgres"
+    vendor_name = "PostgreSQL (via ODBC)"
+    # psqlodbc reports the server version ("16.10" or "16.0004" style).
+    vendor_version = re.compile(r"\d+\.\d+.*")
+    short_version = "16"
+
+    features = model.DriverFeatures(
+        connection_get_table_schema=True,
+        connection_get_statistics=False,
+        # A PostgreSQL connection is bound to one database; the driver does
+        # not implement SET search_path through the ADBC option either.
+        connection_set_current_catalog=False,
+        connection_set_current_schema=False,
+        connection_transactions=True,
+        get_objects=True,
+        # SQLPrimaryKeys / SQLForeignKeys only; check and unique constraints
+        # are not visible through the ODBC catalog functions.
+        get_objects_constraints_check=False,
+        get_objects_constraints_foreign=True,
+        get_objects_constraints_primary=True,
+        get_objects_constraints_unique=False,
+        quirk_get_objects_constraints_primary_normalized=False,
+        metadata_type_name=False,
+        statement_bind=True,
+        statement_bulk_ingest=True,
+        # Cross-database ingest is impossible in PostgreSQL; schema-qualified
+        # targets work.
+        statement_bulk_ingest_catalog=False,
+        statement_bulk_ingest_schema=True,
+        statement_bulk_ingest_temporary=True,
+        # A temp table shadows a permanent table of the same name, so the two
+        # effectively share the namespace as far as bare-name resolution goes.
+        quirk_bulk_ingest_temporary_shares_namespace=True,
+        statement_execute_schema=True,
+        statement_get_parameter_schema=True,
+        statement_prepare=True,
+        statement_rows_affected=True,
+        statement_rows_affected_ddl=True,
+        current_catalog="adbc",
+        current_schema="public",
+        secondary_catalog=None,
+        secondary_schema="validation2",
+        secondary_catalog_schema=None,
+        supported_xdbc_fields=[],
+    )
+
+    @property
+    def queries_paths(self) -> tuple[Path]:
+        return (HERE / "queries" / "odbc_postgres",)
+
+    def is_table_not_found(self, table_name: str | None, error: Exception) -> bool:
+        text = str(error).lower()
+        if "does not exist" not in text:
+            return False
+        if table_name is None:
+            return True
+        return table_name.lower() in text
+
+    def is_retryable(self, error: Exception) -> bool:
+        text = str(error).lower()
+        return "deadlock detected" in text or "could not serialize" in text
+
+
+QUIRKS = {
+    "odbc_sqlite": OdbcSqliteQuirks,
+    "odbc_postgres": OdbcPostgresQuirks,
+}
+
+
 @functools.cache
-def get_quirks(_test_config: str = "odbc_sqlite") -> model.DriverQuirks:
-    return OdbcSqliteQuirks()
+def get_quirks(test_config: str | None = None) -> model.DriverQuirks:
+    return QUIRKS[test_config or backend_name()]()
 
 
-def connection_uri() -> str:
+def connection_uri(backend: str | None = None) -> str:
     """The ODBC connection string used by the suite."""
+    backend = backend or backend_name()
+    if backend == "odbc_postgres":
+        return f"Driver={_postgres_odbc_driver()};{_postgres_conn()}"
     return f"Driver={_sqlite_odbc_driver()};Database={_database_path()};"
 
 
@@ -304,6 +399,7 @@ def default_environment() -> dict[str, typing.Any]:
     return {
         "ADBCBRIDGE_VALIDATION_URI": connection_uri(),
         # The suite validates the ODBC path; native delegation would otherwise
-        # hand SQLite over to adbc_driver_sqlite whenever that package is around.
+        # hand SQLite over to adbc_driver_sqlite (and PostgreSQL to
+        # adbc_driver_postgresql) whenever that package is around.
         "ADBC_ODBC_DELEGATE": "never",
     }
