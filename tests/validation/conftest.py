@@ -41,7 +41,9 @@ for key, value in quirks.default_environment().items():
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     adbc_drivers_validation.tests.conftest.pytest_addoption(parser)
-    parser.addoption("--vendor-version", action="store", default="odbc_sqlite")
+    parser.addoption(
+        "--vendor-version", action="store", default=quirks.backend_name()
+    )
 
 
 @pytest.fixture(scope="session")
