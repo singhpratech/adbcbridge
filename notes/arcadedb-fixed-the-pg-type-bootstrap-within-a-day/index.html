@@ -91,6 +91,18 @@ next, because it happened fast, and because the first verification needed a corr
 <td>03:05</td>
 <td>Verified again on the merged code, this time with the fixture types present</td>
 </tr>
+<tr>
+<td>03:29</td>
+<td>Maintainer opened <a href="https://github.com/ArcadeData/arcadedb/pull/7187">PR #7187</a> for the <code>::regclass</code> cast behind <code>GetTableSchema</code>, and <a href="https://github.com/ArcadeData/arcadedb/issues/7188">#7188</a> for binary <code>COPY</code></td>
+</tr>
+<tr>
+<td>04:2x</td>
+<td>Verified #7187 on its CI build: <code>GetTableSchema</code> answers with five and eight fields</td>
+</tr>
+<tr>
+<td>06:31</td>
+<td>#7187 merged; #7180 closed</td>
+</tr>
 </tbody>
 </table></div>
 <h2>What was wrong</h2>
@@ -126,8 +138,8 @@ registers <code>pg_type</code> as a query family of its own so the filter is eva
 </tr>
 <tr>
 <td><code>GetTableSchema</code></td>
-<td>empty schema</td>
-<td>empty schema</td>
+<td>empty schema, then five fields with #7187</td>
+<td>same</td>
 </tr>
 <tr>
 <td><code>GetObjects</code></td>
@@ -145,15 +157,17 @@ registers <code>pg_type</code> as a query family of its own so the filter is eva
 runs the read workload against ArcadeDB end to end apart from the schema lookup. adbcBridge
 over psqlodbc passes all seven steps before and after, as it did in the original probe.</p>
 <h2>What is left, and where it is tracked</h2>
-<p>Both items are in <a href="https://github.com/ArcadeData/arcadedb/issues/7180">#7180</a> with the
-driver's exact statements:</p>
+<p>Both items were in <a href="https://github.com/ArcadeData/arcadedb/issues/7180">#7180</a> with the
+driver's exact statements; one is fixed, one is tracked on its own:</p>
 <ul>
-<li><strong>Binary <code>COPY … TO STDOUT</code>.</strong> The driver's default read path. A feature in its own right
-  on ArcadeDB's side; the <code>use_copy=false</code> option is the working route today, as it is on
-  CockroachDB and openGauss.</li>
-<li><strong><code>GetTableSchema</code>.</strong> The driver's statement joins <code>pg_class</code>, <code>pg_attribute</code> and <code>pg_type</code>
-  with <code>cls.oid = $1::regclass::oid</code>; ArcadeDB has no <code>regclass</code> cast, so the statement is
-  answered with zero rows. The same join filtered by <code>relname</code> returns the five properties.</li>
+<li><strong>Binary <code>COPY … TO STDOUT</code></strong>, now <a href="https://github.com/ArcadeData/arcadedb/issues/7188">#7188</a>. The driver's default read path. A feature in
+  its own right on ArcadeDB's side, scoped by the maintainer as protocol work; the <code>use_copy=false</code>
+  option is the working route today, as it is on CockroachDB and openGauss.</li>
+<li><strong><code>GetTableSchema</code>, now fixed.</strong> The driver's statement joins <code>pg_class</code>, <code>pg_attribute</code> and
+  <code>pg_type</code> with <code>cls.oid = $1::regclass::oid</code>; ArcadeDB ignored the <code>regclass</code> cast, so a name was
+  compared with a number and the statement was answered with zero rows. <a href="https://github.com/ArcadeData/arcadedb/pull/7187">PR #7187</a>
+  makes <code>::regclass</code> and <code>::regtype</code> real lookups; on its build <code>adbc_big</code> describes with its five
+  properties and <code>adbc_t</code> with all eight, and the whole seven-step read probe passes with <code>use_copy=false</code>.</li>
 </ul>
 <p>The maintainer says the fix ships in ArcadeDB 26.10.1, the October release, and is in the
 <code>26.10.1-SNAPSHOT</code> build now. The ArcadeDB row in the probe note and in the
