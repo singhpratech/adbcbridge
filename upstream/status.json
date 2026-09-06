@@ -1,8 +1,8 @@
 {
- "as_of": "2026-09-06T11:03:13Z",
+ "as_of": "2026-09-06T12:42:28Z",
  "window_days": 7,
- "count": 29,
- "with_project_activity": 12,
+ "count": 30,
+ "with_project_activity": 13,
  "fixed": 4,
  "items": [
   {
@@ -229,7 +229,7 @@
    "reporter_comments": 0,
    "community_comments": 0,
    "last_activity": "2026-08-29T12:40:13Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "clickhouse-odbc",
@@ -885,6 +885,38 @@
    "community_comments": 0,
    "last_activity": null,
    "pulse": false
+  },
+  {
+   "project": "ArcadeDB",
+   "repo": "ArcadeData/arcadedb",
+   "number": 7188,
+   "url": "https://github.com/ArcadeData/arcadedb/issues/7188",
+   "title": "PostgreSQL wire: support COPY (<query>) TO STDOUT, in text and binary format",
+   "reported": "2026-09-06",
+   "reporter": "lvca",
+   "what": "`COPY (<query>) TO STDOUT`, text and binary, is not supported by the PostgreSQL-protocol plugin; the Arrow native PostgreSQL ADBC driver reads every result through binary `COPY` by default, so with defaults it stops at the first result set. The driver's `adbc.postgresql.use_copy=false` statement option reads through ordinary binary-format results and works end to end on ArcadeDB, which the issue records.",
+   "kind": "issue",
+   "state": "open",
+   "closed_at": null,
+   "labels": [
+    "enhancement",
+    "postgresql-wire"
+   ],
+   "reactions": 0,
+   "maintainer_events": [
+    {
+     "type": "pull_request",
+     "at": "2026-09-06T04:04:19Z",
+     "actor": "lvca",
+     "title": "fix(#7180): answer the regclass cast the Arrow ADBC driver asks for a table's columns with",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/7187",
+     "state": "merged"
+    }
+   ],
+   "reporter_comments": 0,
+   "community_comments": 0,
+   "last_activity": "2026-09-06T04:04:19Z",
+   "pulse": true
   },
   {
    "project": "SingleStore Connector/ODBC",
