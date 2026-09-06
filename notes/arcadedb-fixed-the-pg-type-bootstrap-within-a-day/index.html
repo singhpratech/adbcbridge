@@ -155,9 +155,9 @@ driver's exact statements:</p>
   with <code>cls.oid = $1::regclass::oid</code>; ArcadeDB has no <code>regclass</code> cast, so the statement is
   answered with zero rows. The same join filtered by <code>relname</code> returns the five properties.</li>
 </ul>
-<p>The ArcadeDB row in the probe note and in the <a href="/matrix/#arcadedb">matrix</a> will say
-"connects" once the fix is in an ArcadeDB release; the latest at the time of writing is
-26.9.1 from 2026-09-03.</p>
+<p>The maintainer says the fix ships in ArcadeDB 26.10.1, the October release, and is in the
+<code>26.10.1-SNAPSHOT</code> build now. The ArcadeDB row in the probe note and in the
+<a href="/matrix/#arcadedb">matrix</a> will say "connects" once 26.10.1 is out.</p>
 <h2>A correction to the first verification</h2>
 <p>The first verification, on the PR's CI image, reported two further stops that were not
 ArcadeDB's: <code>GetObjects</code> returning no tables and <code>SELECT * FROM "adbc_big"</code> failing with
@@ -181,8 +181,8 @@ cur.adbc_statement.set_options(**{StatementOptions.USE_COPY.value: &quot;false&q
 cur.execute(&quot;SELECT * FROM adbc_big&quot;)
 print(cur.fetch_arrow_table())
 </code></pre>
-<p>Until the release that carries the fix is out, that needs a build from ArcadeDB's <code>main</code>. The
-ODBC route works on the released 26.9.1 today:</p>
+<p>Until 26.10.1 is out, that needs the <code>26.10.1-SNAPSHOT</code> build. The ODBC route works on the
+released 26.9.1 today:</p>
 <pre><code class="language-python">import adbcbridge
 conn = adbcbridge.connect(uri=&quot;Driver=psqlodbcw.so;Server=127.0.0.1;Port=5432;Database=adbc;Uid=root;Pwd=…;BoolsAsChar=0;&quot;)
 </code></pre></article>
