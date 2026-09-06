@@ -1,9 +1,9 @@
 {
- "as_of": "2026-09-05T23:00:36Z",
+ "as_of": "2026-09-06T02:54:07Z",
  "window_days": 7,
  "count": 29,
  "with_project_activity": 11,
- "fixed": 3,
+ "fixed": 4,
  "items": [
   {
    "project": "unixODBC",
@@ -834,8 +834,8 @@
    "reporter": "lvca",
    "what": "The Arrow native PostgreSQL ADBC driver cannot connect to ArcadeDB's PostgreSQL-protocol plugin: its type-resolver bootstrap `SELECT oid, typname, typreceive, typbasetype, typrelid, typarray FROM pg_catalog.pg_type WHERE …` is answered with zero columns (`Expected 5 or 6 columns from type resolver pg_type query but got 0`), because the emulated `pg_type` knows neither `typreceive` nor `typsend` and its WHERE parser accepts only a single equality. Found by the 2026-09-05 native-driver probe; the maintainer's own diagnosis is in the issue.",
    "kind": "issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "fixed",
+   "closed_at": "2026-09-06T02:48:11Z",
    "labels": [
     "in progress",
     "bug",
@@ -850,9 +850,9 @@
      "label": "postgresql-wire"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-05T22:12:10Z",
+   "last_activity": "2026-09-06T02:48:11Z",
    "pulse": true
   },
   {
