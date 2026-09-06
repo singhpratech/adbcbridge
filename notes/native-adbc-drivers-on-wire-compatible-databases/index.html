@@ -159,7 +159,7 @@ read · <code>adbc_ingest</code> of 1,000 rows (int32, float64, utf8, date32) wi
 </tr>
 </tbody>
 </table></div>
-<p><strong>Same-day follow-through from ArcadeDB.</strong> Within an hour of the follow-up comment, ArcadeDB's maintainer opened <a href="https://github.com/ArcadeData/arcadedb/issues/7178">#7178</a> with their own diagnosis (the emulated <code>pg_type</code> knew neither <code>typreceive</code> nor <code>typsend</code>, and its WHERE parser took a single equality only) and a fix, <a href="https://github.com/ArcadeData/arcadedb/pull/7179">PR #7179</a>. Built from that PR's CI artifact and probed again the same evening: the native driver connects, builds its type resolver, and <code>GetObjects</code> lists the types at every depth. With the driver's defaults it then stops at the first result set, because ArcadeDB has no <code>COPY (…) TO STDOUT (FORMAT binary)</code>, the same stop as CockroachDB, CrateDB and YDB above. With the driver's <code>adbc.postgresql.use_copy=false</code> option, which reads through <code>PQexecParams</code> in binary format instead, <code>SELECT</code> works end to end on that build with values decoded correctly; <code>GetTableSchema</code> is the one call left, its <code>$1::regclass::oid</code> lookup answered with zero rows (<a href="https://github.com/ArcadeData/arcadedb/issues/7180">#7180</a>). Every row in the table above is measured with the drivers' defaults; re-measuring the COPY rows with <code>use_copy=false</code> is the next thing on this note's list. The ArcadeDB row will say "connects" once the fix is in a release.</p>
+<p><strong>Same-day follow-through from ArcadeDB.</strong> Within an hour of the follow-up comment, ArcadeDB's maintainer opened <a href="https://github.com/ArcadeData/arcadedb/issues/7178">#7178</a> with their own diagnosis (the emulated <code>pg_type</code> knew neither <code>typreceive</code> nor <code>typsend</code>, and its WHERE parser took a single equality only) and a fix, <a href="https://github.com/ArcadeData/arcadedb/pull/7179">PR #7179</a>. Built from that PR's CI artifact and probed again the same evening: the native driver connects, builds its type resolver, and <code>GetObjects</code> lists the types at every depth. With the driver's defaults it then stops at the first result set, because ArcadeDB has no <code>COPY (…) TO STDOUT (FORMAT binary)</code>, the same stop as CockroachDB, CrateDB and YDB above. With the driver's <code>adbc.postgresql.use_copy=false</code> option, which reads through <code>PQexecParams</code> in binary format instead, <code>SELECT</code> works end to end on that build with values decoded correctly; <code>GetTableSchema</code> is the one call left, its <code>$1::regclass::oid</code> lookup answered with zero rows (<a href="https://github.com/ArcadeData/arcadedb/issues/7180">#7180</a>). Every row in the table above is measured with the drivers' defaults; the section below re-measures the COPY rows with that option. The ArcadeDB row will say "connects" once the fix is in a release.</p>
 <p>None of these is a defect in the native drivers as such. The PostgreSQL driver reads every
 result through <code>COPY … TO STDOUT (FORMAT binary)</code> and learns types from <code>pg_catalog</code>, which
 is the fastest possible path against a real PostgreSQL server and simply is not implemented
@@ -168,6 +168,56 @@ and uses server-side prepared statements, which Doris, StarRocks and Databend do
 accept. The ODBC drivers those vendors ship know their own servers; adbcBridge inherits
 that. The two probes agree with the vendors' own documentation and with the entry notes in
 the matrix. The probe script and the raw results are kept with the compatibility sources.</p>
+<h2>Re-measured with the COPY read path turned off (2026-09-06)</h2>
+<p>The PostgreSQL driver's <code>adbc.postgresql.use_copy</code> statement option (default <code>true</code>) switches
+result reads from <code>COPY (…) TO STDOUT (FORMAT binary)</code> to <code>PQexecParams</code> with binary result
+format. The same seven steps, same servers, native driver only, with that option set to <code>false</code>
+on every statement (bulk ingest still goes through <code>COPY … FROM STDIN</code>, which the option does
+not cover):</p>
+<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
+<thead>
+<tr>
+<th>Database</th>
+<th>Native driver, <code>use_copy=false</code></th>
+<th>What changed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CockroachDB</td>
+<td>passes all seven steps</td>
+<td>the only stop was the COPY read path</td>
+</tr>
+<tr>
+<td>openGauss</td>
+<td>passes all seven steps</td>
+<td>the only stop was the binary COPY decode</td>
+</tr>
+<tr>
+<td>CrateDB</td>
+<td>connect, <code>SELECT</code>, DDL and reads pass; ingest and <code>GetTableSchema</code> stop</td>
+<td>ingest: CrateDB's <code>COPY … FROM STDIN</code> grammar (<code>missing '=' at 'binary'</code>); schema: <code>$1::regclass::oid</code> (<code>Cannot find data type: oid</code>)</td>
+</tr>
+<tr>
+<td>YDB</td>
+<td>connects and every query returns rows, but each column arrives as an opaque binary extension type (<code>unnamed&lt;oid:23&gt;</code>, <code>unnamed&lt;oid:701&gt;</code>); ingest and <code>GetTableSchema</code> stop</td>
+<td>YDB's <code>pg_type</code> does not describe its own types the way the driver's resolver needs, so nothing is decoded</td>
+</tr>
+<tr>
+<td>ArcadeDB (fix build, PR #7179)</td>
+<td>connect, <code>SELECT</code>, reads and <code>GetObjects</code> pass; <code>GetTableSchema</code> stops</td>
+<td>described above</td>
+</tr>
+</tbody>
+</table></div>
+<p>So for two of the fourteen the native driver is a one-option fix, and for a third (CrateDB) a
+read-only one. That is worth knowing before choosing a path: on CockroachDB and openGauss the
+native driver with <code>use_copy=false</code> and adbcBridge over psqlodbc both do the whole workload, and
+the choice is about ingest speed (COPY is what makes the native driver's bulk path fast, and it
+is exactly the part these servers lack), type mapping and what else you connect to. adbcBridge
+in <code>auto</code> mode keeps its own probe as measured: a <code>SELECT version()</code> through the native driver
+with its defaults, so on these servers a connection still lands on ODBC unless you pass the
+option through yourself.</p>
 <h2>A defect in adbcBridge this run found</h2>
 <p>adbcBridge can hand a connection to a native ADBC driver instead of opening ODBC at all
 (<code>adbc.odbc.delegate</code>, default <code>auto</code>). With <code>adbc-driver-postgresql</code> importable in the same
