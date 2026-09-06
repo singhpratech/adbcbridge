@@ -1,8 +1,8 @@
 {
- "as_of": "2026-09-06T15:56:06Z",
+ "as_of": "2026-09-06T20:28:05Z",
  "window_days": 7,
  "count": 30,
- "with_project_activity": 14,
+ "with_project_activity": 15,
  "fixed": 4,
  "items": [
   {
@@ -164,11 +164,27 @@
      "association": "member",
      "text": "Confirmed on Windows, and it is wider than `SQL_BIGINT`: **`SQL_NUMERIC` and `SQL_DECIMAL` parameters lose the same way.** I hit it through DuckDB's [odbc-scanner](https://github.com/duckdb/odbc-scanner) `odbc_copy` (it binds every NULL as `SQL_C_DEFAULT` + the `SQLDescribeParam` type, then rebinds the slot with the real C type on the next non-NULL row) — a `NUMERIC(9,3)` column stayed NULL on ~48…",
      "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/issues/300#issuecomment-5560317970"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-06T17:29:30Z",
+     "actor": "fdcastel",
+     "title": "Fix numeric parameters silently sent as NULL after a character-typed bind (#300)",
+     "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/pull/302",
+     "state": "open"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-06T17:41:05Z",
+     "actor": "fdcastel",
+     "title": "Fix silent data loss binding numeric to VARCHAR via stored procedure",
+     "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/pull/292",
+     "state": "open"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-06T15:42:51Z",
+   "last_activity": "2026-09-06T17:41:05Z",
    "pulse": true
   },
   {
@@ -185,11 +201,20 @@
    "closed_at": null,
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "pull_request",
+     "at": "2026-09-06T19:25:53Z",
+     "actor": "fdcastel",
+     "title": "Fix SQLPrepare discarding SQL_ATTR_ROWS_FETCHED_PTR and SQL_ATTR_ROW_STATUS_PTR (#301)",
+     "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/pull/303",
+     "state": "open"
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-09-06T19:25:53Z",
+   "pulse": true
   },
   {
    "project": "taos-odbc (TDengine)",
@@ -485,7 +510,7 @@
    "reporter_comments": 0,
    "community_comments": 0,
    "last_activity": "2026-08-29T19:40:17Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "OpenSearch SQL ODBC",
@@ -514,7 +539,7 @@
    "reporter_comments": 0,
    "community_comments": 0,
    "last_activity": "2026-08-29T20:11:09Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "QuestDB",
