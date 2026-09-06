@@ -89,4 +89,5 @@
   <url><loc>https://adbcbridge.org/db/vertica/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://adbcbridge.org/db/ydb/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://adbcbridge.org/db/yugabyte/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://adbcbridge.org/notes/arcadedb-fixed-the-pg-type-bootstrap-within-a-day/</loc><lastmod>2026-09-06</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
 </urlset>

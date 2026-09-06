@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build — adbcBridge notes</title>
+<meta name="description" content="The native PostgreSQL ADBC driver could not connect to ArcadeDB; a probe comment became a diagnosed issue, a fix and a merge within a day. Verified.">
+<link rel="canonical" href="https://adbcbridge.org/notes/arcadedb-fixed-the-pg-type-bootstrap-within-a-day/">
+<link rel="alternate" type="application/atom+xml" title="adbcBridge notes" href="/notes/feed.xml">
+<meta property="og:type" content="article"><meta property="og:title" content="ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build"><meta property="og:description" content="The native PostgreSQL ADBC driver could not connect to ArcadeDB; a probe comment became a diagnosed issue, a fix and a merge within a day. Verified."><meta property="og:url" content="https://adbcbridge.org/notes/arcadedb-fixed-the-pg-type-bootstrap-within-a-day/"><meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preload" href="/fonts/newsreader-normal-latin.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/public-sans-normal-latin.woff2" as="font" type="font/woff2" crossorigin><style>/* Newsreader, Public Sans, JetBrains Mono — SIL Open Font License 1.1; latin and latin-ext subsets, one variable file per face with a weight range, self-hosted. */@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}</style>
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#146f6f;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif;--measure:66ch}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+.eyebrow{font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+.back{margin:0 0 18px;font-size:.92rem}.back a{color:var(--teal);text-decoration:none;font-weight:600;display:inline-block;min-height:24px;line-height:24px}.back a:hover{text-decoration:underline}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article{max-width:none}article p,article li,article blockquote{max-width:var(--measure,66ch)}article ul,article ol{padding-left:22px}.list article{max-width:none}.list{max-width:none}.list p{max-width:var(--measure,66ch)}
+.tw{overflow-x:auto;margin:14px 0;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.92rem}th,td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}th code{font-size:1em}.tw:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+th{font-size:.78rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--surface)}
+.filter{margin:0 0 6px}.filter input{width:100%;max-width:var(--measure,66ch);background:var(--surface);border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:9px 13px;font:inherit;font-size:.95rem}.filter p{color:var(--muted);font-size:.85rem;margin:6px 0 0}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}p code,li code{overflow-wrap:anywhere}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.callout{background:var(--teal-soft);border-left:4px solid var(--teal);border-radius:0 8px 8px 0;margin:22px 0;padding:14px 18px;max-width:var(--measure,66ch)}.callout p{margin:0 0 10px}.callout p:last-child{margin-bottom:0}.callout code{background:var(--surface)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list h2 a{display:inline-block;padding:2px 0}.list p{margin:.3rem 0;color:var(--muted)}.list article[hidden]{display:none}
+.correct{margin-top:36px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:.92rem}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0;text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;text-decoration-color:color-mix(in srgb,var(--teal) 55%,transparent)}
+footer a:hover,footer a:focus-visible{text-decoration-color:var(--teal);text-decoration-thickness:2px}
+article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
+.skip{position:absolute;left:-999px;top:8px;z-index:9;padding:8px 12px;border-radius:6px;background:var(--surface);color:var(--teal,var(--accent,#146f6f));border:1px solid var(--line,var(--rule,#d8dedf))}.skip:focus{left:8px}.sitenav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-left:auto}.sitenav a{border:0;color:var(--muted);font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;padding:4px 2px;line-height:1.2;display:inline-block}.sitenav a:hover{color:var(--teal,var(--accent,inherit))}.sitenav a.on{color:var(--ink);font-weight:600}.sitenav a:focus-visible,.navmenu:focus-visible,.theme:focus-visible{outline:2px solid var(--teal,var(--accent,#146f6f));outline-offset:2px}.navmenu{display:none;margin-left:auto;min-width:44px;min-height:44px;padding:8px 14px;background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:8px;color:var(--ink);font:inherit;font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;cursor:pointer;align-items:center;justify-content:center}@media (max-width:760px){.navmenu{display:inline-flex;padding:8px 10px}.navmenu+.theme{margin-left:0}.sitenav{display:none;flex-basis:100%;width:100%;flex-direction:column;align-items:stretch;gap:0;margin:6px 0 0;border-top:1px solid var(--line,var(--rule,#d8dedf))}.sitenav.open{display:flex}.sitenav a{display:flex;align-items:center;min-height:44px;padding:10px 4px;border-bottom:1px solid var(--line,var(--rule,#d8dedf));font-size:1rem}nav:has(> .navmenu),header:has(> .navmenu),.topbar:has(> .navmenu),nav:has(> .sitenav),header:has(> .sitenav),.topbar:has(> .sitenav){flex-wrap:wrap}}.theme{background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:999px;padding:5px 7px;min-width:32px;min-height:32px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}nav .brand,header .brand,.topbar .brand{display:flex;align-items:center;gap:10px;border:0;color:var(--ink);font-family:"Newsreader",Georgia,serif;font-weight:400;font-size:1.3rem;text-decoration:none;letter-spacing:0}nav .brand img,header .brand img,.topbar .brand img{height:30px;width:auto;margin:0}.brand small{font-family:"Public Sans",system-ui,sans-serif;font-weight:500;color:var(--muted);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;margin-left:2px}@media (max-width:760px){nav .brand,header .brand,.topbar .brand{font-size:1.15rem;gap:6px}nav .brand img,header .brand img,.topbar .brand img{height:24px}}</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="wrap">
+<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
+<main id="main">
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-09-06</div><h1>ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build</h1><p class="meta">The native PostgreSQL ADBC driver could not connect to ArcadeDB; a probe comment became a diagnosed issue, a fix and a merge within a day. Verified.</p><p>The <a href="/notes/native-adbc-drivers-on-wire-compatible-databases/">native-driver probe</a> of
+2026-09-05 found that the Apache Arrow PostgreSQL ADBC driver (1.12.0) could not open a
+connection to ArcadeDB's PostgreSQL-protocol plugin at all. This note records what happened
+next, because it happened fast, and because the first verification needed a correction.</p>
+<h2>Timeline</h2>
+<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
+<thead>
+<tr>
+<th>When (UTC)</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-09-05 21:19</td>
+<td>Follow-up comment on ArcadeDB's discussion thread with the probe result: <code>Expected 5 or 6 columns from type resolver pg_type query but got 0</code></td>
+</tr>
+<tr>
+<td>22:11</td>
+<td>ArcadeDB's maintainer opened <a href="https://github.com/ArcadeData/arcadedb/issues/7178">#7178</a> with the diagnosis</td>
+</tr>
+<tr>
+<td>22:33</td>
+<td>Fix <a href="https://github.com/ArcadeData/arcadedb/pull/7179">PR #7179</a> opened, with tests</td>
+</tr>
+<tr>
+<td>22:44</td>
+<td>Verified on the PR's CI image: the driver connects (see the correction below)</td>
+</tr>
+<tr>
+<td>22:47</td>
+<td>Maintainer filed <a href="https://github.com/ArcadeData/arcadedb/issues/7180">#7180</a> for what the driver hits next</td>
+</tr>
+<tr>
+<td>2026-09-06 02:48</td>
+<td>PR merged; #7178 closed</td>
+</tr>
+<tr>
+<td>03:05</td>
+<td>Verified again on the merged code, this time with the fixture types present</td>
+</tr>
+</tbody>
+</table></div>
+<h2>What was wrong</h2>
+<p>The driver bootstraps its type resolver with three queries before it hands back a
+connection, and it checks the shape of each answer: zero rows are fine, zero columns are
+fatal. The third query selects <code>oid, typname, typreceive, typbasetype, typrelid, typarray</code>
+from <code>pg_catalog.pg_type</code> with a WHERE clause of inequalities, a parenthesised OR and a
+<code>::TEXT</code> cast. ArcadeDB's emulated <code>pg_type</code> knew neither <code>typreceive</code> nor <code>typsend</code>, and its
+WHERE parser accepted a single equality only, so the whole projection was declined and the
+answer had no columns. The fix teaches the emulation those columns, with PostgreSQL's real
+receive and send function names (the driver selects a column's decoder by that name), and
+registers <code>pg_type</code> as a query family of its own so the filter is evaluated.</p>
+<h2>What the merged build does now</h2>
+<p>Same seven-step probe, native driver, fixture types created first:</p>
+<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Driver defaults</th>
+<th>With <code>adbc.postgresql.use_copy=false</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>connect</td>
+<td>passes</td>
+<td>passes</td>
+</tr>
+<tr>
+<td><code>SELECT 1</code></td>
+<td>stops: <code>COPY (…) TO STDOUT (FORMAT binary)</code> is not ArcadeDB SQL</td>
+<td>passes</td>
+</tr>
+<tr>
+<td><code>GetTableSchema</code></td>
+<td>empty schema</td>
+<td>empty schema</td>
+</tr>
+<tr>
+<td><code>GetObjects</code></td>
+<td>lists both types</td>
+<td>lists both types</td>
+</tr>
+<tr>
+<td>read the fixture table</td>
+<td>stops at COPY</td>
+<td>passes; <code>@rid</code>, <code>@type</code>, <code>@cat</code> as strings, the five properties as int64, string, double, date32 and bool</td>
+</tr>
+</tbody>
+</table></div>
+<p>So the fix does exactly what #7178 says, and with one driver option the native driver now
+runs the read workload against ArcadeDB end to end apart from the schema lookup. adbcBridge
+over psqlodbc passes all seven steps before and after, as it did in the original probe.</p>
+<h2>What is left, and where it is tracked</h2>
+<p>Both items are in <a href="https://github.com/ArcadeData/arcadedb/issues/7180">#7180</a> with the
+driver's exact statements:</p>
+<ul>
+<li><strong>Binary <code>COPY … TO STDOUT</code>.</strong> The driver's default read path. A feature in its own right
+  on ArcadeDB's side; the <code>use_copy=false</code> option is the working route today, as it is on
+  CockroachDB and openGauss.</li>
+<li><strong><code>GetTableSchema</code>.</strong> The driver's statement joins <code>pg_class</code>, <code>pg_attribute</code> and <code>pg_type</code>
+  with <code>cls.oid = $1::regclass::oid</code>; ArcadeDB has no <code>regclass</code> cast, so the statement is
+  answered with zero rows. The same join filtered by <code>relname</code> returns the five properties.</li>
+</ul>
+<p>The ArcadeDB row in the probe note and in the <a href="/matrix/#arcadedb">matrix</a> will say
+"connects" once the fix is in an ArcadeDB release; the latest at the time of writing is
+26.9.1 from 2026-09-03.</p>
+<h2>A correction to the first verification</h2>
+<p>The first verification, on the PR's CI image, reported two further stops that were not
+ArcadeDB's: <code>GetObjects</code> returning no tables and <code>SELECT * FROM "adbc_big"</code> failing with
+"type not found". Both came from the probe's own order of operations. It runs the native
+driver before the ODBC pass, and the ODBC pass is what creates the fixture types, so on a
+freshly started image the native run saw a database with nothing in it. With the types
+present, <code>GetObjects</code> lists everything and quoted identifiers work. The correction was
+posted on the PR and on #7180 the same evening, and the probe is now run twice on a fresh
+server so the second pass measures a populated database.</p>
+<h2>Trying it</h2>
+<pre><code class="language-sh">docker run -d -p 5432:5432 \
+  -e JAVA_OPTS=&quot;-Darcadedb.server.rootPassword=… -Darcadedb.server.defaultDatabases=adbc[adbc:adbc] \
+     -Darcadedb.server.plugins=Postgres:com.arcadedb.postgres.PostgresProtocolPlugin&quot; \
+  arcadedata/arcadedb:latest
+</code></pre>
+<pre><code class="language-python">import adbc_driver_postgresql.dbapi as pg
+from adbc_driver_postgresql import StatementOptions
+conn = pg.connect(&quot;postgresql://root:…@127.0.0.1:5432/adbc&quot;, autocommit=True)
+cur = conn.cursor()
+cur.adbc_statement.set_options(**{StatementOptions.USE_COPY.value: &quot;false&quot;})
+cur.execute(&quot;SELECT * FROM adbc_big&quot;)
+print(cur.fetch_arrow_table())
+</code></pre>
+<p>Until the release that carries the fix is out, that needs a build from ArcadeDB's <code>main</code>. The
+ODBC route works on the released 26.9.1 today:</p>
+<pre><code class="language-python">import adbcbridge
+conn = adbcbridge.connect(uri=&quot;Driver=psqlodbcw.so;Server=127.0.0.1;Port=5432;Database=adbc;Uid=root;Pwd=…;BoolsAsChar=0;&quot;)
+</code></pre></article>
+</main>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>. Corrections and additions: <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/community/contributing.md">open an issue or a pull request</a> on the repository.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');if(!btn)return;function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();(function(){var b=document.querySelector('.navmenu');if(!b)return;var l=document.getElementById(b.getAttribute('aria-controls'));if(!l)return;function set(o){b.setAttribute('aria-expanded',o?'true':'false');l.classList.toggle('open',o);}b.addEventListener('click',function(){set(b.getAttribute('aria-expanded')!=='true');});l.addEventListener('click',function(e){if(e.target.closest('a'))set(false);});document.addEventListener('keydown',function(e){if(e.key==='Escape'&&b.getAttribute('aria-expanded')==='true'){set(false);b.focus();}});})();</script><script>document.querySelectorAll('pre').forEach(function(p){if(p.scrollWidth>p.clientWidth+1)p.tabIndex=0;});</script>
+</body>
+</html>
