@@ -81,12 +81,12 @@ read back [0, 1000000007, 2000000014, 3000000021, 4000000028, None, None, None, 
 rather than letting <code>SQL_C_DEFAULT</code> resolve them, which is what a NULL of every other integer
 type already resolves to. A test payload that puts a NULL in the last row will never catch
 this; put a value after every NULL.
-<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/300">FirebirdSQL/firebird-odbc-driver#300</a>, open.</p>
+<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/300">FirebirdSQL/firebird-odbc-driver#300</a>; fixed in <a href="https://github.com/FirebirdSQL/firebird-odbc-driver/pull/302">PR #302</a>, see the update below.</p>
 <h2>3. <code>SQL_ATTR_ROWS_FETCHED_PTR</code> set before <code>SQLPrepare</code> is discarded</h2>
 <p><code>SQLPrepare</code> and <code>SQLExecDirect</code> throw away <code>SQL_ATTR_ROWS_FETCHED_PTR</code> and
 <code>SQL_ATTR_ROW_STATUS_PTR</code> set on the statement before them, so a block cursor never learns how
 many rows a fetch returned. Set after them, both work. The order is the whole workaround.
-<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/301">FirebirdSQL/firebird-odbc-driver#301</a>, open.</p>
+<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/301">FirebirdSQL/firebird-odbc-driver#301</a>; fixed in <a href="https://github.com/FirebirdSQL/firebird-odbc-driver/pull/303">PR #303</a>, see the update below.</p>
 <h2>The DDL choice that decides how a string column reads</h2>
 <p><code>SQLGetTypeInfo(SQL_LONGVARCHAR)</code> names <code>BLOB SUB_TYPE TEXT</code>, so a client that generates its
 <code>CREATE TABLE</code> from the driver's own type table will spell an unbounded string column that
@@ -117,7 +117,23 @@ with no SYSDBA, and creating one needs an administrator.</p>
 reproduction and both driver versions' output:
 <a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/299">FirebirdSQL/firebird-odbc-driver#299</a>,
 <a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/300">FirebirdSQL/firebird-odbc-driver#300</a> and
-<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/301">FirebirdSQL/firebird-odbc-driver#301</a>. All three are open.</p>
+<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/301">FirebirdSQL/firebird-odbc-driver#301</a>. #299 is open; #300 and #301 have fixes.</p>
+<div class="callout">
+<p><strong>Update, 2026-09-07: two of the three are fixed upstream, within a day of being confirmed.</strong>
+F.D. Castel, who maintains the SQLAlchemy dialect for Firebird, reproduced #300 on Windows
+against Firebird 3, widened it to <code>NUMERIC</code> and <code>DECIMAL</code> (he had hit it through DuckDB's
+ODBC scanner, where a 485,000-row column stayed NULL), traced it to <code>setTypeText()</code>
+rewriting the prepared parameter's XSQLVAR with nothing restoring it, and opened
+<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/pull/302">PR #302</a>, which describes
+input parameters from the prepare-time snapshot. The same evening he found the cause of</p>
+<h1>301, the implementation row descriptor rebuilt on every prepare, and opened</h1>
+<p><a href="https://github.com/FirebirdSQL/firebird-odbc-driver/pull/303">PR #303</a>, two lines plus a
+regression test on this note's query. Both CI builds were run here on Linux, unixODBC 2.3.12
+and Firebird 5.0.4: the two programs from #300 give the expected rows in every shape, his
+24-cell matrix goes from six lost cells to none, and the #301 program reports the right
+counters in all three orderings. The workarounds in adbcBridge stay until a release carries
+the fixes; the matrix row and the tracker will say which release when it ships.</p>
+</div>
 <p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
 database's ODBC driver on Linux, macOS and Windows and records each failure with its first
 error; the row for this database is at <a href="https://adbcbridge.org/matrix/#firebird">https://adbcbridge.org/matrix/#firebird</a>, and the
