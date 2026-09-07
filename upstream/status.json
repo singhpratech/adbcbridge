@@ -1,8 +1,8 @@
 {
- "as_of": "2026-09-07T04:26:01Z",
+ "as_of": "2026-09-07T05:55:25Z",
  "window_days": 7,
  "count": 30,
- "with_project_activity": 15,
+ "with_project_activity": 16,
  "fixed": 4,
  "items": [
   {
@@ -136,11 +136,44 @@
    "closed_at": null,
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "pull_request",
+     "at": "2026-09-07T05:03:01Z",
+     "actor": "fdcastel",
+     "title": "Fix column-wise parameter arrays reading element 0 for fixed-length C types (#299)",
+     "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/pull/308",
+     "state": "open"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-07T05:10:59Z",
+     "actor": "fdcastel",
+     "title": "Fix numeric parameters silently sent as NULL after a character-typed bind (#300)",
+     "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/pull/302",
+     "state": "open"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-07T05:31:56Z",
+     "actor": "fdcastel",
+     "association": "member",
+     "text": "@singhpratech Thanks for your reports! I just submitted #308 to fix this one, too. While I have you here, a bit off-topic: I noticed you’re interested in ODBC driver compliance, so I thought you might want to take a look at my [odbc-crusher](https://github.com/fdcastel/odbc-crusher) project. I built it to learn more about the ODBC specification when I first started working on the Firebird ODBC dri…",
+     "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/issues/299#issuecomment-5565540971"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-07T05:35:48Z",
+     "actor": "fdcastel",
+     "title": "Return the cumulative row count after a parameter-array execute",
+     "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/pull/311",
+     "state": "open"
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-09-07T05:35:48Z",
+   "pulse": true
   },
   {
    "project": "Firebird ODBC (OdbcFb)",
@@ -584,7 +617,7 @@
    "reporter_comments": 0,
    "community_comments": 1,
    "last_activity": "2026-08-30T04:37:54Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "QuestDB",
