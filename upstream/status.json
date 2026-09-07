@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-07T05:55:25Z",
+ "as_of": "2026-09-07T12:41:55Z",
  "window_days": 7,
  "count": 30,
  "with_project_activity": 16,
@@ -170,7 +170,7 @@
      "state": "open"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-09-07T05:35:48Z",
    "pulse": true
@@ -743,11 +743,19 @@
      "association": "member",
      "text": "With the python script from your description I btw. got the following output with the fix included: [code] Note that I added a `refresh table` after the second insert to get the update rowcount 2 - otherwise it would be 0 as by default new records take a second to become visible without explicit refresh.",
      "url": "https://github.com/crate/crate/issues/20085#issuecomment-5482210527"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-07T09:08:26Z",
+     "actor": "matriv",
+     "association": "contributor",
+     "text": "Thx @singhpratech for the suggestion, please open a PR yourself! I guess the best place would be: https://github.com/crate/cratedb-guide/tree/main/docs/connect/odbc or https://github.com/crate/cratedb-guide/tree/main/docs/integrate/arrow please open the PR in one of those and we discuss on the PR if we want to move it. thx!",
+     "url": "https://github.com/crate/crate/issues/20085#issuecomment-5568218430"
     }
    ],
-   "reporter_comments": 3,
+   "reporter_comments": 4,
    "community_comments": 0,
-   "last_activity": "2026-08-31T17:45:54Z",
+   "last_activity": "2026-09-07T09:08:26Z",
    "pulse": true
   },
   {
