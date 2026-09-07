@@ -65,7 +65,7 @@ throughout. <code>SQL_C_CHAR</code> arrays are correct.</p>
 wrong. Row-wise binding (<code>SQL_ATTR_PARAM_BIND_TYPE</code> set to the row struct's size) works around
 it; turning parameter arrays off entirely and sending one row per execute is the safer choice
 for a general client, which is what the matrix entry does.
-<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/299">FirebirdSQL/firebird-odbc-driver#299</a>, open.</p>
+<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/299">FirebirdSQL/firebird-odbc-driver#299</a>; fixed in <a href="https://github.com/FirebirdSQL/firebird-odbc-driver/pull/308">PR #308</a>, see the update below.</p>
 <h2>2. A NULL <code>BIGINT</code> bound as character poisons the parameter for good</h2>
 <p><code>SQL_BIGINT</code> is the one SQL type whose default C type in the ODBC specification is not the
 matching <code>SQL_C_SBIGINT</code> but <code>SQL_C_CHAR</code>. So a NULL bound with <code>SQL_C_DEFAULT</code> on a
@@ -117,9 +117,9 @@ with no SYSDBA, and creating one needs an administrator.</p>
 reproduction and both driver versions' output:
 <a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/299">FirebirdSQL/firebird-odbc-driver#299</a>,
 <a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/300">FirebirdSQL/firebird-odbc-driver#300</a> and
-<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/301">FirebirdSQL/firebird-odbc-driver#301</a>. #299 is open; #300 and #301 have fixes.</p>
+<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/301">FirebirdSQL/firebird-odbc-driver#301</a>. All three have fixes.</p>
 <div class="callout">
-<p><strong>Update, 2026-09-07: two of the three are fixed upstream, within a day of being confirmed.</strong>
+<p><strong>Update, 2026-09-07: all three are fixed upstream, within a day and a half of being confirmed.</strong>
 F.D. Castel, who maintains the SQLAlchemy dialect for Firebird, reproduced #300 on Windows
 against Firebird 3, widened it to <code>NUMERIC</code> and <code>DECIMAL</code> (he had hit it through DuckDB's
 ODBC scanner, where a 485,000-row column stayed NULL), traced it to <code>setTypeText()</code>
@@ -131,8 +131,16 @@ input parameters from the prepare-time snapshot. The same evening he found the c
 regression test on this note's query. Both CI builds were run here on Linux, unixODBC 2.3.12
 and Firebird 5.0.4: the two programs from #300 give the expected rows in every shape, his
 24-cell matrix goes from six lost cells to none, and the #301 program reports the right
-counters in all three orderings. The workarounds in adbcBridge stay until a release carries
-the fixes; the matrix row and the tracker will say which release when it ships.</p>
+counters in all three orderings. A few hours later came
+<a href="https://github.com/FirebirdSQL/firebird-odbc-driver/pull/308">PR #308</a> for #299, the stride defect at the
+top of this note: the input side now derives the element stride from the C type when
+<code>BufferLength</code> is 0, as the output side always did, and the array executor is chosen at
+execute time rather than prepare time. On its build both programs from the report store five
+distinct rows for every C type with the NULL in the right row; the release build had also been
+moving a <code>SQL_C_CHAR</code> NULL from row 3 to row 1. He is assembling the merge order for a
+3.5.0-rc2 in <a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/312">#312</a>. The
+workarounds in adbcBridge stay until a release carries the fixes, and parameter arrays go back
+on for this driver when it does; the matrix row and the tracker will say which release.</p>
 </div>
 <p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
 database's ODBC driver on Linux, macOS and Windows and records each failure with its first
