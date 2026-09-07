@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-06T20:28:05Z",
+ "as_of": "2026-09-07T04:26:01Z",
  "window_days": 7,
  "count": 30,
  "with_project_activity": 15,
@@ -180,11 +180,19 @@
      "title": "Fix silent data loss binding numeric to VARCHAR via stored procedure",
      "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/pull/292",
      "state": "open"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-06T21:08:05Z",
+     "actor": "fdcastel",
+     "association": "member",
+     "text": "The PR is up: #302. It describes INPUT parameters from the prepare-time snapshot (`orgSqlProperties`) instead of the live var, as sketched above, with the shape A cases from the matrix as regression tests. CI build for the PR: https://github.com/FirebirdSQL/firebird-odbc-driver/actions/runs/34048760719 (artifact `linux-x64-binaries` contains `libOdbcFb.so`), if that saves you a build. Results from…",
+     "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/issues/300#issuecomment-5562182737"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-06T17:41:05Z",
+   "last_activity": "2026-09-06T21:08:05Z",
    "pulse": true
   },
   {
@@ -195,7 +203,7 @@
    "title": "SQLPrepare discards SQL_ATTR_ROWS_FETCHED_PTR and SQL_ATTR_ROW_STATUS_PTR set before it, so block cursors never learn how many rows a fetch returned",
    "reported": "2026-08-28",
    "reporter": "singhpratech",
-   "what": "`SQLPrepare` and `SQLExecDirect` discard `SQL_ATTR_ROWS_FETCHED_PTR` and `SQL_ATTR_ROW_STATUS_PTR` set before them, so a block cursor never learns how many rows a fetch returned; set after them they work. Reproduces on 3.0.1 and 3.5.0-rc1.",
+   "what": "`SQLPrepare` and `SQLExecDirect` discard `SQL_ATTR_ROWS_FETCHED_PTR` and `SQL_ATTR_ROW_STATUS_PTR` set before them, so a block cursor never learns how many rows a fetch returned; set after them they work. Reproduces on 3.0.1 and 3.5.0-rc1. Confirmed on Windows by F.D. Castel 2026-09-06 (cause: the implementation row descriptor was rebuilt on every prepare and cleared its `ROWS_PROCESSED_PTR` / `ARRAY_STATUS_PTR`).",
    "kind": "issue",
    "state": "open",
    "closed_at": null,
@@ -209,11 +217,19 @@
      "title": "Fix SQLPrepare discarding SQL_ATTR_ROWS_FETCHED_PTR and SQL_ATTR_ROW_STATUS_PTR (#301)",
      "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/pull/303",
      "state": "open"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-06T21:07:20Z",
+     "actor": "fdcastel",
+     "association": "member",
+     "text": "Confirmed on Windows too, with the same output from your program. Cause: `OdbcDesc::setDefaultImplDesc` rebuilds the implementation row descriptor on every prepare and cleared its `SQL_DESC_ROWS_PROCESSED_PTR` / `SQL_DESC_ARRAY_STATUS_PTR` while doing so. The parameter descriptor never did that, which is why `SQL_ATTR_PARAMS_PROCESSED_PTR` survives a prepare and these two did not. Fix in #303: two…",
+     "url": "https://github.com/FirebirdSQL/firebird-odbc-driver/issues/301#issuecomment-5562178686"
     }
    ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": "2026-09-06T19:25:53Z",
+   "last_activity": "2026-09-06T21:07:20Z",
    "pulse": true
   },
   {
@@ -603,7 +619,7 @@
    "reporter_comments": 0,
    "community_comments": 1,
    "last_activity": "2026-08-30T03:13:48Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "CrateDB",
