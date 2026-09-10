@@ -76,9 +76,10 @@ on 2026-08-29. <strong>Fixed</strong> by
 <a href="https://github.com/postgresql-interfaces/psqlodbc/pull/209">postgresql-interfaces/psqlodbc#209</a>,
 merged 2026-09-02:
 rollback level 0 no longer savepoint-wraps the internal <code>DEALLOCATE</code>. QuestDB is confirmed
-against the merged branch; Materialize waits on its own half of the pair. Until the fix is
-in your build, on a manual-commit connection to a server without <code>SAVEPOINT</code>, release
-statements after <code>Commit()</code>, never before.</p>
+against the merged branch; Materialize waits on its own half of the pair. The fix ships in
+psqlodbc 18.00.0003, released 2026-09-10, and the release tag built from source keeps both
+rows on QuestDB where 16.00 lost them. On an older build, on a manual-commit connection to a
+server without <code>SAVEPOINT</code>, release statements after <code>Commit()</code>, never before.</p>
 <p>Related: <a href="/notes/postgresql-wire-servers-and-psqlodbc/">Where PostgreSQL-wire servers part company with PostgreSQL</a></p>
 <h2><code>9223372036854775807</code> reads back as <code>-1</code></h2>
 <p><code>SQLGetData</code> and <code>SQLBindCol</code> narrowed an out-of-range <code>int8</code> to <code>SQL_C_SLONG</code> — and to
@@ -98,7 +99,8 @@ integer conversion instead of the wrapped low bits. Verified on the merge commit
 <a href="https://github.com/postgresql-interfaces/psqlodbc/pull/211">postgresql-interfaces/psqlodbc#211</a>,
 merged 2026-09-08, takes up the one aside from that verification and drops the C-type size
 from the indicator on the error rows as well; verified on its merge commit on 2026-09-10.
-Neither is in a tagged release yet; the latest is <code>REL-18_00_0002</code> from July 2026.</p>
+Both ship in psqlodbc 18.00.0003, released 2026-09-10; the release tag, built from source, passes
+the same program on both retrieval paths.</p>
 <h2>Trap 1: psqlodbc 18 asks a question 16 did not</h2>
 <p>psqlodbc 18.00.0002 sends <code>SHOW DateStyle;</code> at connect (<code>connection.c:1109</code>). YDB's
 PostgreSQL layer answers</p>
