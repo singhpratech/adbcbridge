@@ -148,7 +148,7 @@ jobs:
       # driver manager; its tests skip themselves unless both variables are set.
       - name: Set up Go (Linux)
         if: runner.os == 'Linux'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
