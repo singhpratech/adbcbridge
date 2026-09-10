@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-08T21:13:28Z",
+ "as_of": "2026-09-10T04:45:05Z",
  "window_days": 7,
  "count": 30,
  "with_project_activity": 16,
@@ -410,7 +410,7 @@
    "reporter_comments": 2,
    "community_comments": 0,
    "last_activity": "2026-09-02T01:23:41Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "OpenLink Virtuoso",
