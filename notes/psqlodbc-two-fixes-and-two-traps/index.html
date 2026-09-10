@@ -93,8 +93,12 @@ on 2026-08-29. <strong>Fixed</strong> by
 <a href="https://github.com/postgresql-interfaces/psqlodbc/pull/210">postgresql-interfaces/psqlodbc#210</a>,
 merged 2026-09-04:
 <code>SQLGetData</code> and <code>SQLBindCol</code> now return <code>SQL_ERROR</code> with <code>22003</code> for an out-of-range
-integer conversion instead of the wrapped low bits. A re-test against the merge commit is
-pending here.</p>
+integer conversion instead of the wrapped low bits. Verified on the merge commit on
+2026-09-04, on both the <code>SQLGetData</code> and <code>SQLBindCol</code> paths. A follow-up,
+<a href="https://github.com/postgresql-interfaces/psqlodbc/pull/211">postgresql-interfaces/psqlodbc#211</a>,
+merged 2026-09-08, takes up the one aside from that verification and drops the C-type size
+from the indicator on the error rows as well; verified on its merge commit on 2026-09-10.
+Neither is in a tagged release yet; the latest is <code>REL-18_00_0002</code> from July 2026.</p>
 <h2>Trap 1: psqlodbc 18 asks a question 16 did not</h2>
 <p>psqlodbc 18.00.0002 sends <code>SHOW DateStyle;</code> at connect (<code>connection.c:1109</code>). YDB's
 PostgreSQL layer answers</p>
