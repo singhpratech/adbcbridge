@@ -1,9 +1,9 @@
 {
- "as_of": "2026-09-10T04:45:05Z",
+ "as_of": "2026-09-10T18:46:41Z",
  "window_days": 7,
  "count": 30,
  "with_project_activity": 16,
- "fixed": 4,
+ "fixed": 5,
  "items": [
   {
    "project": "unixODBC",
@@ -100,7 +100,7 @@
    "reporter_comments": 0,
    "community_comments": 0,
    "last_activity": "2026-09-02T16:32:06Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "Dremio / Arrow Flight SQL ODBC",
@@ -805,11 +805,19 @@
      "at": "2026-09-08T10:28:22Z",
      "actor": "davecramer",
      "url": "https://github.com/postgresql-interfaces/psqlodbc/commit/d747b187a9ead95bdb5e5757e602785ff288d5b2"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-10T15:29:45Z",
+     "actor": "davecramer",
+     "title": "release version 18.00.0003",
+     "url": "https://github.com/postgresql-interfaces/psqlodbc/pull/212",
+     "state": "merged"
     }
    ],
    "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-09-08T10:28:22Z",
+   "last_activity": "2026-09-10T15:29:45Z",
    "pulse": true
   },
   {
@@ -863,11 +871,19 @@
      "at": "2026-09-02T14:53:45Z",
      "actor": "davecramer",
      "url": "https://github.com/postgresql-interfaces/psqlodbc/commit/3f297b90eac6440d286cec24e054dbe5ff57f3fb"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-10T15:29:45Z",
+     "actor": "davecramer",
+     "title": "release version 18.00.0003",
+     "url": "https://github.com/postgresql-interfaces/psqlodbc/pull/212",
+     "state": "merged"
     }
    ],
    "reporter_comments": 4,
    "community_comments": 0,
-   "last_activity": "2026-09-02T14:53:45Z",
+   "last_activity": "2026-09-10T15:29:45Z",
    "pulse": true
   },
   {
@@ -905,7 +921,7 @@
    "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-09-02T12:08:41Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "SingleStore Connector/ODBC",
@@ -999,8 +1015,8 @@
    "reporter": "lvca",
    "what": "`COPY (<query>) TO STDOUT`, text and binary, is not supported by the PostgreSQL-protocol plugin; the Arrow native PostgreSQL ADBC driver reads every result through binary `COPY` by default, so with defaults it stops at the first result set. The driver's `adbc.postgresql.use_copy=false` statement option reads through ordinary binary-format results and works end to end on ArcadeDB, which the issue records.",
    "kind": "issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "fixed",
+   "closed_at": "2026-09-10T14:17:23Z",
    "labels": [
     "enhancement",
     "postgresql-wire"
@@ -1016,9 +1032,9 @@
      "state": "merged"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-06T04:04:19Z",
+   "last_activity": "2026-09-10T14:17:23Z",
    "pulse": true
   },
   {
