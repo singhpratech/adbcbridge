@@ -1,9 +1,9 @@
 {
- "as_of": "2026-09-14T16:04:23Z",
+ "as_of": "2026-09-14T20:23:11Z",
  "window_days": 7,
  "count": 30,
  "with_project_activity": 16,
- "fixed": 5,
+ "fixed": 4,
  "items": [
   {
    "project": "unixODBC",
@@ -1015,10 +1015,11 @@
    "reporter": "lvca",
    "what": "`COPY (<query>) TO STDOUT`, text and binary, is not supported by the PostgreSQL-protocol plugin; the Arrow native PostgreSQL ADBC driver reads every result through binary `COPY` by default, so with defaults it stops at the first result set. The driver's `adbc.postgresql.use_copy=false` statement option reads through ordinary binary-format results and works end to end on ArcadeDB, which the issue records.",
    "kind": "issue",
-   "state": "fixed",
-   "closed_at": "2026-09-10T14:17:23Z",
+   "state": "open",
+   "closed_at": null,
    "labels": [
     "enhancement",
+    "in progress",
     "postgresql-wire"
    ],
    "reactions": 0,
