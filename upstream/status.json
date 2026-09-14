@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-14T12:56:49Z",
+ "as_of": "2026-09-14T16:04:23Z",
  "window_days": 7,
  "count": 30,
  "with_project_activity": 16,
@@ -907,7 +907,7 @@
      "actor": "antiguru",
      "title": "sql: unquote prepared statement and portal names before lookup",
      "url": "https://github.com/MaterializeInc/materialize/pull/38606",
-     "state": "open"
+     "state": "merged"
     },
     {
      "type": "comment",
