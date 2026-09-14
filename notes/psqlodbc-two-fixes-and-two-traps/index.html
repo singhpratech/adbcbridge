@@ -76,7 +76,9 @@ on 2026-08-29. <strong>Fixed</strong> by
 <a href="https://github.com/postgresql-interfaces/psqlodbc/pull/209">postgresql-interfaces/psqlodbc#209</a>,
 merged 2026-09-02:
 rollback level 0 no longer savepoint-wraps the internal <code>DEALLOCATE</code>. QuestDB is confirmed
-against the merged branch; Materialize waits on its own half of the pair. The fix ships in
+against the merged branch; Materialize's own half,
+<a href="https://github.com/MaterializeInc/materialize/pull/38606">MaterializeInc/materialize#38606</a>,
+merged 2026-09-14 and keeps both rows on its main image with this driver. The fix ships in
 psqlodbc 18.00.0003, released 2026-09-10, and the release tag built from source keeps both
 rows on QuestDB where 16.00 lost them. On an older build, on a manual-commit connection to a
 server without <code>SAVEPOINT</code>, release statements after <code>Commit()</code>, never before.</p>

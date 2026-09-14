@@ -92,9 +92,12 @@ a statement prepared at the protocol level cannot be released:</p>
 with a psqlodbc defect. PostgreSQL 16 releases the same statement. Filed with a
 psycopg side-by-side as
 <a href="https://github.com/MaterializeInc/materialize/discussions/38605">MaterializeInc/materialize#38605</a>;
-fix in review as
+<strong>fixed</strong> by
 <a href="https://github.com/MaterializeInc/materialize/pull/38606">MaterializeInc/materialize#38606</a>,
-opened 2026-09-01, which unquotes prepared-statement, portal and cursor names before lookup.</p>
+merged 2026-09-14, which unquotes prepared-statement, portal and cursor names before lookup.
+On the main image carrying it, with psqlodbc 18.00.0004, a statement freed before the commit
+keeps both rows; either fix alone still loses them. It reaches users with the next
+Materialize release.</p>
 <p>Related: <a href="/notes/psqlodbc-two-fixes-and-two-traps/">Two psqlodbc bugs that lost rows and narrowed integers, and two traps</a></p>
 <h2>RisingWave: a statement name outlives its statement</h2>
 <p>Over the extended protocol, RisingWave 3.0 keeps a server-side statement name after the
