@@ -35,6 +35,8 @@ struct OdbcDatabase {
   char* password;
   // ADBC_ODBC_OPTION_TUNE: may adbcbridge add connection keywords of its own?
   bool tune;
+  // ADBC_ODBC_OPTION_UTC_SESSION: SET TIME ZONE 'UTC' on PostgreSQL-wire connections.
+  bool utc_session;
   struct OdbcReaderOptions reader_opts;
   struct OdbcDelegateOptions delegate;
   // Non-NULL when a native ADBC driver serves this database: every call is
@@ -99,6 +101,7 @@ static AdbcStatusCode OdbcDatabaseNew(struct AdbcDatabase* database, struct Adbc
     return ADBC_STATUS_INTERNAL;
   }
   db->tune = true;
+  db->utc_session = true;
   db->reader_opts.batch_size = ADBC_ODBC_DEFAULT_BATCH_SIZE;
   db->reader_opts.max_bind_bytes = ADBC_ODBC_DEFAULT_MAX_BIND_BYTES;
   db->reader_opts.long_bind_bytes = ADBC_ODBC_DEFAULT_LONG_BIND_BYTES;
@@ -169,6 +172,8 @@ static AdbcStatusCode OdbcDatabaseSetOption(struct AdbcDatabase* database, const
                                &db->reader_opts.sqllen_32bit_forced, error);
   } else if (strcmp(key, ADBC_ODBC_OPTION_TUNE) == 0) {
     return OdbcParseBoolOption(key, value, &db->tune, NULL, error);
+  } else if (strcmp(key, ADBC_ODBC_OPTION_UTC_SESSION) == 0) {
+    return OdbcParseBoolOption(key, value, &db->utc_session, NULL, error);
   }
   InternalAdbcSetError(error, "Unknown database option %s", key);
   return ADBC_STATUS_NOT_IMPLEMENTED;
@@ -257,6 +262,8 @@ static AdbcStatusCode OdbcDatabaseGetOption(struct AdbcDatabase* database, const
   else if (strcmp(key, ADBC_OPTION_USERNAME) == 0) v = db->username;
   else if (strcmp(key, ADBC_ODBC_OPTION_TUNE) == 0) {
     v = db->tune ? ADBC_OPTION_VALUE_ENABLED : ADBC_OPTION_VALUE_DISABLED;
+  } else if (strcmp(key, ADBC_ODBC_OPTION_UTC_SESSION) == 0) {
+    v = db->utc_session ? ADBC_OPTION_VALUE_ENABLED : ADBC_OPTION_VALUE_DISABLED;
   }
   else {
     InternalAdbcSetError(error, "Unknown database option %s", key);
@@ -280,6 +287,7 @@ static AdbcStatusCode OdbcDatabaseGetOptionInt(struct AdbcDatabase* database, co
   if (strcmp(key, ADBC_ODBC_OPTION_ROWSET_BYTES) == 0) { *value = db->reader_opts.rowset_bytes; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) { *value = db->reader_opts.sqllen_32bit ? 1 : 0; return ADBC_STATUS_OK; }
   if (strcmp(key, ADBC_ODBC_OPTION_TUNE) == 0) { *value = db->tune ? 1 : 0; return ADBC_STATUS_OK; }
+  if (strcmp(key, ADBC_ODBC_OPTION_UTC_SESSION) == 0) { *value = db->utc_session ? 1 : 0; return ADBC_STATUS_OK; }
   InternalAdbcSetError(error, "Unknown database option %s", key);
   return ADBC_STATUS_NOT_FOUND;
 }
@@ -501,6 +509,15 @@ static void OdbcServerScalarString(SQLHDBC hdbc, const char* sql, char* out, siz
   for (char* c = out; *c; c++) {
     if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
   }
+}
+
+// Run one statement that returns nothing, ignoring any failure: a server that does not
+// understand it is not the one the statement was meant for.
+static void OdbcServerExecQuiet(SQLHDBC hdbc, const char* sql) {
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return;
+  OdbcExecDirectUtf8(hstmt, sql);
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
 }
 
 // Lowercased SELECT version() of the server behind the connection, or "" if it cannot
@@ -985,6 +1002,18 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // and only for this one driver.
     char version[256];
     OdbcServerVersionString(conn->hdbc, version, sizeof(version));
+    // psqlodbc hands a timestamp-with-time-zone value over as the session's wall-clock
+    // time, with no offset in the SQL_C_CHAR form the reader takes it in (its own
+    // conversion drops the "-05" the server sent), and sends a bound SQL_TYPE_TIMESTAMP
+    // parameter as a zone-less literal the server reads in the session zone.  Both
+    // directions are therefore only right when the session zone is UTC: on a server
+    // configured for America/New_York, 13:45:10Z read back as 08:45:10 labelled UTC and a
+    // zoned 13:45:10Z ingested as 18:45:10Z (found on a macOS cluster whose initdb took
+    // the host zone; every container in the matrix runs UTC, which is why it was not
+    // seen before).  Put the session on UTC once, before anything is read or written.
+    // ADBC_ODBC_OPTION_UTC_SESSION=false keeps the server's setting.  A server that does
+    // not take the statement (a fork without SET TIME ZONE) is left as it is.
+    if (conn->db->utc_session) OdbcServerExecQuiet(conn->hdbc, "SET TIME ZONE 'UTC'");
     // Bulk ingest may send one array parameter per column instead of K*ncols bound cells
     // (reader_opts.pg_array_ingest).  PostgreSQL itself is the only server here that
     // form is claimed for: it is PostgreSQL's multi-argument unnest, PostgreSQL's array

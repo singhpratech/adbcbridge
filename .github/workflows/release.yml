@@ -141,6 +141,24 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix unixodbc)"
           cmake --build build --parallel 4
           ctest --test-dir build --output-on-failure
+      - name: Refer to unixODBC by rpath, not by Homebrew's absolute path
+        # The link step records unixODBC as /opt/homebrew/opt/unixodbc/lib/libodbc.2.dylib,
+        # so the shipped library loaded on a Mac with unixODBC anywhere else (or no
+        # Homebrew at all) failed with "Library not loaded" before the driver manager
+        # even got a say.  Refer to it by name and search the usual prefixes instead;
+        # the library is deliberately not bundled (see the top of this file).
+        run: |
+          lib=build/libadbc_driver_odbc.dylib
+          brew_odbc="$(otool -L "$lib" | awk '/libodbc/ {print $1}')"
+          echo "linked: $brew_odbc"
+          install_name_tool -change "$brew_odbc" @rpath/libodbc.2.dylib "$lib"
+          for p in /opt/homebrew/opt/unixodbc/lib /opt/homebrew/lib /usr/local/opt/unixodbc/lib /usr/local/lib /opt/local/lib; do
+            install_name_tool -add_rpath "$p" "$lib"
+          done
+          codesign --force --sign - "$lib"
+          otool -L "$lib" | grep libodbc
+          otool -l "$lib" | grep -A2 LC_RPATH | grep path
+          ctest --test-dir build --output-on-failure
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
