@@ -607,6 +607,35 @@ struct OdbcReaderOptions {
   // is a fixed name rather than a format.  Without it an Arrow timestamp[us] column
   // became SECONDDATE and every microsecond was silently dropped on ingest.
   const char* ddl_timestamp_type_name;
+  // Server quirk: the literal DDL types to give Arrow timestamp columns, as printf
+  // formats that take the fractional digit count -- one for a zone-less column and one
+  // for a zoned one -- clamped to ddl_timestamp_max_digits.  They take precedence over
+  // ddl_timestamp_type_name and over SQLGetTypeInfo.  NULL means "not set".
+  //
+  // Set for PostgreSQL itself.  psqlodbc answers SQLGetTypeInfo(SQL_TYPE_TIMESTAMP) with
+  // a single row, "timestamptz", so generated DDL gave every Arrow timestamp a zoned
+  // column: a zone-less timestamp[us] read back as timestamp[us, tz=UTC].  That row also
+  // has no CREATE_PARAMS, so nothing asked for the Arrow unit's precision and every
+  // column became PostgreSQL's default of 6 digits -- a timestamp[s] or timestamp[ms]
+  // came back as timestamp[us].  "TIMESTAMP(%d)" and "TIMESTAMP(%d) WITH TIME ZONE"
+  // keep both the zone and the unit.
+  const char* ddl_timestamp_type_format;
+  const char* ddl_timestamptz_type_format;
+  int ddl_timestamp_max_digits;
+  // Server quirk: use fractional_time_type_format for a whole-second TIME as well, as
+  // "TIME(0)".  On most servers a bare TIME is whole-second, which is why the format is
+  // otherwise only used for sub-second columns; on PostgreSQL a bare TIME is TIME(6), so
+  // a time32[s] column would read back as time64[us].
+  bool fractional_time_format_for_seconds;
+  // Driver property: a timestamp column reported with scale 0 and the plain
+  // "YYYY-MM-DD hh:mm:ss" size of 19 really is whole-second, so it reads as
+  // timestamp[s].  Off, such a column reads as timestamp[us], because the pair is not
+  // trustworthy in general: MySQL Connector/ODBC reports 0 / 19 for DATETIME(6), and a
+  // wrong "seconds" would drop every fraction while a wrong "microseconds" loses
+  // nothing.  Set only where the report was checked against the server: psqlodbc on
+  // PostgreSQL itself, which derives the scale from the column's type modifier
+  // (TIMESTAMP(0) is 0 / 19, an unconstrained TIMESTAMP 6 / 26).
+  bool timestamp_scale_zero_trusted;
   // SQL_MAX_STATEMENT_LEN, in bytes; 0 when the driver will not say.
   int64_t max_statement_len;
   // Server quirk: a hard ceiling on the number of parameters one statement may carry.
@@ -719,6 +748,11 @@ struct OdbcConnection {
   // rather than on connect, so a connection that never ingests never pays for it.
   bool array_ingest_probed;      // the semantic check has run
   bool array_ingest_unsupported; // ... and the form is not usable here: never try again
+  // A query whose one value is the connection's current schema, for
+  // ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA.  ODBC has no connection attribute for the
+  // schema the way it has SQL_ATTR_CURRENT_CATALOG for the catalog, so each server is
+  // asked in its own words; NULL where the words are not known (see OdbcDetectQuirks).
+  const char* current_schema_query;
   struct OdbcReaderOptions reader_opts;
 };
 

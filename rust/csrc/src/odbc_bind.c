@@ -3128,7 +3128,10 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
     case NANOARROW_TYPE_DATE32: CHAIN("DATE", SQL_TYPE_DATE, SQL_TYPE_TIMESTAMP); break;
     case NANOARROW_TYPE_TIME32: case NANOARROW_TYPE_TIME64: {
       const int digits = FractionalDigits(sv->time_unit);
-      if (digits > 0 && opts->fractional_time_type_format) {
+      // fractional_time_format_for_seconds: a bare TIME is not whole-second on this
+      // server (PostgreSQL's is TIME(6)), so a time32[s] column asks for TIME(0) too.
+      if ((digits > 0 || opts->fractional_time_format_for_seconds) &&
+          opts->fractional_time_type_format) {
         int d = digits;
         if (opts->fractional_time_max_digits > 0 && d > opts->fractional_time_max_digits) {
           d = opts->fractional_time_max_digits;
@@ -3146,7 +3149,21 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
               SQL_SS_TIME2);
       break;
     }
-    case NANOARROW_TYPE_TIMESTAMP:
+    case NANOARROW_TYPE_TIMESTAMP: {
+      // ddl_timestamp_type_format / ddl_timestamptz_type_format: this server's type
+      // metadata names neither the zone nor the precision the Arrow column has
+      // (PostgreSQL: one row, "timestamptz", with no CREATE_PARAMS), so both are
+      // spelled here -- a zoned Arrow timestamp is one with a non-empty timezone.
+      const bool zoned = sv->timezone && sv->timezone[0];
+      const char* fmt = zoned ? opts->ddl_timestamptz_type_format : opts->ddl_timestamp_type_format;
+      if (fmt) {
+        int d = FractionalDigits(sv->time_unit);
+        if (opts->ddl_timestamp_max_digits > 0 && d > opts->ddl_timestamp_max_digits) {
+          d = opts->ddl_timestamp_max_digits;
+        }
+        snprintf(out, out_size, fmt, d);
+        break;
+      }
       // ddl_timestamp_type_name: this driver's first SQL_TYPE_TIMESTAMP row is a
       // whole-second type (SAP HANA's SECONDDATE), so the name is given outright.
       if (opts->ddl_timestamp_type_name) {
@@ -3156,6 +3173,7 @@ static AdbcStatusCode ColumnTypeSql(SQLHDBC hdbc, const struct OdbcReaderOptions
       CHAIN_P(&(const struct TypeParams){.frac_digits = FractionalDigits(sv->time_unit)},
               "TIMESTAMP", SQL_TYPE_TIMESTAMP);
       break;
+    }
     case NANOARROW_TYPE_DECIMAL128: case NANOARROW_TYPE_DECIMAL256: {
       const struct TypeParams dec = {.precision = sv->decimal_precision,
                                      .scale = sv->decimal_scale};

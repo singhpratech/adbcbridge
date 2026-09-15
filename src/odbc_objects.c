@@ -568,6 +568,17 @@ static AdbcStatusCode CollectTables(struct OdbcConnection* conn, int depth, cons
     if (!catalog) {
       status = FetchTables(conn, (SQLCHAR*)"", 0, (SQLCHAR*)SQL_ALL_SCHEMAS, SQL_NTS, (SQLCHAR*)"",
                            0, (SQLCHAR*)"", 0, /*tolerate_failure=*/true, &l, error);
+      // ODBC defines that listing as the data source's schemas with every column but
+      // TABLE_SCHEM NULL, and psqlodbc answers exactly so -- which reported "public"
+      // under a NULL catalog on a connection that is in catalog "adbc".  The schemas
+      // listed are the current catalog's, so name it on the rows that left it out.
+      if (status == ADBC_STATUS_OK && l.n > 0) {
+        char* current = CurrentCatalog(conn);
+        for (size_t i = 0; current && i < l.n; i++) {
+          if (!l.rows[i].catalog) l.rows[i].catalog = strdup(current);
+        }
+        free(current);
+      }
     } else {
       status = ADBC_STATUS_OK;
     }

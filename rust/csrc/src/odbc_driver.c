@@ -468,6 +468,23 @@ static AdbcStatusCode OdbcConnectionSetOption(struct AdbcConnection* connection,
 // backend and reports the same SQL_DRIVER_NAME and SQL_DBMS_NAME for all of them -- so
 // where the driver name says nothing, ask the server itself.  Errors are swallowed: a
 // server that does not understand the query simply is not the one being looked for.
+// First column of the first row of `sql`, exactly as the server spelled it.  False when
+// the query fails, returns no row or returns NULL.
+static bool OdbcServerScalarExact(SQLHDBC hdbc, const char* sql, char* out, size_t out_size) {
+  out[0] = '\0';
+  bool ok = false;
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
+  if (SQL_SUCCEEDED(OdbcExecDirectUtf8(hstmt, sql)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
+    SQLLEN ind = 0;
+    ok = SQL_SUCCEEDED(OdbcGetDataStrUtf8(hstmt, 1, out, out_size, &ind, false)) &&
+         ind != SQL_NULL_DATA;
+    if (!ok) out[0] = '\0';
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+  return ok;
+}
+
 static void OdbcServerScalarString(SQLHDBC hdbc, const char* sql, char* out, size_t out_size) {
   out[0] = '\0';
   SQLHSTMT hstmt = NULL;
@@ -644,6 +661,7 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // with a column-wise parameter array: NULL parameter sets land as zeros and the
     // values of the sets around them are dropped.  Row-at-a-time only.
     conn->reader_opts.no_param_arrays = true;
+    conn->current_schema_query = "SELECT current_schema()";
   }
   if (strstr((const char*)name, "sqlite3odbc")) {
     // SQLiteODBC leaves SQL_CA1_ABSOLUTE out of SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1 and
@@ -1096,6 +1114,31 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
       // parameters go through, 952 drop the connection -- and it matches the documented
       // limit.  Declaring it keeps the batching on, at 237 four-column rows per INSERT.
       conn->reader_opts.max_statement_params = 950;
+    }
+    // current_schema() is PostgreSQL's, and every server reached over this wire that
+    // has schemas at all spells it the same way.  One that does not simply fails the
+    // query, and the option then reports NOT_FOUND.
+    conn->current_schema_query = "SELECT current_schema()";
+    // By this point pg_array_ingest says exactly "this is PostgreSQL itself": a
+    // PostgreSQL banner with no fork's marker, and neither YDB nor Spanner.  What
+    // follows is only claimed for that server, whose typmods psqlodbc reads its
+    // temporal scales from; a server that merely speaks the wire protocol may send
+    // different ones (or none), and keeps the behaviour it had.
+    if (conn->reader_opts.pg_array_ingest) {
+      // psqlodbc reports TIMESTAMP(0) as scale 0 / size 19 -- the column's own type
+      // modifier -- so a whole-second column is believed rather than read as [us].
+      conn->reader_opts.timestamp_scale_zero_trusted = true;
+      // Its SQLGetTypeInfo has one SQL_TYPE_TIMESTAMP row, "timestamptz", with no
+      // CREATE_PARAMS, so generated DDL made every Arrow timestamp a zoned, 6-digit
+      // column.  Spell the zone and the precision (PostgreSQL keeps at most 6 digits).
+      conn->reader_opts.ddl_timestamp_type_format = "TIMESTAMP(%d)";
+      conn->reader_opts.ddl_timestamptz_type_format = "TIMESTAMP(%d) WITH TIME ZONE";
+      conn->reader_opts.ddl_timestamp_max_digits = 6;
+      // The same holds for TIME: "time" with no CREATE_PARAMS, and a bare TIME is
+      // TIME(6), so time32[s] and time32[ms] columns were created as microsecond ones.
+      conn->reader_opts.fractional_time_type_format = "TIME(%d)";
+      conn->reader_opts.fractional_time_max_digits = 6;
+      conn->reader_opts.fractional_time_format_for_seconds = true;
     }
   }
   if (strstr((const char*)name, "myodbc") && !conn->reader_opts.txn_capable) {
@@ -1855,6 +1898,15 @@ static AdbcStatusCode OdbcConnectionGetOption(struct AdbcConnection* connection,
   } else if (strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0 && conn->connected) {
     ODBC_CHECK(SQLGetConnectAttr(conn->hdbc, SQL_ATTR_CURRENT_CATALOG, buf, sizeof(buf), &outlen),
                SQL_HANDLE_DBC, conn->hdbc, "SQLGetConnectAttr(SQL_ATTR_CURRENT_CATALOG)", error);
+    v = (const char*)buf;
+  } else if (strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA) == 0 && conn->connected) {
+    // ODBC has no attribute for the current schema, so ask the server in its own words
+    // (see OdbcConnection::current_schema_query); NOT_FOUND where those are not known.
+    if (!conn->current_schema_query ||
+        !OdbcServerScalarExact(conn->hdbc, conn->current_schema_query, (char*)buf, sizeof(buf))) {
+      InternalAdbcSetError(error, "The current schema is not available from this ODBC driver");
+      return ADBC_STATUS_NOT_FOUND;
+    }
     v = (const char*)buf;
   } else if (strcmp(key, ADBC_ODBC_OPTION_DRIVER_NAME) == 0 && conn->connected) {
     SQLSMALLINT slen = 0;
