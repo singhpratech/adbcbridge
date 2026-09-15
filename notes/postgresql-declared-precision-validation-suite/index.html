@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build — adbcBridge notes</title>
-<meta name="description" content="The native PostgreSQL ADBC driver could not connect to ArcadeDB; a probe comment became a diagnosed issue, a fix and a merge within a day. Verified.">
-<link rel="canonical" href="https://adbcbridge.org/notes/arcadedb-fixed-the-pg-type-bootstrap-within-a-day/">
+<title>PostgreSQL columns declared with reduced precision now read at that precision — adbcBridge notes</title>
+<meta name="description" content="Through psqlodbc, TIMESTAMP(0), TIMESTAMPTZ(3) and TIME(3) columns arrived as microsecond Arrow types; adbcBridge 0.1.2 reads the declared unit, and the…">
+<link rel="canonical" href="https://adbcbridge.org/notes/postgresql-declared-precision-validation-suite/">
 <link rel="alternate" type="application/atom+xml" title="adbcBridge notes" href="/notes/feed.xml">
-<meta property="og:type" content="article"><meta property="og:title" content="ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build"><meta property="og:description" content="The native PostgreSQL ADBC driver could not connect to ArcadeDB; a probe comment became a diagnosed issue, a fix and a merge within a day. Verified."><meta property="og:url" content="https://adbcbridge.org/notes/arcadedb-fixed-the-pg-type-bootstrap-within-a-day/"><meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
+<meta property="og:type" content="article"><meta property="og:title" content="PostgreSQL columns declared with reduced precision now read at that precision"><meta property="og:description" content="Through psqlodbc, TIMESTAMP(0), TIMESTAMPTZ(3) and TIME(3) columns arrived as microsecond Arrow types; adbcBridge 0.1.2 reads the declared unit, and the…"><meta property="og:url" content="https://adbcbridge.org/notes/postgresql-declared-precision-validation-suite/"><meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
 <link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
 <link rel="preload" href="/fonts/newsreader-normal-latin.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/public-sans-normal-latin.woff2" as="font" type="font/woff2" crossorigin><style>/* Newsreader, Public Sans, JetBrains Mono — SIL Open Font License 1.1; latin and latin-ext subsets, one variable file per face with a weight range, self-hosted. */@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}</style>
 <style>
@@ -50,165 +50,88 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-09-06</div><h1>ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build</h1><p class="meta">The native PostgreSQL ADBC driver could not connect to ArcadeDB; a probe comment became a diagnosed issue, a fix and a merge within a day. Verified.</p><p>The <a href="/notes/native-adbc-drivers-on-wire-compatible-databases/">native-driver probe</a> of
-2026-09-05 found that the Apache Arrow PostgreSQL ADBC driver (1.12.0) could not open a
-connection to ArcadeDB's PostgreSQL-protocol plugin at all. This note records what happened
-next, because it happened fast, and because the first verification needed a correction.</p>
-<h2>Timeline</h2>
-<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
-<thead>
-<tr>
-<th>When (UTC)</th>
-<th>What</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>2026-09-05 21:19</td>
-<td>Follow-up comment on ArcadeDB's discussion thread with the probe result: <code>Expected 5 or 6 columns from type resolver pg_type query but got 0</code></td>
-</tr>
-<tr>
-<td>22:11</td>
-<td>ArcadeDB's maintainer opened <a href="https://github.com/ArcadeData/arcadedb/issues/7178">#7178</a> with the diagnosis</td>
-</tr>
-<tr>
-<td>22:33</td>
-<td>Fix <a href="https://github.com/ArcadeData/arcadedb/pull/7179">PR #7179</a> opened, with tests</td>
-</tr>
-<tr>
-<td>22:44</td>
-<td>Verified on the PR's CI image: the driver connects (see the correction below)</td>
-</tr>
-<tr>
-<td>22:47</td>
-<td>Maintainer filed <a href="https://github.com/ArcadeData/arcadedb/issues/7180">#7180</a> for what the driver hits next</td>
-</tr>
-<tr>
-<td>2026-09-06 02:48</td>
-<td>PR merged; #7178 closed</td>
-</tr>
-<tr>
-<td>03:05</td>
-<td>Verified again on the merged code, this time with the fixture types present</td>
-</tr>
-<tr>
-<td>03:29</td>
-<td>Maintainer opened <a href="https://github.com/ArcadeData/arcadedb/pull/7187">PR #7187</a> for the <code>::regclass</code> cast behind <code>GetTableSchema</code>, and <a href="https://github.com/ArcadeData/arcadedb/issues/7188">#7188</a> for binary <code>COPY</code></td>
-</tr>
-<tr>
-<td>04:2x</td>
-<td>Verified #7187 on its CI build: <code>GetTableSchema</code> answers with five and eight fields</td>
-</tr>
-<tr>
-<td>06:31</td>
-<td>#7187 merged; #7180 closed</td>
-</tr>
-</tbody>
-</table></div>
-<h2>What was wrong</h2>
-<p>The driver bootstraps its type resolver with three queries before it hands back a
-connection, and it checks the shape of each answer: zero rows are fine, zero columns are
-fatal. The third query selects <code>oid, typname, typreceive, typbasetype, typrelid, typarray</code>
-from <code>pg_catalog.pg_type</code> with a WHERE clause of inequalities, a parenthesised OR and a
-<code>::TEXT</code> cast. ArcadeDB's emulated <code>pg_type</code> knew neither <code>typreceive</code> nor <code>typsend</code>, and its
-WHERE parser accepted a single equality only, so the whole projection was declined and the
-answer had no columns. The fix teaches the emulation those columns, with PostgreSQL's real
-receive and send function names (the driver selects a column's decoder by that name), and
-registers <code>pg_type</code> as a query family of its own so the filter is evaluated.</p>
-<h2>What the merged build does now</h2>
-<p>Same seven-step probe, native driver, fixture types created first:</p>
-<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
-<thead>
-<tr>
-<th>Step</th>
-<th>Driver defaults</th>
-<th>With <code>adbc.postgresql.use_copy=false</code></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>connect</td>
-<td>passes</td>
-<td>passes</td>
-</tr>
-<tr>
-<td><code>SELECT 1</code></td>
-<td>stops: <code>COPY (…) TO STDOUT (FORMAT binary)</code> is not ArcadeDB SQL</td>
-<td>passes</td>
-</tr>
-<tr>
-<td><code>GetTableSchema</code></td>
-<td>empty schema, then five fields with #7187</td>
-<td>same</td>
-</tr>
-<tr>
-<td><code>GetObjects</code></td>
-<td>lists both types</td>
-<td>lists both types</td>
-</tr>
-<tr>
-<td>read the fixture table</td>
-<td>stops at COPY</td>
-<td>passes; <code>@rid</code>, <code>@type</code>, <code>@cat</code> as strings, the five properties as int64, string, double, date32 and bool</td>
-</tr>
-</tbody>
-</table></div>
-<p>So the fix does exactly what #7178 says, and with one driver option the native driver now
-runs the read workload against ArcadeDB end to end apart from the schema lookup. adbcBridge
-over psqlodbc passes all seven steps before and after, as it did in the original probe.</p>
-<h2>What is left, and where it is tracked</h2>
-<p>Both items were in <a href="https://github.com/ArcadeData/arcadedb/issues/7180">#7180</a> with the
-driver's exact statements; one is fixed, one is tracked on its own:</p>
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-09-06</div><h1>PostgreSQL columns declared with reduced precision now read at that precision</h1><p class="meta">Through psqlodbc, TIMESTAMP(0), TIMESTAMPTZ(3) and TIME(3) columns arrived as microsecond Arrow types; adbcBridge 0.1.2 reads the declared unit, and the validation suite went from 265 to 293 of 327.</p><h2>What a reader would see</h2>
+<p>Before 0.1.2, a PostgreSQL column declared <code>TIMESTAMP(0)</code> came back from adbcBridge as
+<code>timestamp[us]</code>, <code>TIMESTAMPTZ(3)</code> as <code>timestamp[us, tz=UTC]</code>, and <code>TIME(3)</code> as <code>time64[us]</code>.
+The values were exact; only the Arrow unit was finer than the column's declaration. The
+ADBC Driver Foundry validation suite, which checks the Arrow type of every result against the
+declared SQL type, counted 28 failures on PostgreSQL for it, in six groups, on 2026-09-06.</p>
+<p>From 0.1.2 the unit matches the column: <code>TIMESTAMP(0)</code> and <code>TIMESTAMPTZ(0)</code> read as
+<code>timestamp[s]</code>, <code>TIMESTAMPTZ(1..3)</code> as <code>timestamp[ms, tz=UTC]</code>, <code>TIME(0)</code> as <code>time32[s]</code> and
+<code>TIME(1..3)</code> as <code>time32[ms]</code>. This is the one behaviour change in the release: code that
+assumed every PostgreSQL timestamp arrives as microseconds sees the declared unit instead,
+with the same values.</p>
+<h2>Why the driver did not believe the column</h2>
+<p>psqlodbc reports a <code>TIMESTAMP(0)</code> column truthfully, as scale 0 with the 19-character size of
+<code>YYYY-MM-DD hh:mm:ss</code>. The reader treated that pair as unreliable on purpose: MySQL
+Connector/ODBC reports exactly the same 0 and 19 for a <code>DATETIME(6)</code> column, and reading that
+as whole seconds would silently drop every fraction. Microseconds lose nothing, so they were
+the default whenever scale 0 could not be cross-checked against the size.</p>
+<p>The fix keeps that caution and narrows it. Only psqlodbc against PostgreSQL itself, identified by
+the same <code>version()</code> test the array-ingest path already uses, is trusted on a 0 / 19 pair.
+MySQL and MariaDB keep the microsecond default, and so do the PostgreSQL-wire servers that are
+not PostgreSQL. A wrong "seconds" loses data; a wrong "microseconds" does not, which is why the
+gate points that way.</p>
+<p>The zoned path had a second, simpler gap: it always produced microseconds, whatever scale was
+reported. It now takes its unit from the scale, and the text parser scales with it. Queries,
+<code>ExecuteSchema</code> and <code>GetTableSchema</code> classify columns through the same function, so all
+three agree.</p>
+<h2>Ingest, the current schema, and the catalog name</h2>
+<p>Three more findings from the same run are in 0.1.2:</p>
 <ul>
-<li><strong>Binary <code>COPY … TO STDOUT</code></strong>, <a href="https://github.com/ArcadeData/arcadedb/issues/7188">#7188</a>, <strong>implemented in
-  <a href="https://github.com/ArcadeData/arcadedb/pull/7398">#7398</a></strong> on 2026-09-10, four days after it was split out: text, csv and
-  binary, both protocol paths, in 26.10.1. Verified on the snapshot the same day: the stream is correct on the wire
-  and the rows match the <code>Describe</code> OIDs byte for byte, but the Arrow driver's default path still stops at the first
-  row, because ArcadeDB sends the 19-byte binary header as its own <code>CopyData</code> message and PostgreSQL sends it inside
-  the first row's message, which is what the driver's reader expects. <strong>Fixed on 2026-09-15</strong> in
-  <a href="https://github.com/ArcadeData/arcadedb/pull/7607">#7607</a>, the morning after the byte-level report: on the
-  <code>26.10.1-SNAPSHOT</code> build that carries it, the Arrow driver with its defaults passes the whole seven-step probe
-  and decodes real rows through binary COPY. <code>use_copy=false</code> is no longer needed from 26.10.1. The issue was
-  closed on 2026-09-15, and a wider check on the same build passed with the driver's defaults: an empty result
-  set (header and trailer with no rows, the case the fix names), one row, 10,000 rows in one <code>COPY</code>, a NULL in
-  every column, text outside the Basic Multilingual Plane, <code>GetTableSchema</code> and <code>GetObjects</code>.</li>
-<li><strong><code>GetTableSchema</code>, now fixed.</strong> The driver's statement joins <code>pg_class</code>, <code>pg_attribute</code> and
-  <code>pg_type</code> with <code>cls.oid = $1::regclass::oid</code>; ArcadeDB ignored the <code>regclass</code> cast, so a name was
-  compared with a number and the statement was answered with zero rows. <a href="https://github.com/ArcadeData/arcadedb/pull/7187">PR #7187</a>
-  makes <code>::regclass</code> and <code>::regtype</code> real lookups; on its build <code>adbc_big</code> describes with its five
-  properties and <code>adbc_t</code> with all eight, and the whole seven-step read probe passes with <code>use_copy=false</code>.</li>
+<li>Bulk ingest of a zone-less Arrow timestamp created a <code>timestamptz</code> column, because
+  psqlodbc's only <code>SQLGetTypeInfo</code> row for the timestamp type is <code>timestamptz</code> and it takes no
+  precision argument. Generated DDL on PostgreSQL now spells <code>TIMESTAMP(n)</code> for a zone-less
+  column and <code>TIMESTAMP(n) WITH TIME ZONE</code> for a zoned one, with <code>n</code> from the Arrow unit, and
+  <code>TIME(n)</code> for every time unit, <code>TIME(0)</code> included, since a bare PostgreSQL <code>TIME</code> is <code>TIME(6)</code>.</li>
+<li><code>adbc.connection.db_schema</code> was not implemented. ODBC has no attribute for the current
+  schema the way it has one for the catalog, so the option asks the server in its own words,
+  <code>SELECT current_schema()</code>, on PostgreSQL-wire servers and DuckDB.</li>
+<li><code>GetObjects</code> at schema depth reported every schema under a NULL catalog, because psqlodbc's
+  <code>SQLTables(SQL_ALL_SCHEMAS)</code> leaves <code>TABLE_CAT</code> empty. The catalog is now filled from
+  <code>SQL_ATTR_CURRENT_CATALOG</code>.</li>
 </ul>
-<p>All three fixes ship in ArcadeDB 26.10.1, the October release, and are in the
-<code>26.10.1-SNAPSHOT</code> build now. With them the native driver works out of the box; the ArcadeDB row
-in the probe note and on the <a href="/db/arcadedb/">ArcadeDB page</a> will say so once 26.10.1 is out.</p>
-<h2>A correction to the first verification</h2>
-<p>The first verification, on the PR's CI image, reported two further stops that were not
-ArcadeDB's: <code>GetObjects</code> returning no tables and <code>SELECT * FROM "adbc_big"</code> failing with
-"type not found". Both came from the probe's own order of operations. It runs the native
-driver before the ODBC pass, and the ODBC pass is what creates the fixture types, so on a
-freshly started image the native run saw a database with nothing in it. With the types
-present, <code>GetObjects</code> lists everything and quoted identifiers work. The correction was
-posted on the PR and on #7180 the same evening, and the probe is now run twice on a fresh
-server so the second pass measures a populated database.</p>
-<h2>Trying it</h2>
-<pre><code class="language-sh">docker run -d -p 5432:5432 \
-  -e JAVA_OPTS=&quot;-Darcadedb.server.rootPassword=… -Darcadedb.server.defaultDatabases=adbc[adbc:adbc] \
-     -Darcadedb.server.plugins=Postgres:com.arcadedb.postgres.PostgresProtocolPlugin&quot; \
-  arcadedata/arcadedb:latest
-</code></pre>
-<pre><code class="language-python">import adbc_driver_postgresql.dbapi as pg
-from adbc_driver_postgresql import StatementOptions
-conn = pg.connect(&quot;postgresql://root:…@127.0.0.1:5432/adbc&quot;, autocommit=True)
-cur = conn.cursor()
-cur.adbc_statement.set_options(**{StatementOptions.USE_COPY.value: &quot;false&quot;})
-cur.execute(&quot;SELECT * FROM adbc_big&quot;)
-print(cur.fetch_arrow_table())
-</code></pre>
-<p>Until 26.10.1 is out, that needs the <code>26.10.1-SNAPSHOT</code> build. The ODBC route works on the
-released 26.9.1 today:</p>
-<pre><code class="language-python">import adbcbridge
-conn = adbcbridge.connect(uri=&quot;Driver=psqlodbcw.so;Server=127.0.0.1;Port=5432;Database=adbc;Uid=root;Pwd=…;BoolsAsChar=0;&quot;)
-</code></pre></article>
+<h2>The numbers</h2>
+<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
+<thead>
+<tr>
+<th>Run</th>
+<th style="text-align: right;">PostgreSQL 16 via psqlodbc</th>
+<th style="text-align: right;">SQLite via SQLiteODBC</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-09-06</td>
+<td style="text-align: right;">265 pass, 28 fail, 34 skip</td>
+<td style="text-align: right;">212 pass, 69 fail, 46 skip</td>
+</tr>
+<tr>
+<td>2026-09-15</td>
+<td style="text-align: right;">293 pass, 0 fail, 34 skip</td>
+<td style="text-align: right;">212 pass, 69 fail, 46 skip</td>
+</tr>
+</tbody>
+</table></div>
+<p>The 34 PostgreSQL skips are declared server limits: nanosecond precision, negative decimal
+scale, and a <code>23:59:59.999999999</code> that rounds to <code>24:00:00</code>. The SQLite failures are unchanged,
+test for test, because SQLiteODBC reports scale 0 and size 32 for every <code>TIME</code> and <code>TIMESTAMP</code>
+column whatever was declared, and SQLite has no decimal or float32 type; nothing there is the
+driver's to fix without guessing.</p>
+<p>Every other database in the compatibility matrix keeps its exact behaviour; 42 entries were
+run on the same build before the tag, and the two PostgreSQL test files now run in CI against
+a PostgreSQL 16 service on every push, on top of the Linux, macOS and Windows runs recorded on
+the pull request.</p>
+<h2>Also in 0.1.2, found by the Windows run</h2>
+<p>On Windows, PostgreSQL bulk ingest bound its array literals as narrow text, and the Unicode
+psqlodbc read those bytes through the ANSI code page: <code>héllo</code> was stored as <code>hÃ©llo</code>. The
+literals are now bound wide, as the row-at-a-time path always was. psqlodbc also receives
+<code>LFConversion=0</code> on Windows, where its default rewrites every LF in fetched text to CR LF;
+Linux and macOS never had that default.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
+database's ODBC driver on Linux, macOS and Windows and records each failure with its first
+error; the row for this database is at <a href="https://adbcbridge.org/matrix/#postgres">https://adbcbridge.org/matrix/#postgres</a>, and the
+validation-suite results, test by test, are in <code>tests/validation/RESULTS.md</code> of the repository.</p></article>
 </main>
 <footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>. Corrections and additions: <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/community/contributing.md">open an issue or a pull request</a> on the repository.</footer>
 </div>
