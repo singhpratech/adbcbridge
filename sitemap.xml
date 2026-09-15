@@ -91,4 +91,6 @@
   <url><loc>https://adbcbridge.org/db/yugabyte/</loc><lastmod>2026-09-05</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://adbcbridge.org/notes/arcadedb-fixed-the-pg-type-bootstrap-within-a-day/</loc><lastmod>2026-09-06</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://adbcbridge.org/notes/postgresql-declared-precision-validation-suite/</loc><lastmod>2026-09-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/omniload-adbcbridge-backend/</loc><lastmod>2026-09-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/psqlodbc-timestamptz-session-time-zone/</loc><lastmod>2026-09-15</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
 </urlset>

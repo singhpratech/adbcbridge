@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>An ADBC-over-ODBC backend for omniload, built on request — adbcBridge notes</title>
+<meta name="description" content="omniload&#x27;s maintainer asked whether adbcBridge could give the dlt-based loader ADBC and ODBC reach; the answer is a fourth SQL backend, contributed as a…">
+<link rel="canonical" href="https://adbcbridge.org/notes/omniload-adbcbridge-backend/">
+<link rel="alternate" type="application/atom+xml" title="adbcBridge notes" href="/notes/feed.xml">
+<meta property="og:type" content="article"><meta property="og:title" content="An ADBC-over-ODBC backend for omniload, built on request"><meta property="og:description" content="omniload&#x27;s maintainer asked whether adbcBridge could give the dlt-based loader ADBC and ODBC reach; the answer is a fourth SQL backend, contributed as a…"><meta property="og:url" content="https://adbcbridge.org/notes/omniload-adbcbridge-backend/"><meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="preload" href="/fonts/newsreader-normal-latin.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/public-sans-normal-latin.woff2" as="font" type="font/woff2" crossorigin><style>/* Newsreader, Public Sans, JetBrains Mono — SIL Open Font License 1.1; latin and latin-ext subsets, one variable file per face with a weight range, self-hosted. */@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}</style>
+<style>
+:root{--bg:#f6f8f7;--surface:#ffffff;--ink:#16202b;--muted:#5b6772;--line:#d8dedf;--teal:#146f6f;--teal-soft:#e3f1f0;--lamp:#d9843a;--code:#eef2f2;--night:#16202b}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}}
+:root[data-theme="dark"]{--bg:#10161d;--surface:#171f28;--ink:#e6ebee;--muted:#9aa6b0;--line:#2a3540;--teal:#4fc1b8;--teal-soft:#1a2f31;--lamp:#e0955a;--code:#1d2732;--night:#0b1015}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,sans-serif;--measure:66ch}
+a{color:var(--teal);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--teal) 40%,transparent)}
+a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+nav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:40px}
+.eyebrow{font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:600;margin-bottom:10px}
+.back{margin:0 0 18px;font-size:.92rem}.back a{color:var(--teal);text-decoration:none;font-weight:600;display:inline-block;min-height:24px;line-height:24px}.back a:hover{text-decoration:underline}
+h1{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:2.1rem;line-height:1.15;margin:0 0 .4rem;text-wrap:balance}
+h2{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.5rem;line-height:1.2;margin:2rem 0 .6rem}
+h3{font-family:"Newsreader",Georgia,serif;font-weight:500;font-size:1.25rem;margin:1.6rem 0 .5rem}
+.meta{color:var(--muted);font-size:.9rem;margin-bottom:28px}
+article{max-width:none}article p,article li,article blockquote{max-width:var(--measure,66ch)}article ul,article ol{padding-left:22px}.list article{max-width:none}.list{max-width:none}.list p{max-width:var(--measure,66ch)}
+.tw{overflow-x:auto;margin:14px 0;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.92rem}th,td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}th code{font-size:1em}.tw:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+th{font-size:.78rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--surface)}
+.filter{margin:0 0 6px}.filter input{width:100%;max-width:var(--measure,66ch);background:var(--surface);border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:9px 13px;font:inherit;font-size:.95rem}.filter p{color:var(--muted);font-size:.85rem;margin:6px 0 0}
+pre{background:var(--night);color:#dfe7ea;padding:16px 18px;border-radius:6px;overflow-x:auto;font:13.5px/1.55 "JetBrains Mono",ui-monospace,monospace;margin:14px 0}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92em}p code,li code{overflow-wrap:anywhere}pre code{background:none;padding:0;font-size:inherit}
+blockquote{border-left:3px solid var(--teal);margin:14px 0;padding:2px 16px;color:var(--muted)}
+.callout{background:var(--teal-soft);border-left:4px solid var(--teal);border-radius:0 8px 8px 0;margin:22px 0;padding:14px 18px;max-width:var(--measure,66ch)}.callout p{margin:0 0 10px}.callout p:last-child{margin-bottom:0}.callout code{background:var(--surface)}
+.list article{padding:22px 0;border-top:1px solid var(--line)}.list article:first-of-type{border-top:0}
+.list h2{margin:0 0 .3rem;font-size:1.35rem}.list h2 a{display:inline-block;padding:2px 0}.list p{margin:.3rem 0;color:var(--muted)}.list article[hidden]{display:none}
+.correct{margin-top:36px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:.92rem}
+footer{margin:64px 0 32px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer a{border:0;text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px;text-decoration-color:color-mix(in srgb,var(--teal) 55%,transparent)}
+footer a:hover,footer a:focus-visible{text-decoration-color:var(--teal);text-decoration-thickness:2px}
+article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
+.skip{position:absolute;left:-999px;top:8px;z-index:9;padding:8px 12px;border-radius:6px;background:var(--surface);color:var(--teal,var(--accent,#146f6f));border:1px solid var(--line,var(--rule,#d8dedf))}.skip:focus{left:8px}.sitenav{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-left:auto}.sitenav a{border:0;color:var(--muted);font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;padding:4px 2px;line-height:1.2;display:inline-block}.sitenav a:hover{color:var(--teal,var(--accent,inherit))}.sitenav a.on{color:var(--ink);font-weight:600}.sitenav a:focus-visible,.navmenu:focus-visible,.theme:focus-visible{outline:2px solid var(--teal,var(--accent,#146f6f));outline-offset:2px}.navmenu{display:none;margin-left:auto;min-width:44px;min-height:44px;padding:8px 14px;background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:8px;color:var(--ink);font:inherit;font-size:.95rem;font-family:"Public Sans",system-ui,sans-serif;cursor:pointer;align-items:center;justify-content:center}@media (max-width:760px){.navmenu{display:inline-flex;padding:8px 10px}.navmenu+.theme{margin-left:0}.sitenav{display:none;flex-basis:100%;width:100%;flex-direction:column;align-items:stretch;gap:0;margin:6px 0 0;border-top:1px solid var(--line,var(--rule,#d8dedf))}.sitenav.open{display:flex}.sitenav a{display:flex;align-items:center;min-height:44px;padding:10px 4px;border-bottom:1px solid var(--line,var(--rule,#d8dedf));font-size:1rem}nav:has(> .navmenu),header:has(> .navmenu),.topbar:has(> .navmenu),nav:has(> .sitenav),header:has(> .sitenav),.topbar:has(> .sitenav){flex-wrap:wrap}}.theme{background:none;border:1px solid var(--line,var(--rule,#d8dedf));border-radius:999px;padding:5px 7px;min-width:32px;min-height:32px;color:var(--muted);cursor:pointer;line-height:0;display:inline-flex;align-items:center;justify-content:center}.theme .moon{display:none}:root[data-theme="dark"] .theme .sun{display:none}:root[data-theme="dark"] .theme .moon{display:inline}@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:inline}}nav .brand,header .brand,.topbar .brand{display:flex;align-items:center;gap:10px;border:0;color:var(--ink);font-family:"Newsreader",Georgia,serif;font-weight:400;font-size:1.3rem;text-decoration:none;letter-spacing:0}nav .brand img,header .brand img,.topbar .brand img{height:30px;width:auto;margin:0}.brand small{font-family:"Public Sans",system-ui,sans-serif;font-weight:500;color:var(--muted);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;margin-left:2px}@media (max-width:760px){nav .brand,header .brand,.topbar .brand{font-size:1.15rem;gap:6px}nav .brand img,header .brand img,.topbar .brand img{height:24px}}</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="wrap">
+<nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
+<main id="main">
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-09-15</div><h1>An ADBC-over-ODBC backend for omniload, built on request</h1><p class="meta">omniload&#x27;s maintainer asked whether adbcBridge could give the dlt-based loader ADBC and ODBC reach; the answer is a fourth SQL backend, contributed as a pull request with tests on PostgreSQL, CrateDB and SQL Server.</p><h2>The request</h2>
+<p><a href="https://github.com/panodata/omniload">omniload</a> is a polyglot data loader built on
+dlt: one command line and one URI scheme to copy a table from any source to any
+destination, with dlt's incremental <code>append</code>, <code>merge</code> and <code>scd2</code> strategies. On
+2026-09-15 its maintainer asked on
+<a href="https://github.com/panodata/omniload/issues/138">panodata/omniload#138</a> whether
+adbcBridge could "support omniload and/or dlt in one way or another to bring ADBC
+support to the table", and after a same-day exchange settled on the shape: a dlt
+table-loader backend registered through dlt's own hook, "to make incremental loading
+work as usual", building on the unixODBC, PostgreSQL and SQL Server ODBC drivers the
+omniload container image already ships.</p>
+<h2>What was built</h2>
+<p><a href="https://github.com/panodata/omniload/pull/362">panodata/omniload#362</a> adds <code>--sql-backend adbcbridge</code> next to omniload's <code>sqlalchemy</code>,
+<code>pyarrow</code> and <code>connectorx</code> backends. SQLAlchemy still reflects the table and compiles
+the query, incremental cursor and all; adbcBridge then executes the compiled SQL through
+the database's ODBC driver and yields Arrow record batches, with no Python row in
+between. The ODBC connection string is derived from the source URI the user already
+gives, so a <code>postgresql://</code> or <code>mssql://</code> source needs nothing more inside the omniload
+image; CrateDB is reached over its PostgreSQL wire protocol; anything else takes an
+explicit <code>--sql-odbc-uri</code>. The <code>scd2</code> strategy rejects the backend the way it rejects
+the other Arrow-producing ones, because dlt computes the row hash it needs only for
+Python rows.</p>
+<h2>How it was tested</h2>
+<p>In omniload's own test harness, on Linux: the Docker-free unit suite with new tests for
+the option plumbing, the ODBC string derivation for each family, the driver-name override,
+separator quoting, the explicit-string error for an unknown scheme, idempotent registration,
+the router's forwarding and the <code>scd2</code> rejection; and, against containers, on PostgreSQL 18 a
+differential load against omniload's <code>pyarrow</code> backend over integer, double, text with
+non-ASCII characters, numeric, boolean, date, <code>timestamp(0)</code>, <code>timestamptz(3)</code> and
+timestamp columns, incremental <code>append</code> through the command line over three runs, <code>merge</code>
+with a primary key and an update, a page size of seven rows over 1,000 rows and a row limit,
+and a custom <code>query:</code> source; on CrateDB 5.10.11 an <code>append</code> load over the PostgreSQL wire
+protocol with an explicit ODBC string; on SQL Server 2022 a differential load against the
+<code>sqlalchemy</code> backend. All pass. omniload's container image was also built from the branch:
+with no override, a <code>postgresql://</code> source loads through the image's own registered
+PostgreSQL ODBC driver, and a <code>timestamp(0)</code> column arrives at second precision.</p>
+<h2>Why it matters</h2>
+<p>For omniload users this is Arrow straight from the driver on databases that have an
+ODBC driver and no native ADBC one, SQL Server first among them, and a second route on
+the PostgreSQL-wire servers where the native driver's <code>COPY</code> read path stops, such as
+CrateDB. For adbcBridge it is the first integration requested from outside, and the
+first time the driver is exercised inside another project's test harness rather than
+its own.</p>
+<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
+database's ODBC driver on Linux, macOS and Windows and records each failure with its first
+error; the rows for these databases are at <a href="https://adbcbridge.org/matrix/#postgres">https://adbcbridge.org/matrix/#postgres</a>,
+<a href="https://adbcbridge.org/matrix/#cratedb">https://adbcbridge.org/matrix/#cratedb</a> and <a href="https://adbcbridge.org/matrix/#mssql">https://adbcbridge.org/matrix/#mssql</a>, and the
+request and the pull request are linked above.</p></article>
+</main>
+<footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>. Corrections and additions: <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/community/contributing.md">open an issue or a pull request</a> on the repository.</footer>
+</div>
+<script>(function(){var root=document.documentElement,btn=document.getElementById('theme');if(!btn)return;function current(){var t=root.getAttribute('data-theme');if(t==='light'||t==='dark')return t;return(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}btn.addEventListener('click',function(){var next=current()==='dark'?'light':'dark';root.setAttribute('data-theme',next);try{localStorage.setItem('adbcbridge-theme',next);}catch(e){}});})();(function(){var b=document.querySelector('.navmenu');if(!b)return;var l=document.getElementById(b.getAttribute('aria-controls'));if(!l)return;function set(o){b.setAttribute('aria-expanded',o?'true':'false');l.classList.toggle('open',o);}b.addEventListener('click',function(){set(b.getAttribute('aria-expanded')!=='true');});l.addEventListener('click',function(e){if(e.target.closest('a'))set(false);});document.addEventListener('keydown',function(e){if(e.key==='Escape'&&b.getAttribute('aria-expanded')==='true'){set(false);b.focus();}});})();</script><script>document.querySelectorAll('pre').forEach(function(p){if(p.scrollWidth>p.clientWidth+1)p.tabIndex=0;});</script>
+</body>
+</html>

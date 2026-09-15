@@ -190,13 +190,13 @@ searches, so every binding can load it as <code>driver="odbc"</code> with nothin
 See <a href="#reference-connection-strings">Connection strings</a> and
 <a href="#reference-options">Options</a> for the details.</p>
 <h2 id="current-status">Current status</h2>
-<p>adbcBridge is early software — version <strong>0.1.2</strong>, published on
-<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.2">GitHub Releases</a>.</p>
+<p>adbcBridge is early software — version <strong>0.1.3</strong>, published on
+<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.3">GitHub Releases</a>.</p>
 <div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
 <thead>
 <tr>
 <th></th>
-<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changed native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05; 0.1.2 changes PostgreSQL temporal types and Windows array ingest, re-run on 42 Linux rows on 2026-09-15)</th>
+<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changed native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05; the 2026-09-15 releases changed PostgreSQL temporal types, Windows array ingest and the psqlodbc session time zone, re-run on 42 Linux rows and then on the 14 PostgreSQL-wire rows that day)</th>
 </tr>
 </thead>
 <tbody>
@@ -214,7 +214,7 @@ See <a href="#reference-connection-strings">Connection strings</a> and
 </tr>
 <tr>
 <td>Release</td>
-<td>v0.1.2: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; <code>SHA256SUMS</code>, its GPG signature, build provenance and an SBOM on the release (<a href="#community-security--verifying-a-download">how to verify</a>)</td>
+<td>v0.1.3: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; <code>SHA256SUMS</code>, its GPG signature, build provenance and an SBOM on the release (<a href="#community-security--verifying-a-download">how to verify</a>)</td>
 </tr>
 </tbody>
 </table></div>
@@ -416,13 +416,13 @@ searches, so every binding can load it as <code>driver="odbc"</code> with nothin
 See <a href="#reference-connection-strings">Connection strings</a> and
 <a href="#reference-options">Options</a> for the details.</p>
 <h2 id="current-status">Current status</h2>
-<p>adbcBridge is early software — version <strong>0.1.2</strong>, published on
-<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.2">GitHub Releases</a>.</p>
+<p>adbcBridge is early software — version <strong>0.1.3</strong>, published on
+<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.3">GitHub Releases</a>.</p>
 <div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
 <thead>
 <tr>
 <th></th>
-<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changed native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05; 0.1.2 changes PostgreSQL temporal types and Windows array ingest, re-run on 42 Linux rows on 2026-09-15)</th>
+<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changed native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05; the 2026-09-15 releases changed PostgreSQL temporal types, Windows array ingest and the psqlodbc session time zone, re-run on 42 Linux rows and then on the 14 PostgreSQL-wire rows that day)</th>
 </tr>
 </thead>
 <tbody>
@@ -440,7 +440,7 @@ See <a href="#reference-connection-strings">Connection strings</a> and
 </tr>
 <tr>
 <td>Release</td>
-<td>v0.1.2: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; <code>SHA256SUMS</code>, its GPG signature, build provenance and an SBOM on the release (<a href="#community-security--verifying-a-download">how to verify</a>)</td>
+<td>v0.1.3: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; <code>SHA256SUMS</code>, its GPG signature, build provenance and an SBOM on the release (<a href="#community-security--verifying-a-download">how to verify</a>)</td>
 </tr>
 </tbody>
 </table></div>
@@ -661,7 +661,7 @@ On Linux the assets are named <code>adbcbridge-&lt;tag&gt;-linux-x64.tar.gz</cod
 <code>adbcbridge-&lt;tag&gt;-linux-arm64.tar.gz</code> (ARM64), built on <code>manylinux_2_28</code> so they
 run on any reasonably recent glibc-based distribution.</p>
 <pre><code class="language-sh">sha256sum -c SHA256SUMS --ignore-missing     # SHA256SUMS is on the same release page
-tar xzf adbcbridge-v0.1.2-linux-x64.tar.gz
+tar xzf adbcbridge-v0.1.3-linux-x64.tar.gz
 # → linux-x64/libadbc_driver_odbc.so
 </code></pre>
 <p>The checksum file is signed by the release key (<code>SHA256SUMS.asc</code>); releases after v0.1.0 also
@@ -676,7 +676,7 @@ and <a href="#getting-started-install-linux--via-installsh"><code>install.sh</co
 you both the binding and the driver in one step:</p>
 <pre><code class="language-sh">pip install adbcbridge          # from PyPI
 # or, from a downloaded release wheel (the aarch64 wheel is named likewise):
-pip install adbcbridge-0.1.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+pip install adbcbridge-0.1.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 pip install adbc-driver-manager pyarrow
 </code></pre>
 <p>The wheel's own <code>adbcbridge.driver_path()</code> finds the bundled library, so nothing
@@ -977,7 +977,7 @@ manager registered it:</p>
 <code>osx-arm64/libadbc_driver_odbc.dylib</code>. It is built against unixODBC, for Apple
 Silicon.</p>
 <pre><code class="language-sh">shasum -a 256 -c SHA256SUMS --ignore-missing   # SHA256SUMS is on the same release page
-tar xzf adbcbridge-v0.1.2-osx-arm64.tar.gz
+tar xzf adbcbridge-v0.1.3-osx-arm64.tar.gz
 # → osx-arm64/libadbc_driver_odbc.dylib
 </code></pre>
 <h3 id="from-the-python-wheel-bundles-the-library">From the Python wheel (bundles the library)</h3>
@@ -987,7 +987,7 @@ release build passes <code>_PYTHON_HOST_PLATFORM=macosx-14.0-arm64</code>, which
 tag normalises to).</p>
 <pre><code class="language-sh">pip install adbcbridge          # from PyPI
 # or a downloaded release wheel:
-pip install adbcbridge-0.1.2-py3-none-macosx_14_0_arm64.whl
+pip install adbcbridge-0.1.3-py3-none-macosx_14_0_arm64.whl
 pip install adbc-driver-manager pyarrow
 </code></pre>
 <blockquote>
@@ -1113,14 +1113,14 @@ is kept on Windows too (the build sets it deliberately, so the file is
 <h3 id="from-the-github-release-prebuilt-library">From the GitHub Release (prebuilt library)</h3>
 <p>The Windows release asset is <code>adbcbridge-&lt;tag&gt;-win-x64.tar.gz</code>, containing
 <code>win-x64/libadbc_driver_odbc.dll</code>, built for 64-bit x86 with MSVC.</p>
-<p>The release page also carries <code>SHA256SUMS</code>; <code>Get-FileHash adbcbridge-v0.1.2-win-x64.tar.gz -Algorithm SHA256</code>
+<p>The release page also carries <code>SHA256SUMS</code>; <code>Get-FileHash adbcbridge-v0.1.3-win-x64.tar.gz -Algorithm SHA256</code>
 in PowerShell gives the value to compare. <a href="#community-security--verifying-a-download">Security</a>
 covers checking the file's GPG signature, and the provenance and SBOM that releases after v0.1.0 add.</p>
 <h3 id="from-the-python-wheel">From the Python wheel</h3>
 <p>The Windows wheel bundles the DLL. Install it, plus the ADBC client:</p>
 <pre><code>pip install adbcbridge          # from PyPI
 # or, from a downloaded release wheel:
-pip install adbcbridge-0.1.2-py3-none-win_amd64.whl
+pip install adbcbridge-0.1.3-py3-none-win_amd64.whl
 pip install adbc-driver-manager pyarrow
 </code></pre>
 <h3 id="from-source-and-the-cmake-install-layout">From source, and the <code>cmake --install</code> layout</h3>
@@ -1559,9 +1559,9 @@ Install the wheel for your platform:</p>
 <pre><code class="language-sh">pip install adbcbridge
 </code></pre>
 <p>That installs the wheel from <a href="https://pypi.org/project/adbcbridge/">PyPI</a>. The same
-wheels are attached to the GitHub Release (<code>adbcbridge-0.1.2-py3-none-&lt;platform&gt;.whl</code>),
+wheels are attached to the GitHub Release (<code>adbcbridge-0.1.3-py3-none-&lt;platform&gt;.whl</code>),
 so an offline machine can install one directly:</p>
-<pre><code class="language-sh">pip install ./adbcbridge-0.1.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+<pre><code class="language-sh">pip install ./adbcbridge-0.1.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 </code></pre>
 <p>Or install from a source checkout:</p>
 <pre><code class="language-sh">pip install ./python
@@ -2540,7 +2540,7 @@ on Unix, <code>odbc32</code> on Windows for ODBC; <code>adbc_driver_manager</cod
 </tr>
 <tr>
 <td>Version</td>
-<td><code>0.1.2</code> (early)</td>
+<td><code>0.1.3</code> (early)</td>
 </tr>
 <tr>
 <td>Edition</td>
@@ -2671,7 +2671,7 @@ adbc_core = &quot;0.24&quot;
 </code></pre>
 <p><strong>From git</strong> (a pinned tag, if you prefer the repository over the registry):</p>
 <pre><code class="language-toml">[dependencies]
-adbcbridge = { git = &quot;https://github.com/singhpratech/adbcbridge&quot;, tag = &quot;v0.1.2&quot; }
+adbcbridge = { git = &quot;https://github.com/singhpratech/adbcbridge&quot;, tag = &quot;v0.1.3&quot; }
 adbc_core = &quot;0.24&quot;
 </code></pre>
 <p><strong>From a local checkout</strong> (a build tree next to a source checkout is also found
@@ -3075,7 +3075,7 @@ the same way that adbcBridge's <code>adbc.odbc.max_bind_bytes</code> does, so th
 bounded identically.</p>
 <h2 id="known-limitations">Known limitations</h2>
 <ul>
-<li><strong>Early release (0.1.2).</strong> The API surface is small and may change. The
+<li><strong>Early release (0.1.3).</strong> The API surface is small and may change. The
   ADBC Driver Foundry validation suite runs against the driver from
   <code>tests/validation/</code> (latest results in <code>tests/validation/RESULTS.md</code>; driver
   defects it found are still being worked through); prebuilt driver tarballs
@@ -3104,7 +3104,7 @@ back — all through the ADBC traits.</p>
 <p><code>Cargo.toml</code>:</p>
 <pre><code class="language-toml">[package]
 name = &quot;adbcbridge-example&quot;
-version = &quot;0.1.2&quot;
+version = &quot;0.1.3&quot;
 edition = &quot;2021&quot;
 
 [dependencies]
@@ -3222,7 +3222,7 @@ statements, Arrow record batches — is the <code>Apache.Arrow.Adbc</code> API.<
 </tr>
 <tr>
 <td>Version</td>
-<td><code>0.1.2</code></td>
+<td><code>0.1.3</code></td>
 </tr>
 <tr>
 <td>Target frameworks</td>
@@ -3273,7 +3273,7 @@ automatically.</p>
 <hr />
 <h2 id="install">Install</h2>
 <h3 id="from-nugetorg">From nuget.org</h3>
-<pre><code class="language-sh">dotnet add package AdbcBridge --version 0.1.2
+<pre><code class="language-sh">dotnet add package AdbcBridge --version 0.1.3
 </code></pre>
 <p>The package carries the native library for <code>linux-x64</code>, <code>linux-arm64</code>, <code>osx-arm64</code>
 and <code>win-x64</code>, so nothing else needs installing beyond an ODBC driver for your database.</p>
@@ -3288,7 +3288,7 @@ mkdir -p localnuget
 dotnet nuget add source &quot;$PWD/localnuget&quot; --name adbcbridge-local
 
 # 3. Add the package to your project.
-dotnet add package AdbcBridge --version 0.1.2 --source adbcbridge-local
+dotnet add package AdbcBridge --version 0.1.3 --source adbcbridge-local
 </code></pre>
 <p>The release <code>.nupkg</code> is available on the project's GitHub Releases page at
 <a href="https://github.com/singhpratech/adbcbridge/releases">https://github.com/singhpratech/adbcbridge/releases</a>. The package's own
@@ -3842,7 +3842,7 @@ result.</p>
   &lt;ItemGroup&gt;
     &lt;!-- From nuget.org; for a release .nupkg instead, add a local source:
          dotnet nuget add source &quot;$PWD/localnuget&quot; --name adbcbridge-local --&gt;
-    &lt;PackageReference Include=&quot;AdbcBridge&quot; Version=&quot;0.1.2&quot; /&gt;
+    &lt;PackageReference Include=&quot;AdbcBridge&quot; Version=&quot;0.1.3&quot; /&gt;
   &lt;/ItemGroup&gt;
 
 &lt;/Project&gt;
@@ -3961,7 +3961,7 @@ connections, statements, <code>ArrowReader</code>, <code>VectorSchemaRoot</code>
 </tr>
 <tr>
 <td>version</td>
-<td><code>0.1.2</code></td>
+<td><code>0.1.3</code></td>
 </tr>
 <tr>
 <td>Automatic-Module-Name</td>
@@ -4070,7 +4070,7 @@ plugin's argument list. For example, with the Surefire test plugin:</p>
 <pre><code class="language-xml">&lt;dependency&gt;
   &lt;groupId&gt;org.adbcbridge&lt;/groupId&gt;
   &lt;artifactId&gt;adbcbridge&lt;/artifactId&gt;
-  &lt;version&gt;0.1.2&lt;/version&gt;
+  &lt;version&gt;0.1.3&lt;/version&gt;
 &lt;/dependency&gt;
 </code></pre>
 <p><code>adbc-core</code>, <code>adbc-driver-jni</code>, <code>arrow-vector</code> and <code>arrow-memory-netty</code> come in
@@ -4086,14 +4086,14 @@ generates a dependency-less POM, so declare the runtime dependencies alongside:<
     -Dfile=adbcbridge-0.1.2.jar \
     -DgroupId=org.adbcbridge \
     -DartifactId=adbcbridge \
-    -Dversion=0.1.2 \
+    -Dversion=0.1.3 \
     -Dpackaging=jar
 </code></pre>
 <pre><code class="language-xml">&lt;dependencies&gt;
   &lt;dependency&gt;
     &lt;groupId&gt;org.adbcbridge&lt;/groupId&gt;
     &lt;artifactId&gt;adbcbridge&lt;/artifactId&gt;
-    &lt;version&gt;0.1.2&lt;/version&gt;
+    &lt;version&gt;0.1.3&lt;/version&gt;
   &lt;/dependency&gt;
   &lt;!-- Only needed for a locally installed jar; Maven Central resolves them transitively. --&gt;
   &lt;dependency&gt;
@@ -4660,7 +4660,7 @@ through the SQLite ODBC driver, runs a query, and reads the Arrow result.</p>
   &lt;dependency&gt;
     &lt;groupId&gt;org.adbcbridge&lt;/groupId&gt;
     &lt;artifactId&gt;adbcbridge&lt;/artifactId&gt;
-    &lt;version&gt;0.1.2&lt;/version&gt;
+    &lt;version&gt;0.1.3&lt;/version&gt;
   &lt;/dependency&gt;
 
   &lt;!-- Only needed when adbcbridge was installed from a downloaded jar;
@@ -6973,6 +6973,12 @@ a roadmap item; see <a href="#roadmap">ROADMAP.md</a>.</p>
 <td>Allow adbcBridge to add its own ODBC connection keywords where it recognises the driver.</td>
 </tr>
 <tr>
+<td><code>adbc.odbc.utc_session</code></td>
+<td><code>true</code>/<code>false</code> (<code>1</code>/<code>0</code>)</td>
+<td><code>true</code></td>
+<td>On a PostgreSQL-wire connection (psqlodbc), run <code>SET TIME ZONE 'UTC'</code> at connect. psqlodbc hands a <code>timestamptz</code> over as the session's wall-clock time without its offset and sends a bound timestamp the same way, so zoned values are only correct when the session zone is UTC; on a server configured for another zone both reads and bulk ingest would be shifted by that zone's offset. <code>false</code> keeps the server's setting. Session-dependent SQL (<code>now()::text</code>, <code>date_trunc</code> on a <code>timestamptz</code>) then renders in UTC.</td>
+</tr>
+<tr>
 <td><code>adbc.odbc.delegate</code></td>
 <td><code>auto</code> / <code>never</code> / <code>always</code></td>
 <td><code>auto</code> (or <code>$ADBC_ODBC_DELEGATE</code>)</td>
@@ -8548,6 +8554,12 @@ MySQL-wire warehouse matches <code>myodbc</code> and then a server probe narrows
 <td>Vertica</td>
 <td><code>prefer_param_arrays</code></td>
 <td>Its client driver turns a bound array into one native bulk load, far ahead of multi-row INSERT on a column store</td>
+</tr>
+<tr>
+<td><code>psqlodbc</code> (any server)</td>
+<td>every PostgreSQL-wire database</td>
+<td><code>SET TIME ZONE 'UTC'</code> at connect (<code>adbc.odbc.utc_session</code>, default on)</td>
+<td>psqlodbc hands a <code>timestamptz</code> over as the session's wall-clock time with no offset in its <code>SQL_C_CHAR</code> form, and sends a bound timestamp as a zone-less literal the server reads in the session zone, so zoned values are only right when the session zone is UTC; on a server set to another zone every read and ingest was shifted by that zone's offset (found 2026-09-15 on a macOS cluster whose <code>initdb</code> took the host zone). A server that does not take the statement is left as it is</td>
 </tr>
 <tr>
 <td><code>psqlodbc</code> + <code>version()</code> = <code>postgresql …</code> and no fork marker</td>
@@ -11121,6 +11133,11 @@ time allows, and a reproduction contributed by anyone is welcome.</p>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>psqlodbc (16 and 18)</td>
+<td>Its <code>SQL_C_CHAR</code> conversion of a <code>timestamptz</code> column renders the session's wall-clock time and drops the offset the server sent (<code>2024-02-29 08:45:10.123</code> for <code>08:45:10.123-05</code>), and a bound <code>SQL_TYPE_TIMESTAMP</code> parameter is sent as a zone-less literal the server reads in the session zone; a client that wants instants must therefore run its sessions on UTC. Found 2026-09-15 on a PostgreSQL 16 cluster set to America/New_York; adbcBridge 0.1.3 runs <code>SET TIME ZONE 'UTC'</code> at connect (<code>adbc.odbc.utc_session</code>). Candidate for a psqlodbc report once the driver's intended behaviour for <code>SQL_C_CHAR</code> on <code>timestamptz</code> is checked against its <code>USE_ZONE</code> build option</td>
+<td><code>docs/reference/quirks.md</code> psqlodbc row; <a href="https://adbcbridge.org/notes/psqlodbc-timestamptz-session-time-zone/">notes page</a></td>
+</tr>
 <tr>
 <td>MariaDB Connector/ODBC ≥ 3.2 (Connector/C 3.4.9)</td>
 <td>A parameter array with a NULL <code>DATE</code> segfaults the connector; the array path also misreports MySQL's row count. adbcBridge routes those versions row by row (<code>no_param_arrays</code>).</td>

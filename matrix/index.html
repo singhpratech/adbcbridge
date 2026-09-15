@@ -129,8 +129,16 @@ const OSNAMES = {linux:'Linux', macos:'macOS arm64', windows:'Windows x64'};
 const NOTES = {
  "postgres": [
   {
+   "title": "An ADBC-over-ODBC backend for omniload, built on request",
+   "url": "/notes/omniload-adbcbridge-backend/"
+  },
+  {
    "title": "PostgreSQL columns declared with reduced precision now read at that precision",
    "url": "/notes/postgresql-declared-precision-validation-suite/"
+  },
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
   },
   {
    "title": "Which older engine releases pass the matrix entry unchanged",
@@ -141,7 +149,173 @@ const NOTES = {
    "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
   }
  ],
+ "cratedb": [
+  {
+   "title": "An ADBC-over-ODBC backend for omniload, built on request",
+   "url": "/notes/omniload-adbcbridge-backend/"
+  },
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "mssql": [
+  {
+   "title": "An ADBC-over-ODBC backend for omniload, built on request",
+   "url": "/notes/omniload-adbcbridge-backend/"
+  },
+  {
+   "title": "Which older engine releases pass the matrix entry unchanged",
+   "url": "/notes/older-releases-that-still-pass/"
+  },
+  {
+   "title": "Two ways a Go ODBC program dies before it prints anything",
+   "url": "/notes/go-odbc-and-arrow-finalizers/"
+  }
+ ],
+ "cockroachdb": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "yugabyte": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Two ways a Go ODBC program dies before it prints anything",
+   "url": "/notes/go-odbc-and-arrow-finalizers/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "timescaledb": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "citus": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "questdb": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "risingwave": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "materialize": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "opengauss": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "cloudberry": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
  "arcadedb": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
   {
    "title": "ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build",
    "url": "/notes/arcadedb-fixed-the-pg-type-bootstrap-within-a-day/"
@@ -159,83 +333,11 @@ const NOTES = {
    "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
   }
  ],
- "cockroachdb": [
-  {
-   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
-   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "materialize": [
-  {
-   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
-   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
-  },
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "questdb": [
-  {
-   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
-   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
-  },
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "risingwave": [
-  {
-   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
-   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
-  },
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "opengauss": [
-  {
-   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
-   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "cratedb": [
-  {
-   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
-   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
-  },
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
  "spanner": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
   {
    "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
    "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
@@ -250,6 +352,10 @@ const NOTES = {
   }
  ],
  "ydb": [
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
   {
    "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
    "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
@@ -389,16 +495,6 @@ const NOTES = {
   {
    "title": "Five Windows-only ODBC failures are one thing wearing different clothes",
    "url": "/notes/windows-ansi-code-page-three-disguises/"
-  }
- ],
- "mssql": [
-  {
-   "title": "Which older engine releases pass the matrix entry unchanged",
-   "url": "/notes/older-releases-that-still-pass/"
-  },
-  {
-   "title": "Two ways a Go ODBC program dies before it prints anything",
-   "url": "/notes/go-odbc-and-arrow-finalizers/"
   }
  ],
  "mariadb": [
@@ -549,16 +645,6 @@ const NOTES = {
    "url": "/notes/mariadb-connector-odbc-findings/"
   }
  ],
- "yugabyte": [
-  {
-   "title": "Two ways a Go ODBC program dies before it prints anything",
-   "url": "/notes/go-odbc-and-arrow-finalizers/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
  "mysql": [
   {
    "title": "Vendor macOS drivers are built for iODBC's four-byte SQLWCHAR",
@@ -577,24 +663,6 @@ const NOTES = {
   {
    "title": "Any text read as a timestamp comes back as today's date, under SQL_SUCCESS",
    "url": "/notes/opensearch-sql-odbc-findings/"
-  }
- ],
- "timescaledb": [
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "citus": [
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "cloudberry": [
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
   }
  ],
  "sqlite": [
