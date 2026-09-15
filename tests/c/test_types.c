@@ -44,7 +44,7 @@ static void TestClassifyTime(void) {
   CHECK_I64(c.kind, FETCH_TIME);
 
   // Fractional seconds: TIME_STRUCT has no sub-second field, so the value has
-  // to be fetched as text and parsed into time64.  1-6 digits -> time64[us].
+  // to be fetched as text and parsed: 1-3 digits -> time32[ms], 4-6 -> time64[us].
   c = Classify(SQL_TYPE_TIME, 15, 6, NULL);
   CHECK_I64(c.kind, FETCH_TIME64);
   CHECK_I64(c.c_type, SQL_C_CHAR);
@@ -53,6 +53,12 @@ static void TestClassifyTime(void) {
   CHECK_TRUE(c.elem_size >= 40);
 
   c = Classify(SQL_TYPE_TIME, 12, 3, NULL);
+  CHECK_I64(c.kind, FETCH_TIME_MS);
+  CHECK_I64(c.c_type, SQL_C_CHAR);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MILLI);
+  c = Classify(SQL_TYPE_TIME, 10, 1, NULL);
+  CHECK_I64(c.kind, FETCH_TIME_MS);
+  c = Classify(SQL_TYPE_TIME, 13, 4, NULL);
   CHECK_I64(c.kind, FETCH_TIME64);
   CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
 
@@ -116,6 +122,34 @@ static void TestClassifyTimestamp(void) {
   c = Classify(SQL_TYPE_TIMESTAMP_WITH_TIMEZONE, 35, 6, NULL);
   CHECK_I64(c.kind, FETCH_TIMESTAMP_TZ);
   CHECK_I64(c.c_type, SQL_C_CHAR);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
+
+  // The zoned path takes its unit from the scale too, up to microseconds.
+  c = Classify(SQL_TYPE_TIMESTAMP_WITH_TIMEZONE, 23, 3, NULL);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MILLI);
+  c = Classify(SQL_TYPE_TIMESTAMP_WITH_TIMEZONE, 21, 1, NULL);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MILLI);
+  c = Classify(SQL_SS_TIMESTAMPOFFSET, 30, 3, NULL);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MILLI);
+  // A zoned 0 / 19 is not believed by default ...
+  c = Classify(SQL_TYPE_TIMESTAMP_WITH_TIMEZONE, 19, 0, NULL);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
+
+  // ... nor a naive one; but a driver whose 0 / 19 is known to mean TIMESTAMP(0)
+  // (psqlodbc on PostgreSQL) reads as whole seconds, zoned or not.
+  struct OdbcReaderOptions trusted = kDefaultOpts;
+  trusted.timestamp_scale_zero_trusted = true;
+  c = Classify(SQL_TYPE_TIMESTAMP, 19, 0, &trusted);
+  CHECK_I64(c.kind, FETCH_TIMESTAMP);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_SECOND);
+  c = Classify(SQL_TYPE_TIMESTAMP_WITH_TIMEZONE, 19, 0, &trusted);
+  CHECK_I64(c.kind, FETCH_TIMESTAMP_TZ);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_SECOND);
+  // Trust covers the 19 only: SQLiteODBC's 0 / 32 stays at microseconds regardless.
+  c = Classify(SQL_TYPE_TIMESTAMP, 32, 0, &trusted);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
+  c = Classify(SQL_TYPE_TIMESTAMP, 26, 6, &trusted);
+  CHECK_I64(c.unit, NANOARROW_TIME_UNIT_MICRO);
 }
 
 static void TestClassifyStringy(void) {
@@ -250,14 +284,16 @@ static void CheckFormat(SQLSMALLINT sql_type, SQLULEN column_size, SQLSMALLINT d
 
 static void TestSchemaFormats(void) {
   CheckFormat(SQL_TYPE_TIME, 8, 0, "tts");                     // time32[s]
+  CheckFormat(SQL_TYPE_TIME, 12, 3, "ttm");                    // time32[ms]
   CheckFormat(SQL_TYPE_TIME, 15, 6, "ttu");                    // time64[us]
   CheckFormat(SQL_SS_TIME2, 16, 7, "ttn");                     // time64[ns]
-  CheckFormat(SQL_TYPE_TIMESTAMP, 19, 0, "tsu:");              // timestamp[s]
+  CheckFormat(SQL_TYPE_TIMESTAMP, 19, 0, "tsu:");              // untrusted 0/19 -> [us]
   CheckFormat(SQL_TYPE_TIMESTAMP, 23, 3, "tsm:");              // timestamp[ms]
   CheckFormat(SQL_TYPE_TIMESTAMP, 26, 6, "tsu:");              // timestamp[us]
   CheckFormat(SQL_TYPE_TIMESTAMP, 30, 9, "tsn:");              // timestamp[ns]
   CheckFormat(SQL_SS_TIMESTAMPOFFSET, 34, 7, "tsu:UTC");       // timestamp[us, UTC]
   CheckFormat(SQL_TYPE_TIMESTAMP_WITH_TIMEZONE, 35, 6, "tsu:UTC");
+  CheckFormat(SQL_TYPE_TIMESTAMP_WITH_TIMEZONE, 23, 3, "tsm:UTC"); // timestamp[ms, UTC]
   CheckFormat(SQL_TYPE_TIME_WITH_TIMEZONE, 14, 0, "u");        // string
   CheckFormat(SQL_GUID, 36, 0, "u");                           // string
   CheckFormat(SQL_INTERVAL_DAY_TO_SECOND, 0, 0, "u");          // string
@@ -333,7 +369,7 @@ static void TestParseTimeNanos(void) {
 
 static void CheckTimestamp(const char* s, int64_t expected) {
   int64_t v = -1;
-  if (!ParseTimestampUtcMicros(s, strlen(s), &v)) {
+  if (!ParseTimestampUtcScaled(s, strlen(s), 6, &v)) {
     fprintf(stderr, "FAIL: could not parse timestamp '%s'\n", s);
     adbc_test_failures++;
     return;
@@ -343,7 +379,7 @@ static void CheckTimestamp(const char* s, int64_t expected) {
 
 static void CheckTimestampInvalid(const char* s) {
   int64_t v = 0;
-  if (ParseTimestampUtcMicros(s, strlen(s), &v)) {
+  if (ParseTimestampUtcScaled(s, strlen(s), 6, &v)) {
     fprintf(stderr, "FAIL: accepted bad timestamp '%s' (-> %lld)\n", s, (long long)v);
     adbc_test_failures++;
   }
@@ -377,6 +413,32 @@ static void TestParseTimestamp(void) {
   CheckTimestampInvalid("2024/02/29 13:45:10");
 }
 
+// The zoned and millisecond paths parse text at the column's own unit.
+static void TestParseScaledUnits(void) {
+  int64_t v = -1;
+  const char* ts = "2024-02-29 13:45:10.123456+02:00";
+  CHECK_TRUE(ParseTimestampUtcScaled(ts, strlen(ts), 0, &v));
+  CHECK_I64(v, 1709207110LL);
+  CHECK_TRUE(ParseTimestampUtcScaled(ts, strlen(ts), 3, &v));
+  CHECK_I64(v, 1709207110123LL);
+  CHECK_TRUE(ParseTimestampUtcScaled(ts, strlen(ts), 6, &v));
+  CHECK_I64(v, 1709207110123456LL);
+  // Fewer digits than the unit are right-padded.
+  const char* ts1 = "2024-02-29 13:45:10.5+00";
+  CHECK_TRUE(ParseTimestampUtcScaled(ts1, strlen(ts1), 3, &v));
+  CHECK_I64(v, 1709214310500LL);
+  // Before the epoch, in milliseconds.
+  const char* ts2 = "1969-07-20 20:17:40.001Z";
+  CHECK_TRUE(ParseTimestampUtcScaled(ts2, strlen(ts2), 3, &v));
+  CHECK_I64(v, -14182939999LL);
+  const char* t = "13:45:31.123";
+  CHECK_TRUE(ParseTimeScaled(t, strlen(t), 3, &v));
+  CHECK_I64(v, 49531123LL);
+  const char* t2 = "23:59:59.9999";
+  CHECK_TRUE(ParseTimeScaled(t2, strlen(t2), 3, &v));
+  CHECK_I64(v, 86399999LL);
+}
+
 int main(void) {
   TestClassifyTime();
   TestClassifyTimestamp();
@@ -387,5 +449,6 @@ int main(void) {
   TestParseTime();
   TestParseTimeNanos();
   TestParseTimestamp();
+  TestParseScaledUnits();
   return TEST_MAIN_RESULT();
 }

@@ -85,6 +85,7 @@ Read-only connection options (via `AdbcConnectionGetOption`):
 |---|---|
 | `adbc.connection.autocommit` | `true`/`false` |
 | `adbc.connection.catalog` | current catalog (when connected) |
+| `adbc.connection.db_schema` | current schema (when connected), asked of the server in its own words: `current_schema()` on PostgreSQL-wire servers and DuckDB. ODBC has no attribute for it, so on a driver whose server has not been taught the option answers `NOT_FOUND`. |
 | `adbc.odbc.sqllen_32bit` | `true`/`false` |
 | `adbc.odbc.driver_name` | `SQL_DRIVER_NAME` of the backing ODBC driver (the underlying driver's file name; `ADBC_INFO_DRIVER_NAME` stays a stable identity for adbcBridge itself) |
 | `adbc.odbc.delegated_to` | the native driver serving the connection, or `odbc` |

@@ -304,9 +304,10 @@ enum OdbcFetchKind {
   FETCH_BINARY,   // SQL_C_BINARY -> binary
   FETCH_DATE,     // DATE_STRUCT -> date32
   FETCH_TIME,     // TIME_STRUCT -> time32[s]
+  FETCH_TIME_MS,  // SQL_C_CHAR "HH:MM:SS[.frac]" -> time32[ms]
   FETCH_TIME64,   // SQL_C_CHAR "HH:MM:SS[.frac]" -> time64[us|ns]
   FETCH_TIMESTAMP,// TIMESTAMP_STRUCT -> timestamp[s|ms|us|ns]
-  FETCH_TIMESTAMP_TZ,  // SQL_C_CHAR ISO-8601 with offset -> timestamp[us, UTC]
+  FETCH_TIMESTAMP_TZ,  // SQL_C_CHAR ISO-8601 with offset -> timestamp[s|ms|us, UTC]
   FETCH_TIMESTAMP_TEXT,// SQL_C_CHAR "YYYY-MM-DD hh:mm:ss[.frac]" -> timestamp[us]
   FETCH_DECIMAL,  // SQL_C_CHAR -> decimal128
   FETCH_BOOL_STR, // SQL_C_CHAR ('t'/'1'/'true') -> bool (PostgreSQL, DuckDB report bool as char)
@@ -525,13 +526,18 @@ static void UseTextBuffer(struct OdbcColumn* c, const struct OdbcReaderOptions* 
 // default: SQLiteODBC reports
 // scale 0 and size 32 for every TIMESTAMP column whatever its declared
 // precision, and truncating those to whole seconds would throw away the
-// milliseconds it does store.
+// milliseconds it does store.  The exception is a driver known to mean 0 / 19
+// (OdbcReaderOptions::timestamp_scale_zero_trusted: psqlodbc on PostgreSQL, where
+// that pair is exactly TIMESTAMP(0)), whose column reads as timestamp[s].
 static enum ArrowTimeUnit TimestampUnitForColumn(SQLSMALLINT decimal_digits,
-                                                 SQLULEN column_size) {
+                                                 SQLULEN column_size,
+                                                 bool scale_zero_trusted) {
   int digits = decimal_digits;
   if (digits <= 0) {
     if (column_size > 20 && column_size <= 29) {
       digits = (int)column_size - 20;
+    } else if (scale_zero_trusted && column_size == 19) {
+      return NANOARROW_TIME_UNIT_SECOND;
     } else {
       // Scale 0 with the plain "no fraction" size is not trustworthy either: MySQL
       // Connector/ODBC reports 0 / 19 for DATETIME(6).  Microseconds lose nothing;
@@ -543,6 +549,22 @@ static enum ArrowTimeUnit TimestampUnitForColumn(SQLSMALLINT decimal_digits,
   if (digits <= 3) return NANOARROW_TIME_UNIT_MILLI;
   if (digits <= 6) return NANOARROW_TIME_UNIT_MICRO;
   return NANOARROW_TIME_UNIT_NANO;
+}
+
+// The Arrow unit of a timestamp-with-time-zone column, which is read as text.  Only the
+// reported scale is used: the size of a zoned column counts its offset as well, and
+// drivers disagree about how, so it cannot stand in for a missing scale the way it does
+// above.  A scale of 0 is believed under the same condition as above.  The unit stops
+// at microseconds, which is what the text parser keeps -- SQL Server's
+// DATETIMEOFFSET(7) stays timestamp[us, UTC] as it always was.
+static enum ArrowTimeUnit ZonedTimestampUnitForColumn(SQLSMALLINT decimal_digits,
+                                                      SQLULEN column_size,
+                                                      bool scale_zero_trusted) {
+  if (decimal_digits > 0) {
+    return decimal_digits <= 3 ? NANOARROW_TIME_UNIT_MILLI : NANOARROW_TIME_UNIT_MICRO;
+  }
+  if (scale_zero_trusted && column_size == 19) return NANOARROW_TIME_UNIT_SECOND;
+  return NANOARROW_TIME_UNIT_MICRO;
 }
 
 static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn* c,
@@ -614,11 +636,14 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_SS_TIME2:
       // TIME_STRUCT has no sub-second field, so a column with fractional
       // seconds has to come across as text.  The reported scale picks the
-      // Arrow unit: 0 -> time32[s], 1-6 -> time64[us], 7-9 -> time64[ns].
-      if (c->decimal_digits > 0) {
+      // Arrow unit: 0 -> time32[s], 1-3 -> time32[ms], 4-6 -> time64[us],
+      // 7-9 -> time64[ns].
+      if (c->decimal_digits > 0 && c->decimal_digits <= 3) {
+        c->kind = FETCH_TIME_MS;
+        c->unit = NANOARROW_TIME_UNIT_MILLI;
+        UseTextBuffer(c, opts, 40);
+      } else if (c->decimal_digits > 0) {
         c->kind = FETCH_TIME64;
-        // time64 has no second or millisecond unit, so anything under a second
-        // rounds up to microseconds.
         c->unit = c->decimal_digits > 6 ? NANOARROW_TIME_UNIT_NANO : NANOARROW_TIME_UNIT_MICRO;
         UseTextBuffer(c, opts, 40);
       } else {
@@ -633,14 +658,16 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
     case SQL_SS_TIMESTAMPOFFSET:
     case SQL_TYPE_TIMESTAMP_WITH_TIMEZONE:
       c->kind = FETCH_TIMESTAMP_TZ;
-      c->unit = NANOARROW_TIME_UNIT_MICRO;
+      c->unit = ZonedTimestampUnitForColumn(c->decimal_digits, c->column_size,
+                                            opts->timestamp_scale_zero_trusted);
       UseTextBuffer(c, opts, 80);
       break;
     case SQL_TYPE_TIMESTAMP:
     case SQL_TIMESTAMP:
       if (IsTimestampWithTimezone(hstmt, icol)) {
         c->kind = FETCH_TIMESTAMP_TZ;
-        c->unit = NANOARROW_TIME_UNIT_MICRO;
+        c->unit = ZonedTimestampUnitForColumn(c->decimal_digits, c->column_size,
+                                              opts->timestamp_scale_zero_trusted);
         UseTextBuffer(c, opts, 80);
         break;
       }
@@ -655,7 +682,8 @@ static void ClassifyColumn(SQLHSTMT hstmt, SQLUSMALLINT icol, struct OdbcColumn*
       }
       c->kind = FETCH_TIMESTAMP; c->c_type = SQL_C_TYPE_TIMESTAMP;
       c->elem_size = sizeof(TIMESTAMP_STRUCT);
-      c->unit = TimestampUnitForColumn(c->decimal_digits, c->column_size);
+      c->unit = TimestampUnitForColumn(c->decimal_digits, c->column_size,
+                                       opts->timestamp_scale_zero_trusted);
       break;
     case SQL_GUID:
       // 36 characters, or 38 with the braces some drivers add.
@@ -835,6 +863,12 @@ static AdbcStatusCode BuildSchema(const struct OdbcColumn* cols, SQLSMALLINT n,
                                             NANOARROW_TIME_UNIT_SECOND, NULL),
                  error);
         goto named;
+      case FETCH_TIME_MS:
+        CHECK_NA(INTERNAL,
+                 ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIME32,
+                                            NANOARROW_TIME_UNIT_MILLI, NULL),
+                 error);
+        goto named;
       case FETCH_TIME64:
         CHECK_NA(INTERNAL,
                  ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIME64, c->unit, NULL),
@@ -848,8 +882,7 @@ static AdbcStatusCode BuildSchema(const struct OdbcColumn* cols, SQLSMALLINT n,
         goto named;
       case FETCH_TIMESTAMP_TZ:
         CHECK_NA(INTERNAL,
-                 ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIMESTAMP,
-                                            NANOARROW_TIME_UNIT_MICRO, "UTC"),
+                 ArrowSchemaSetTypeDateTime(f, NANOARROW_TYPE_TIMESTAMP, c->unit, "UTC"),
                  error);
         goto named;
       case FETCH_DECIMAL:
@@ -975,11 +1008,6 @@ static void ScanFractionDigits(const char* s, size_t len, size_t* pos, int want,
   }
 }
 
-// Scan ".ffffff" (or ",ffffff") into microseconds, truncating extra digits.
-static void ScanFraction(const char* s, size_t len, size_t* pos, int64_t* out_micros) {
-  ScanFractionDigits(s, len, pos, 6, out_micros);
-}
-
 static void SkipBlanks(const char* s, size_t len, size_t* pos) {
   while (*pos < len && (s[*pos] == ' ' || s[*pos] == '\t' || s[*pos] == '\0')) (*pos)++;
 }
@@ -1008,9 +1036,10 @@ static bool ParseTimeScaled(const char* s, size_t len, int frac_digits, int64_t*
   return true;
 }
 
-// "YYYY-MM-DD[ T]HH:MM[:SS[.frac]][Z|(+|-)HH[:]MM]" -> microseconds since the
-// Unix epoch in UTC.  A missing offset is taken as UTC.
-static bool ParseTimestampUtcMicros(const char* s, size_t len, int64_t* out) {
+// "YYYY-MM-DD[ T]HH:MM[:SS[.frac]][Z|(+|-)HH[:]MM]" -> units of 10^-`frac_digits`
+// seconds since the Unix epoch in UTC (`frac_digits` 0, 3 or 6 for timestamp[s], [ms]
+// and [us]; extra digits are truncated).  A missing offset is taken as UTC.
+static bool ParseTimestampUtcScaled(const char* s, size_t len, int frac_digits, int64_t* out) {
   size_t p = 0;
   int64_t y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0, frac = 0, offset_secs = 0;
   SkipBlanks(s, len, &p);
@@ -1032,7 +1061,7 @@ static bool ParseTimestampUtcMicros(const char* s, size_t len, int64_t* out) {
       p++;
       if (!ScanUInt(s, len, &p, 2, &sec)) return false;
     }
-    ScanFraction(s, len, &p, &frac);
+    ScanFractionDigits(s, len, &p, frac_digits, &frac);
   }
   SkipBlanks(s, len, &p);
   if (p < len && (s[p] == 'Z' || s[p] == 'z')) {
@@ -1055,8 +1084,20 @@ static bool ParseTimestampUtcMicros(const char* s, size_t len, int64_t* out) {
   if (p != len) return false;
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || sec > 59) return false;
   int64_t secs = DaysFromCivil(y, (unsigned)mo, (unsigned)d) * 86400 + h * 3600 + mi * 60 + sec;
-  *out = (secs - offset_secs) * 1000000LL + frac;
+  int64_t scale = 1;
+  for (int i = 0; i < frac_digits; i++) scale *= 10;
+  *out = (secs - offset_secs) * scale + frac;
   return true;
+}
+
+// Fractional digits an Arrow unit keeps: 0, 3, 6 or 9.
+static int UnitFractionDigits(enum ArrowTimeUnit unit) {
+  switch (unit) {
+    case NANOARROW_TIME_UNIT_SECOND: return 0;
+    case NANOARROW_TIME_UNIT_MILLI: return 3;
+    case NANOARROW_TIME_UNIT_MICRO: return 6;
+    default: return 9;
+  }
 }
 
 // Transcode a buffer of n SQLWCHAR units into `o`, returning the number of bytes
@@ -1660,10 +1701,10 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
       CHECK_NA(INTERNAL, ArrowArrayAppendInt(arr, t->hour * 3600 + t->minute * 60 + t->second), error);
       break;
     }
+    case FETCH_TIME_MS:
     case FETCH_TIME64: {
       int64_t v = 0;
-      if (!ParseTimeScaled((const char*)data, len,
-                           c->unit == NANOARROW_TIME_UNIT_NANO ? 9 : 6, &v)) {
+      if (!ParseTimeScaled((const char*)data, len, UnitFractionDigits(c->unit), &v)) {
         InternalAdbcSetError(error, "Could not parse time value '%.*s' for column %s", (int)len,
                              (const char*)data, c->name);
         return ADBC_STATUS_INVALID_DATA;
@@ -1675,9 +1716,10 @@ static AdbcStatusCode AppendValue(struct OdbcReader* r, SQLSMALLINT i, SQLULEN r
     case FETCH_TIMESTAMP_TEXT: {
       // Same parser for both: a text timestamp without an offset is already local, so
       // it lands unshifted in a naive timestamp[us] (FETCH_TIMESTAMP_TEXT), while one
-      // that carries an offset is normalised to UTC (FETCH_TIMESTAMP_TZ).
+      // that carries an offset is normalised to UTC (FETCH_TIMESTAMP_TZ).  The unit is
+      // the column's (s, ms or us; see ZonedTimestampUnitForColumn).
       int64_t v = 0;
-      if (!ParseTimestampUtcMicros((const char*)data, len, &v)) {
+      if (!ParseTimestampUtcScaled((const char*)data, len, UnitFractionDigits(c->unit), &v)) {
         InternalAdbcSetError(error, "Could not parse timestamp value '%.*s' for column %s",
                              (int)len, (const char*)data, c->name);
         return ADBC_STATUS_INVALID_DATA;
@@ -1766,7 +1808,8 @@ static int FixedArrowWidth(const struct OdbcColumn* c) {
   if (w) return w;
   switch (c->kind) {
     case FETCH_DATE:
-    case FETCH_TIME: return 4;
+    case FETCH_TIME:
+    case FETCH_TIME_MS: return 4;
     case FETCH_TIMESTAMP:
     case FETCH_TIMESTAMP_TZ:
     case FETCH_TIMESTAMP_TEXT:
@@ -1837,8 +1880,8 @@ static AdbcStatusCode BulkAppendColumn(struct OdbcReader* r, SQLSMALLINT i, SQLU
     case FETCH_DATE: case FETCH_TIME: case FETCH_TIMESTAMP:
       break;
     default:
-      // FETCH_DECIMAL / FETCH_TIME64 / FETCH_TIMESTAMP_TZ parse text per value;
-      // the parse dominates, so there is nothing for a bulk path to save.
+      // FETCH_DECIMAL / FETCH_TIME_MS / FETCH_TIME64 / FETCH_TIMESTAMP_TZ parse text
+      // per value; the parse dominates, so there is nothing for a bulk path to save.
       return ADBC_STATUS_NOT_IMPLEMENTED;
   }
 

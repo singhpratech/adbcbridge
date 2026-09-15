@@ -19,16 +19,18 @@
 
 # Validation results
 
-Two backends, one driver build, run on 2026-09-06. The SQLite run is the
-re-measure of the 2026-08-21 baseline below; the PostgreSQL run is new and is
-the one that separates driver behaviour from what SQLiteODBC cannot report.
+Two backends, one driver build, last run on 2026-09-15 with the six PostgreSQL
+findings of the 2026-09-06 run (P1–P4, P7, P8) fixed. The PostgreSQL run now
+passes every test the suite can run there; the SQLite run is unchanged, its
+remaining failures being what SQLiteODBC cannot report (see the 2026-09-06
+analysis below).
 
 ## Run provenance
 
 | | SQLite | PostgreSQL |
 |---|---|---|
 | Suite | `adbc-drivers/validation` @ `b94961224b744203b5070ae809a98a07727b92ef` (2026-09-04) | same |
-| Driver | adbcbridge @ `f262fef`, Debug build, `build/libadbc_driver_odbc.so` | same |
+| Driver | adbcbridge @ `02106f9` (2026-09-15; the 2026-09-06 columns below were `f262fef`), Debug build, `build/libadbc_driver_odbc.so` | same |
 | Backend | SQLite 3 via SQLiteODBC (`libsqlite3odbc.so`), file-backed database | PostgreSQL 16 (compat compose service) via psqlodbc 16 |
 | Quirks | `quirks.OdbcSqliteQuirks` (`--vendor-version odbc_sqlite`) | `quirks.OdbcPostgresQuirks` (`--vendor-version odbc_postgres`) |
 | Overrides | `queries/odbc_sqlite/` (typed datetime literals, no TIMESTAMPTZ) | `queries/odbc_postgres/` (BYTEA and `decode()` for binary, nanosecond and negative-scale skips) |
@@ -38,16 +40,39 @@ the one that separates driver behaviour from what SQLiteODBC cannot report.
 
 ## Summary
 
-| Status | SQLite 2026-08-21 | SQLite 2026-09-06 | PostgreSQL 2026-09-06 |
-|---|---:|---:|---:|
-| PASS | 192 | 212 | 265 |
-| FAIL | 88 | 69 | 28 |
-| SKIP | 46 | 46 | 34 |
-| XFAIL | 1 | 0 | 0 |
-| **Total** | **327** | **327** | **327** |
+| Status | SQLite 2026-08-21 | SQLite 2026-09-06 | SQLite 2026-09-15 | PostgreSQL 2026-09-06 | PostgreSQL 2026-09-15 |
+|---|---:|---:|---:|---:|---:|
+| PASS | 192 | 212 | 212 | 265 | 293 |
+| FAIL | 88 | 69 | 69 | 28 | 0 |
+| SKIP | 46 | 46 | 46 | 34 | 34 |
+| XFAIL | 1 | 0 | 0 | 0 | 0 |
+| **Total** | **327** | **327** | **327** | **327** | **327** |
 
-No test that passed on 2026-08-21 fails now. The former XFAIL
-(`test_parameter_schema`, D14) passes.
+No test that passed on an earlier run fails now. On PostgreSQL the 34 skips are
+the declared backend limitations listed below (nanosecond precision, negative
+decimal scale, the `24:00:00` rounding); on SQLite the 69 failures are the same
+69 as on 2026-09-06, test for test.
+
+## What changed since 2026-09-06
+
+The six PostgreSQL findings are fixed, in one change to `src/` (`02106f9`):
+
+| Finding | Fix |
+|---|---|
+| P1 | `TimestampUnitForColumn()` believes scale 0 / size 19 as `timestamp[s]` on a driver that is known to mean it — `timestamp_scale_zero_trusted`, set for psqlodbc on PostgreSQL itself, where the pair is exactly `TIMESTAMP(0)`. Every other driver keeps the microsecond default, so MySQL Connector/ODBC's 0 / 19 for `DATETIME(6)` still reads losslessly. The gate is the inverse of the one first proposed (a MySQL exception) because it is the safe direction: a wrong "seconds" drops data, a wrong "microseconds" does not. |
+| P2 | The zoned path takes its unit from the reported scale (`ZonedTimestampUnitForColumn()`): 1–3 → `timestamp[ms, UTC]`, 4–6 → `[us, UTC]`, 0 → `[s, UTC]` under the same trust. The text parser scales to the unit. Applies to queries, `ExecuteSchema` and `GetTableSchema` alike, since all three classify through the same function. |
+| P3 | Ingest DDL on PostgreSQL spells `TIMESTAMP(n)` for a zone-less Arrow timestamp and `TIMESTAMP(n) WITH TIME ZONE` for a zoned one (`ddl_timestamp_type_format` / `ddl_timestamptz_type_format`), `n` from the Arrow unit, capped at 6. |
+| P4 | `TIME` with scale 1–3 reads as `time32[ms]` (new `FETCH_TIME_MS` kind); ingest DDL spells `TIME(n)` for every unit on PostgreSQL, `TIME(0)` included, because a bare PostgreSQL `TIME` is `TIME(6)`. |
+| P7 | `adbc.connection.db_schema` is answered with `SELECT current_schema()` on PostgreSQL-wire servers and DuckDB; elsewhere it is `NOT_FOUND`, since ODBC has no attribute for it. |
+| P8 | `GetObjects(depth=DB_SCHEMAS)` fills the catalog from `SQL_ATTR_CURRENT_CATALOG` on the rows psqlodbc's `SQLTables(SQL_ALL_SCHEMAS)` leaves NULL. |
+
+The PostgreSQL-only quirks are keyed on the same test the array-ingest path
+uses — a PostgreSQL `version()` banner with no fork's marker, and neither YDB
+nor Cloud Spanner — so the other PostgreSQL-wire servers in the compatibility
+matrix (CockroachDB, YugabyteDB, CrateDB, QuestDB, Materialize, ...) keep the
+behaviour they had. All 42 compatibility-matrix entries reachable on the
+measuring machine passed on the same build, and `tests/test_postgres.py` now
+pins the six behaviours in CI against a PostgreSQL 16 service.
 
 ## What changed since 2026-08-21
 
@@ -64,11 +89,12 @@ and `timestamptz(3)` as size 23 / scale 3.
 
 Remaining SQLite failures by finding: D10 6, D12 3, D13 24, V1 4, V2 4, V3 5, V4 7, V5 4, V6 6, V7 1, V8 5.
 
-## PostgreSQL findings (driver, fixable in `src/`)
+## PostgreSQL findings of 2026-09-06 (all fixed 2026-09-15)
 
-Every PostgreSQL failure is the driver's. Backend limitations (nanosecond
-precision, negative decimal scale, `24:00:00` from a rounded nanosecond time)
-are declared as query overrides rather than counted.
+Every PostgreSQL failure on 2026-09-06 was the driver's; the table is kept as
+the record of what was found and where it was fixed. Backend limitations
+(nanosecond precision, negative decimal scale, `24:00:00` from a rounded
+nanosecond time) are declared as query overrides rather than counted.
 
 | Finding | Tests | What | Where |
 |---|---:|---|---|
@@ -515,45 +541,45 @@ Statuses are as reported by pytest. `Finding` links each non-passing test to
 the sections above (SQLite: D/V findings from the baseline; PostgreSQL: P
 findings).
 
-### SQLite (2026-09-06)
+### SQLite (2026-09-15)
 
 <!-- BEGIN GENERATED TABLE sqlite -->
 | Module | Test | Status | Finding | Detail |
 |---|---|---|---|---|
-| TestConnection | `test_current_catalog` | PASS | - |  |
-| TestConnection | `test_current_db_schema` | PASS | - |  |
-| TestConnection | `test_get_info` | PASS | - |  |
-| TestConnection | `test_get_info_arrow_version` | PASS | - |  |
-| TestConnection | `test_get_objects_catalog` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_catalog` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_column_name` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_schema` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_table` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_table_name` | PASS | - |  |
-| TestConnection | `test_get_objects_column_not_exist` | PASS | - |  |
-| TestConnection | `test_get_objects_column_present` | PASS | - |  |
-| TestConnection | `test_get_objects_column_xdbc` | PASS | - |  |
-| TestConnection | `test_get_objects_constraints_check` | SKIP | - | not implemented |
-| TestConnection | `test_get_objects_constraints_foreign` | PASS | - |  |
-| TestConnection | `test_get_objects_constraints_primary` | PASS | - |  |
-| TestConnection | `test_get_objects_constraints_unique` | SKIP | - | not implemented |
-| TestConnection | `test_get_objects_schema` | PASS | - |  |
-| TestConnection | `test_get_objects_table_exact_table` | PASS | - |  |
-| TestConnection | `test_get_objects_table_invalid_catalog` | PASS | - |  |
-| TestConnection | `test_get_objects_table_invalid_schema` | PASS | - |  |
-| TestConnection | `test_get_objects_table_invalid_table` | PASS | - |  |
-| TestConnection | `test_get_objects_table_not_exist` | PASS | - |  |
-| TestConnection | `test_get_objects_table_present` | PASS | - |  |
-| TestConnection | `test_get_statistics` | SKIP | - | connection_get_statistics not supported |
-| TestConnection | `test_get_table_schema_catalog` | SKIP | - | secondary_catalog_schema not supported |
-| TestConnection | `test_get_table_schema_not_found` | PASS | - |  |
-| TestConnection | `test_get_table_schema_schema` | SKIP | - | secondary_schema not supported |
-| TestConnection | `test_set_current_catalog` | SKIP | - | not implemented |
-| TestConnection | `test_set_current_schema` | SKIP | - | not implemented |
-| TestConnection | `test_unknown_option` | PASS | - |  |
+| TestConnection | `test_current_catalog[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_current_db_schema[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_info[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_info_arrow_version[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_catalog[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_catalog[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_column_name[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_schema[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_table[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_table_name[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_not_exist[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_present[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_xdbc[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_constraints_check[odbc_sqlite:3]` | SKIP | - | not implemented |
+| TestConnection | `test_get_objects_constraints_foreign[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_constraints_primary[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_constraints_unique[odbc_sqlite:3]` | SKIP | - | not implemented |
+| TestConnection | `test_get_objects_schema[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_exact_table[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_invalid_catalog[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_invalid_schema[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_invalid_table[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_not_exist[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_present[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_statistics[odbc_sqlite:3]` | SKIP | - | connection_get_statistics not supported |
+| TestConnection | `test_get_table_schema_catalog[odbc_sqlite:3]` | SKIP | - | secondary_catalog_schema not supported |
+| TestConnection | `test_get_table_schema_not_found[odbc_sqlite:3]` | PASS | - |  |
+| TestConnection | `test_get_table_schema_schema[odbc_sqlite:3]` | SKIP | - | secondary_schema not supported |
+| TestConnection | `test_set_current_catalog[odbc_sqlite:3]` | SKIP | - | not implemented |
+| TestConnection | `test_set_current_schema[odbc_sqlite:3]` | SKIP | - | not implemented |
+| TestConnection | `test_unknown_option[odbc_sqlite:3]` | PASS | - |  |
 | TestIngest | `test_append[ingest/string]` | PASS | - |  |
 | TestIngest | `test_append_fail[ingest/string]` | PASS | - |  |
-| TestIngest | `test_catalog` | SKIP | - | not implemented |
+| TestIngest | `test_catalog[odbc_sqlite:3]` | SKIP | - | not implemented |
 | TestIngest | `test_create[ingest/binary]` | PASS | - |  |
 | TestIngest | `test_create[ingest/binary_view]` | PASS | - |  |
 | TestIngest | `test_create[ingest/boolean]` | PASS | - |  |
@@ -591,16 +617,78 @@ findings).
 | TestIngest | `test_create_multiple_batches[ingest/string]` | PASS | - |  |
 | TestIngest | `test_createappend[ingest/string]` | PASS | - |  |
 | TestIngest | `test_createappend_schema_mismatch[ingest/string]` | PASS | - |  |
-| TestIngest | `test_ingest_no_parameters` | PASS | - |  |
+| TestIngest | `test_ingest_no_parameters[odbc_sqlite:3]` | PASS | - |  |
 | TestIngest | `test_ingest_then_query[ingest/string]` | PASS | - |  |
-| TestIngest | `test_many_columns` | PASS | - |  |
-| TestIngest | `test_not_null` | SKIP | - | not implemented |
+| TestIngest | `test_many_columns[odbc_sqlite:3]` | PASS | - |  |
+| TestIngest | `test_not_null[odbc_sqlite:3]` | SKIP | - | not implemented |
 | TestIngest | `test_replace[ingest/string]` | PASS | - |  |
 | TestIngest | `test_replace_catalog[ingest/string]` | SKIP | - | not implemented |
 | TestIngest | `test_replace_noop[ingest/string]` | PASS | - |  |
 | TestIngest | `test_replace_schema[ingest/string]` | SKIP | - | not implemented |
-| TestIngest | `test_schema` | SKIP | - | not implemented |
+| TestIngest | `test_schema[odbc_sqlite:3]` | SKIP | - | not implemented |
 | TestIngest | `test_temporary[ingest/string]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/binary]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/boolean]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/date]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/decimal]` | FAIL | V3 | AssertionError: Field types do not match: expected res (decimal128(10, 2)) != actual res (double) |
+| TestQuery | `test_execute_schema[type/select/float32]` | FAIL | V4 | AssertionError: Field types do not match: expected res (float) != actual res (double) |
+| TestQuery | `test_execute_schema[type/select/float64]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/int16]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/int32]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/int64]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/string]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/time]` | FAIL | D12 | AssertionError: Field types do not match: expected res (time64[us]) != actual res (time32[s]) |
+| TestQuery | `test_execute_schema[type/select/timestamp0]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[s]) != actual res (timestamp[us]) |
+| TestQuery | `test_execute_schema[type/select/timestamp0tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_execute_schema[type/select/timestamp1]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
+| TestQuery | `test_execute_schema[type/select/timestamp1tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_execute_schema[type/select/timestamp2]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
+| TestQuery | `test_execute_schema[type/select/timestamp2tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_execute_schema[type/select/timestamp3]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
+| TestQuery | `test_execute_schema[type/select/timestamp3tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_execute_schema[type/select/timestamp4]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp4tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_execute_schema[type/select/timestamp5]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp5tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_execute_schema[type/select/timestamp6]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp6tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_execute_schema[type/select/timestamp7]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
+| TestQuery | `test_execute_schema[type/select/timestamp7tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_execute_schema[type/select/timestamp8]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
+| TestQuery | `test_execute_schema[type/select/timestamp8tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_execute_schema[type/select/timestamp9]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
+| TestQuery | `test_execute_schema[type/select/timestamp9tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/binary]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/boolean]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/date]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/decimal]` | FAIL | V3 | AssertionError: Field types do not match: expected res (decimal128(10, 2)) != actual res (double) |
+| TestQuery | `test_get_table_schema[type/select/float32]` | FAIL | V4 | AssertionError: Field types do not match: expected res (float) != actual res (double) |
+| TestQuery | `test_get_table_schema[type/select/float64]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/int16]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/int32]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/int64]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/string]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/time]` | FAIL | D12 | AssertionError: Field types do not match: expected res (time64[us]) != actual res (time32[s]) |
+| TestQuery | `test_get_table_schema[type/select/timestamp0]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[s]) != actual res (timestamp[us]) |
+| TestQuery | `test_get_table_schema[type/select/timestamp0tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/timestamp1]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
+| TestQuery | `test_get_table_schema[type/select/timestamp1tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/timestamp2]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
+| TestQuery | `test_get_table_schema[type/select/timestamp2tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/timestamp3]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
+| TestQuery | `test_get_table_schema[type/select/timestamp3tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/timestamp4]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp4tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/timestamp5]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp5tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/timestamp6]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp6tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/timestamp7]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
+| TestQuery | `test_get_table_schema[type/select/timestamp7tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/timestamp8]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
+| TestQuery | `test_get_table_schema[type/select/timestamp8tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
+| TestQuery | `test_get_table_schema[type/select/timestamp9]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
+| TestQuery | `test_get_table_schema[type/select/timestamp9tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_lint_query[ingest/binary]` | PASS | - |  |
 | TestQuery | `test_lint_query[ingest/binary_view]` | PASS | - |  |
 | TestQuery | `test_lint_query[ingest/boolean]` | PASS | - |  |
@@ -703,8 +791,6 @@ findings).
 | TestQuery | `test_lint_query[type/select/timestamp8tz]` | PASS | - |  |
 | TestQuery | `test_lint_query[type/select/timestamp9]` | PASS | - |  |
 | TestQuery | `test_lint_query[type/select/timestamp9tz]` | PASS | - |  |
-| TestQuery | `test_query_bind_dictionary[type/bind/large_string]` | PASS | - |  |
-| TestQuery | `test_query_bind_dictionary[type/bind/string]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/binary]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/binary_view]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/boolean]` | PASS | - |  |
@@ -746,148 +832,88 @@ findings).
 | TestQuery | `test_query[type/literal/time]` | FAIL | V2 | AssertionError: Field types do not match: expected res (time64[us]) != actual res (int32) |
 | TestQuery | `test_query[type/literal/timestamp]` | FAIL | V1 | adbc_driver_manager.OperationalError: UNKNOWN: [ODBC] SQLExecDirect failed |
 | TestQuery | `test_query[type/literal/timestamptz]` | FAIL | V1 | adbc_driver_manager.OperationalError: UNKNOWN: [ODBC] SQLExecDirect failed |
-| TestQuery | `test_execute_schema[type/select/binary]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/binary]` | PASS | - |  |
 | TestQuery | `test_query[type/select/binary]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/boolean]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/boolean]` | PASS | - |  |
 | TestQuery | `test_query[type/select/boolean]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/date]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/date]` | PASS | - |  |
 | TestQuery | `test_query[type/select/date]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/decimal]` | FAIL | V3 | AssertionError: Field types do not match: expected res (decimal128(10, 2)) != actual res (double) |
-| TestQuery | `test_get_table_schema[type/select/decimal]` | FAIL | V3 | AssertionError: Field types do not match: expected res (decimal128(10, 2)) != actual res (double) |
 | TestQuery | `test_query[type/select/decimal]` | FAIL | V3 | AssertionError: Field types do not match: expected res (decimal128(10, 2)) != actual res (double) |
-| TestQuery | `test_execute_schema[type/select/float32]` | FAIL | V4 | AssertionError: Field types do not match: expected res (float) != actual res (double) |
-| TestQuery | `test_get_table_schema[type/select/float32]` | FAIL | V4 | AssertionError: Field types do not match: expected res (float) != actual res (double) |
 | TestQuery | `test_query[type/select/float32]` | FAIL | V4 | AssertionError: Field types do not match: expected res (float) != actual res (double) |
-| TestQuery | `test_execute_schema[type/select/float64]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/float64]` | PASS | - |  |
 | TestQuery | `test_query[type/select/float64]` | FAIL | V8 | AssertionError: Tables do not match! Diff: |
-| TestQuery | `test_execute_schema[type/select/int16]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/int16]` | PASS | - |  |
 | TestQuery | `test_query[type/select/int16]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/int32]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/int32]` | PASS | - |  |
 | TestQuery | `test_query[type/select/int32]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/int64]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/int64]` | PASS | - |  |
 | TestQuery | `test_query[type/select/int64]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/string]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/string]` | PASS | - |  |
 | TestQuery | `test_query[type/select/string]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/time]` | FAIL | D12 | AssertionError: Field types do not match: expected res (time64[us]) != actual res (time32[s]) |
-| TestQuery | `test_get_table_schema[type/select/time]` | FAIL | D12 | AssertionError: Field types do not match: expected res (time64[us]) != actual res (time32[s]) |
 | TestQuery | `test_query[type/select/time]` | FAIL | D12 | AssertionError: Field types do not match: expected res (time64[us]) != actual res (time32[s]) |
-| TestQuery | `test_execute_schema[type/select/timestamp0]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[s]) != actual res (timestamp[us]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp0]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[s]) != actual res (timestamp[us]) |
 | TestQuery | `test_query[type/select/timestamp0]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[s]) != actual res (timestamp[us]) |
-| TestQuery | `test_execute_schema[type/select/timestamp0tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp0tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp0tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_execute_schema[type/select/timestamp1]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp1]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
 | TestQuery | `test_query[type/select/timestamp1]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
-| TestQuery | `test_execute_schema[type/select/timestamp1tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp1tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp1tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_execute_schema[type/select/timestamp2]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp2]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
 | TestQuery | `test_query[type/select/timestamp2]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
-| TestQuery | `test_execute_schema[type/select/timestamp2tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp2tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp2tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_execute_schema[type/select/timestamp3]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp3]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
 | TestQuery | `test_query[type/select/timestamp3]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ms]) != actual res (timestamp[us]) |
-| TestQuery | `test_execute_schema[type/select/timestamp3tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp3tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp3tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_execute_schema[type/select/timestamp4]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp4]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp4]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp4tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp4tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp4tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_execute_schema[type/select/timestamp5]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp5]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp5]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp5tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp5tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp5tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_execute_schema[type/select/timestamp6]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp6]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp6]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp6tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp6tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp6tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_execute_schema[type/select/timestamp7]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp7]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
 | TestQuery | `test_query[type/select/timestamp7]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
-| TestQuery | `test_execute_schema[type/select/timestamp7tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp7tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp7tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_execute_schema[type/select/timestamp8]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp8]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
 | TestQuery | `test_query[type/select/timestamp8]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
-| TestQuery | `test_execute_schema[type/select/timestamp8tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp8tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp8tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_execute_schema[type/select/timestamp9]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp9]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
 | TestQuery | `test_query[type/select/timestamp9]` | FAIL | D13 | AssertionError: Field types do not match: expected res (timestamp[ns]) != actual res (timestamp[us]) |
-| TestQuery | `test_execute_schema[type/select/timestamp9tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestQuery | `test_get_table_schema[type/select/timestamp9tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
 | TestQuery | `test_query[type/select/timestamp9tz]` | SKIP | - | SQLite has no TIMESTAMP WITH TIME ZONE type, and ODBC 3.x has no timezone-aware SQL type code for the driver to map from |
-| TestStatement | `test_execute_schema_noalias` | PASS | - |  |
-| TestStatement | `test_nonascii_queries` | PASS | - |  |
-| TestStatement | `test_parameter_execute` | PASS | - |  |
-| TestStatement | `test_parameter_null_typed` | PASS | - |  |
-| TestStatement | `test_parameter_schema` | PASS | - |  |
-| TestStatement | `test_prepare` | PASS | - |  |
-| TestStatement | `test_rows_affected` | PASS | - |  |
-| TestStatement | `test_transaction_toggle` | PASS | - |  |
+| TestQuery | `test_query_bind_dictionary[type/bind/large_string]` | PASS | - |  |
+| TestQuery | `test_query_bind_dictionary[type/bind/string]` | PASS | - |  |
+| TestStatement | `test_execute_schema_noalias[odbc_sqlite:3]` | PASS | - |  |
+| TestStatement | `test_nonascii_queries[odbc_sqlite:3]` | PASS | - |  |
+| TestStatement | `test_parameter_execute[odbc_sqlite:3]` | PASS | - |  |
+| TestStatement | `test_parameter_null_typed[odbc_sqlite:3]` | PASS | - |  |
+| TestStatement | `test_parameter_schema[odbc_sqlite:3]` | PASS | - |  |
+| TestStatement | `test_prepare[odbc_sqlite:3]` | PASS | - |  |
+| TestStatement | `test_rows_affected[odbc_sqlite:3]` | PASS | - |  |
+| TestStatement | `test_transaction_toggle[odbc_sqlite:3]` | PASS | - |  |
 <!-- END GENERATED TABLE sqlite -->
 
-### PostgreSQL (2026-09-06)
+### PostgreSQL (2026-09-15)
 
 <!-- BEGIN GENERATED TABLE postgres -->
 | Module | Test | Status | Finding | Detail |
 |---|---|---|---|---|
-| TestConnection | `test_current_catalog` | PASS | - |  |
-| TestConnection | `test_current_db_schema` | FAIL | P7 | adbc_driver_manager.ProgrammingError: NOT_FOUND: Unknown connection option adbc.connection.db_schema |
-| TestConnection | `test_get_info` | PASS | - |  |
-| TestConnection | `test_get_info_arrow_version` | PASS | - |  |
-| TestConnection | `test_get_objects_catalog` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_catalog` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_column_name` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_schema` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_table` | PASS | - |  |
-| TestConnection | `test_get_objects_column_filter_table_name` | PASS | - |  |
-| TestConnection | `test_get_objects_column_not_exist` | PASS | - |  |
-| TestConnection | `test_get_objects_column_present` | PASS | - |  |
-| TestConnection | `test_get_objects_column_xdbc` | PASS | - |  |
-| TestConnection | `test_get_objects_constraints_check` | SKIP | - | not implemented |
-| TestConnection | `test_get_objects_constraints_foreign` | PASS | - |  |
-| TestConnection | `test_get_objects_constraints_primary` | PASS | - |  |
-| TestConnection | `test_get_objects_constraints_unique` | SKIP | - | not implemented |
-| TestConnection | `test_get_objects_schema` | FAIL | P8 | AssertionError: assert ('adbc', 'public') in [(None, 'pg_toast_temp_4'), (None, 'public'), (None, 'validation2')] |
-| TestConnection | `test_get_objects_table_exact_table` | PASS | - |  |
-| TestConnection | `test_get_objects_table_invalid_catalog` | PASS | - |  |
-| TestConnection | `test_get_objects_table_invalid_schema` | PASS | - |  |
-| TestConnection | `test_get_objects_table_invalid_table` | PASS | - |  |
-| TestConnection | `test_get_objects_table_not_exist` | PASS | - |  |
-| TestConnection | `test_get_objects_table_present` | PASS | - |  |
-| TestConnection | `test_get_statistics` | SKIP | - | connection_get_statistics not supported |
-| TestConnection | `test_get_table_schema_catalog` | SKIP | - | secondary_catalog_schema not supported |
-| TestConnection | `test_get_table_schema_not_found` | PASS | - |  |
-| TestConnection | `test_get_table_schema_schema` | PASS | - |  |
-| TestConnection | `test_set_current_catalog` | SKIP | - | not implemented |
-| TestConnection | `test_set_current_schema` | SKIP | - | not implemented |
-| TestConnection | `test_unknown_option` | PASS | - |  |
+| TestConnection | `test_current_catalog[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_current_db_schema[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_info[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_info_arrow_version[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_catalog[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_catalog[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_column_name[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_schema[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_table[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_filter_table_name[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_not_exist[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_present[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_column_xdbc[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_constraints_check[odbc_postgres:16]` | SKIP | - | not implemented |
+| TestConnection | `test_get_objects_constraints_foreign[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_constraints_primary[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_constraints_unique[odbc_postgres:16]` | SKIP | - | not implemented |
+| TestConnection | `test_get_objects_schema[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_exact_table[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_invalid_catalog[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_invalid_schema[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_invalid_table[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_not_exist[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_objects_table_present[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_statistics[odbc_postgres:16]` | SKIP | - | connection_get_statistics not supported |
+| TestConnection | `test_get_table_schema_catalog[odbc_postgres:16]` | SKIP | - | secondary_catalog not supported |
+| TestConnection | `test_get_table_schema_not_found[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_get_table_schema_schema[odbc_postgres:16]` | PASS | - |  |
+| TestConnection | `test_set_current_catalog[odbc_postgres:16]` | SKIP | - | not implemented |
+| TestConnection | `test_set_current_schema[odbc_postgres:16]` | SKIP | - | not implemented |
+| TestConnection | `test_unknown_option[odbc_postgres:16]` | PASS | - |  |
 | TestIngest | `test_append[ingest/string]` | PASS | - |  |
 | TestIngest | `test_append_fail[ingest/string]` | PASS | - |  |
-| TestIngest | `test_catalog` | SKIP | - | not implemented |
+| TestIngest | `test_catalog[odbc_postgres:16]` | SKIP | - | not implemented |
 | TestIngest | `test_create[ingest/binary]` | PASS | - |  |
 | TestIngest | `test_create[ingest/binary_view]` | PASS | - |  |
 | TestIngest | `test_create[ingest/boolean]` | PASS | - |  |
@@ -906,17 +932,17 @@ findings).
 | TestIngest | `test_create[ingest/large_string]` | PASS | - |  |
 | TestIngest | `test_create[ingest/string]` | PASS | - |  |
 | TestIngest | `test_create[ingest/string_view]` | PASS | - |  |
-| TestIngest | `test_create[ingest/time_ms]` | FAIL | P4 | AssertionError: Field types do not match: expected value (time32[ms]) != actual value (time64[us]) |
+| TestIngest | `test_create[ingest/time_ms]` | PASS | - |  |
 | TestIngest | `test_create[ingest/time_ns]` | SKIP | - | PostgreSQL time precision is at most 6 (microseconds); 23:59:59.999999999 rounds to 24:00:00, which Arrow time64 cannot hold |
-| TestIngest | `test_create[ingest/time_s]` | FAIL | P4 | AssertionError: Field types do not match: expected value (time32[s]) != actual value (time64[us]) |
+| TestIngest | `test_create[ingest/time_s]` | PASS | - |  |
 | TestIngest | `test_create[ingest/time_us]` | PASS | - |  |
-| TestIngest | `test_create[ingest/timestamp_ms]` | FAIL | P3 | AssertionError: Field types do not match: expected value (timestamp[ms]) != actual value (timestamp[us, tz=UTC]) |
+| TestIngest | `test_create[ingest/timestamp_ms]` | PASS | - |  |
 | TestIngest | `test_create[ingest/timestamp_ns]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); a nanosecond value is rounded by the server |
-| TestIngest | `test_create[ingest/timestamp_s]` | FAIL | P1 | AssertionError: Field types do not match: expected value (timestamp[s]) != actual value (timestamp[us, tz=UTC]) |
-| TestIngest | `test_create[ingest/timestamp_us]` | FAIL | P3 | AssertionError: Field types do not match: expected value (timestamp[us]) != actual value (timestamp[us, tz=UTC]) |
-| TestIngest | `test_create[ingest/timestamptz_ms]` | FAIL | P2 | AssertionError: Field types do not match: expected value (timestamp[ms, tz=UTC]) != actual value (timestamp[us, tz=UTC]) |
+| TestIngest | `test_create[ingest/timestamp_s]` | PASS | - |  |
+| TestIngest | `test_create[ingest/timestamp_us]` | PASS | - |  |
+| TestIngest | `test_create[ingest/timestamptz_ms]` | PASS | - |  |
 | TestIngest | `test_create[ingest/timestamptz_ns]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); a nanosecond value is rounded by the server |
-| TestIngest | `test_create[ingest/timestamptz_s]` | FAIL | P1 | AssertionError: Field types do not match: expected value (timestamp[s, tz=UTC]) != actual value (timestamp[us, tz=UTC]) |
+| TestIngest | `test_create[ingest/timestamptz_s]` | PASS | - |  |
 | TestIngest | `test_create[ingest/timestamptz_us]` | PASS | - |  |
 | TestIngest | `test_create_conflict[ingest/string]` | PASS | - |  |
 | TestIngest | `test_create_large_batch[ingest/string]` | PASS | - |  |
@@ -925,16 +951,78 @@ findings).
 | TestIngest | `test_create_multiple_batches[ingest/string]` | PASS | - |  |
 | TestIngest | `test_createappend[ingest/string]` | PASS | - |  |
 | TestIngest | `test_createappend_schema_mismatch[ingest/string]` | PASS | - |  |
-| TestIngest | `test_ingest_no_parameters` | PASS | - |  |
+| TestIngest | `test_ingest_no_parameters[odbc_postgres:16]` | PASS | - |  |
 | TestIngest | `test_ingest_then_query[ingest/string]` | PASS | - |  |
-| TestIngest | `test_many_columns` | PASS | - |  |
-| TestIngest | `test_not_null` | SKIP | - | not implemented |
+| TestIngest | `test_many_columns[odbc_postgres:16]` | PASS | - |  |
+| TestIngest | `test_not_null[odbc_postgres:16]` | SKIP | - | not implemented |
 | TestIngest | `test_replace[ingest/string]` | PASS | - |  |
 | TestIngest | `test_replace_catalog[ingest/string]` | SKIP | - | not implemented |
 | TestIngest | `test_replace_noop[ingest/string]` | PASS | - |  |
 | TestIngest | `test_replace_schema[ingest/string]` | PASS | - |  |
-| TestIngest | `test_schema` | PASS | - |  |
+| TestIngest | `test_schema[odbc_postgres:16]` | PASS | - |  |
 | TestIngest | `test_temporary[ingest/string]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/binary]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/boolean]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/date]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/decimal]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/float32]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/float64]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/int16]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/int32]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/int64]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/string]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/time]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp0]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp0tz]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp1]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp1tz]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp2]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp2tz]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp3]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp3tz]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp4]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp4tz]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp5]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp5tz]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp6]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp6tz]` | PASS | - |  |
+| TestQuery | `test_execute_schema[type/select/timestamp7]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_execute_schema[type/select/timestamp7tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_execute_schema[type/select/timestamp8]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_execute_schema[type/select/timestamp8tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_execute_schema[type/select/timestamp9]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_execute_schema[type/select/timestamp9tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_get_table_schema[type/select/binary]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/boolean]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/date]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/decimal]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/float32]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/float64]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/int16]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/int32]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/int64]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/string]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/time]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp0]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp0tz]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp1]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp1tz]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp2]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp2tz]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp3]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp3tz]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp4]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp4tz]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp5]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp5tz]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp6]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp6tz]` | PASS | - |  |
+| TestQuery | `test_get_table_schema[type/select/timestamp7]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_get_table_schema[type/select/timestamp7tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_get_table_schema[type/select/timestamp8]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_get_table_schema[type/select/timestamp8tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_get_table_schema[type/select/timestamp9]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
+| TestQuery | `test_get_table_schema[type/select/timestamp9tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
 | TestQuery | `test_lint_query[ingest/binary]` | PASS | - |  |
 | TestQuery | `test_lint_query[ingest/binary_view]` | PASS | - |  |
 | TestQuery | `test_lint_query[ingest/boolean]` | PASS | - |  |
@@ -1037,8 +1125,6 @@ findings).
 | TestQuery | `test_lint_query[type/select/timestamp8tz]` | PASS | - |  |
 | TestQuery | `test_lint_query[type/select/timestamp9]` | PASS | - |  |
 | TestQuery | `test_lint_query[type/select/timestamp9tz]` | PASS | - |  |
-| TestQuery | `test_query_bind_dictionary[type/bind/large_string]` | PASS | - |  |
-| TestQuery | `test_query_bind_dictionary[type/bind/string]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/binary]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/binary_view]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/boolean]` | PASS | - |  |
@@ -1055,17 +1141,17 @@ findings).
 | TestQuery | `test_query[type/bind/large_string]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/string]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/string_view]` | PASS | - |  |
-| TestQuery | `test_query[type/bind/time_ms]` | FAIL | P4 | AssertionError: Field types do not match: expected res (time32[ms]) != actual res (time64[us]) |
+| TestQuery | `test_query[type/bind/time_ms]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/time_ns]` | SKIP | - | PostgreSQL time precision is at most 6 (microseconds); 23:59:59.999999999 rounds to 24:00:00, which Arrow time64 cannot hold |
 | TestQuery | `test_query[type/bind/time_s]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/time_us]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/timestamp_ms]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/timestamp_ns]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); a nanosecond value is rounded by the server |
-| TestQuery | `test_query[type/bind/timestamp_s]` | FAIL | P1 | AssertionError: Field types do not match: expected res (timestamp[s]) != actual res (timestamp[us]) |
+| TestQuery | `test_query[type/bind/timestamp_s]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/timestamp_us]` | PASS | - |  |
-| TestQuery | `test_query[type/bind/timestamptz_ms]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
+| TestQuery | `test_query[type/bind/timestamptz_ms]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/timestamptz_ns]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); a nanosecond value is rounded by the server |
-| TestQuery | `test_query[type/bind/timestamptz_s]` | FAIL | P1 | AssertionError: Field types do not match: expected res (timestamp[s, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
+| TestQuery | `test_query[type/bind/timestamptz_s]` | PASS | - |  |
 | TestQuery | `test_query[type/bind/timestamptz_us]` | PASS | - |  |
 | TestQuery | `test_query[type/literal/binary]` | PASS | - |  |
 | TestQuery | `test_query[type/literal/boolean]` | PASS | - |  |
@@ -1080,105 +1166,45 @@ findings).
 | TestQuery | `test_query[type/literal/time]` | PASS | - |  |
 | TestQuery | `test_query[type/literal/timestamp]` | PASS | - |  |
 | TestQuery | `test_query[type/literal/timestamptz]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/binary]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/binary]` | PASS | - |  |
 | TestQuery | `test_query[type/select/binary]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/boolean]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/boolean]` | PASS | - |  |
 | TestQuery | `test_query[type/select/boolean]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/date]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/date]` | PASS | - |  |
 | TestQuery | `test_query[type/select/date]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/decimal]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/decimal]` | PASS | - |  |
 | TestQuery | `test_query[type/select/decimal]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/float32]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/float32]` | PASS | - |  |
 | TestQuery | `test_query[type/select/float32]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/float64]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/float64]` | PASS | - |  |
 | TestQuery | `test_query[type/select/float64]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/int16]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/int16]` | PASS | - |  |
 | TestQuery | `test_query[type/select/int16]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/int32]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/int32]` | PASS | - |  |
 | TestQuery | `test_query[type/select/int32]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/int64]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/int64]` | PASS | - |  |
 | TestQuery | `test_query[type/select/int64]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/string]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/string]` | PASS | - |  |
 | TestQuery | `test_query[type/select/string]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/time]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/time]` | PASS | - |  |
 | TestQuery | `test_query[type/select/time]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp0]` | FAIL | P1 | AssertionError: Field types do not match: expected res (timestamp[s]) != actual res (timestamp[us]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp0]` | FAIL | P1 | AssertionError: Field types do not match: expected res (timestamp[s]) != actual res (timestamp[us]) |
-| TestQuery | `test_query[type/select/timestamp0]` | FAIL | P1 | AssertionError: Field types do not match: expected res (timestamp[s]) != actual res (timestamp[us]) |
-| TestQuery | `test_execute_schema[type/select/timestamp0tz]` | FAIL | P1 | AssertionError: Field types do not match: expected res (timestamp[s, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp0tz]` | FAIL | P1 | AssertionError: Field types do not match: expected res (timestamp[s, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_query[type/select/timestamp0tz]` | FAIL | P1 | AssertionError: Field types do not match: expected res (timestamp[s, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_execute_schema[type/select/timestamp1]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp1]` | PASS | - |  |
+| TestQuery | `test_query[type/select/timestamp0]` | PASS | - |  |
+| TestQuery | `test_query[type/select/timestamp0tz]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp1]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp1tz]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp1tz]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_query[type/select/timestamp1tz]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_execute_schema[type/select/timestamp2]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp2]` | PASS | - |  |
+| TestQuery | `test_query[type/select/timestamp1tz]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp2]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp2tz]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp2tz]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_query[type/select/timestamp2tz]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_execute_schema[type/select/timestamp3]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp3]` | PASS | - |  |
+| TestQuery | `test_query[type/select/timestamp2tz]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp3]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp3tz]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_get_table_schema[type/select/timestamp3tz]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_query[type/select/timestamp3tz]` | FAIL | P2 | AssertionError: Field types do not match: expected res (timestamp[ms, tz=UTC]) != actual res (timestamp[us, tz=UTC]) |
-| TestQuery | `test_execute_schema[type/select/timestamp4]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp4]` | PASS | - |  |
+| TestQuery | `test_query[type/select/timestamp3tz]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp4]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp4tz]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp4tz]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp4tz]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp5]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp5]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp5]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp5tz]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp5tz]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp5tz]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp6]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp6]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp6]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp6tz]` | PASS | - |  |
-| TestQuery | `test_get_table_schema[type/select/timestamp6tz]` | PASS | - |  |
 | TestQuery | `test_query[type/select/timestamp6tz]` | PASS | - |  |
-| TestQuery | `test_execute_schema[type/select/timestamp7]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_get_table_schema[type/select/timestamp7]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
 | TestQuery | `test_query[type/select/timestamp7]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_execute_schema[type/select/timestamp7tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_get_table_schema[type/select/timestamp7tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
 | TestQuery | `test_query[type/select/timestamp7tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_execute_schema[type/select/timestamp8]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_get_table_schema[type/select/timestamp8]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
 | TestQuery | `test_query[type/select/timestamp8]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_execute_schema[type/select/timestamp8tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_get_table_schema[type/select/timestamp8tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
 | TestQuery | `test_query[type/select/timestamp8tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_execute_schema[type/select/timestamp9]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_get_table_schema[type/select/timestamp9]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
 | TestQuery | `test_query[type/select/timestamp9]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_execute_schema[type/select/timestamp9tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestQuery | `test_get_table_schema[type/select/timestamp9tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
 | TestQuery | `test_query[type/select/timestamp9tz]` | SKIP | - | PostgreSQL timestamp precision is at most 6 (microseconds); TIMESTAMP(7..9) is rounded by the server, so a nanosecond result is not representable |
-| TestStatement | `test_execute_schema_noalias` | PASS | - |  |
-| TestStatement | `test_nonascii_queries` | PASS | - |  |
-| TestStatement | `test_parameter_execute` | PASS | - |  |
-| TestStatement | `test_parameter_null_typed` | PASS | - |  |
-| TestStatement | `test_parameter_schema` | PASS | - |  |
-| TestStatement | `test_prepare` | PASS | - |  |
-| TestStatement | `test_rows_affected` | PASS | - |  |
-| TestStatement | `test_transaction_toggle` | PASS | - |  |
+| TestQuery | `test_query_bind_dictionary[type/bind/large_string]` | PASS | - |  |
+| TestQuery | `test_query_bind_dictionary[type/bind/string]` | PASS | - |  |
+| TestStatement | `test_execute_schema_noalias[odbc_postgres:16]` | PASS | - |  |
+| TestStatement | `test_nonascii_queries[odbc_postgres:16]` | PASS | - |  |
+| TestStatement | `test_parameter_execute[odbc_postgres:16]` | PASS | - |  |
+| TestStatement | `test_parameter_null_typed[odbc_postgres:16]` | PASS | - |  |
+| TestStatement | `test_parameter_schema[odbc_postgres:16]` | PASS | - |  |
+| TestStatement | `test_prepare[odbc_postgres:16]` | PASS | - |  |
+| TestStatement | `test_rows_affected[odbc_postgres:16]` | PASS | - |  |
+| TestStatement | `test_transaction_toggle[odbc_postgres:16]` | PASS | - |  |
 <!-- END GENERATED TABLE postgres -->
