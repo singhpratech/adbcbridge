@@ -6836,14 +6836,20 @@ whole thing off.</p>
 </tr>
 </tbody>
 </table></div>
+<p>On Windows there is a second one, <code>LFConversion=0</code>, added for psqlodbc (recognised
+by its <code>Driver=</code> value, or by <code>UseDeclareFetch</code> behind a DSN) whenever you did not
+set <code>LFConversion</code> yourself. psqlodbc's default for that keyword is <code>1</code> on Windows
+and <code>0</code> everywhere else, and at <code>1</code> the driver rewrites every LF in a fetched text
+value to CR LF — <code>"line1\nline2"</code> comes back as <code>"line1\r\nline2"</code>, bytes the
+server never stored. <code>0</code> is what makes a Windows read return what Linux and macOS
+already do.</p>
 <p>psqlodbc's other keywords were swept and are deliberately <strong>not</strong> set:
 <code>ByteaAsLongVarBinary</code>, <code>TextAsLongVarchar</code>, <code>MaxVarcharSize</code> and <code>UnknownSizes</code>
 change the SQL types and widths the driver reports, and so the Arrow schema and
-the DDL bulk ingest generates; <code>TrueIsMinus1</code> and <code>LFConversion</code> rewrite values;
-<code>UseDeclareFetch</code> and <code>Protocol</code> are transaction semantics (a server-side cursor
-and per-statement <code>SAVEPOINT</code>s, neither of which every PostgreSQL-wire server
-behind psqlodbc has). Everything else measured flat, within ±4% of the default
-on a 1M-row read.</p>
+the DDL bulk ingest generates; <code>TrueIsMinus1</code> rewrites values; <code>UseDeclareFetch</code>
+and <code>Protocol</code> are transaction semantics (a server-side cursor and per-statement
+<code>SAVEPOINT</code>s, neither of which every PostgreSQL-wire server behind psqlodbc has).
+Everything else measured flat, within ±4% of the default on a 1M-row read.</p>
 <p>If you do turn <code>UseDeclareFetch=1</code> on, note that it is genuinely a different
 mode, not just a buffer size: the read becomes <code>O(Fetch)</code> in client memory
 instead of <code>O(result set)</code>, it needs a server that implements <code>DECLARE … CURSOR
@@ -7065,6 +7071,10 @@ only when set after <code>AdbcConnectionInit</code> (see the inheritance note ab
 <tr>
 <td><code>adbc.connection.catalog</code></td>
 <td>current catalog (when connected)</td>
+</tr>
+<tr>
+<td><code>adbc.connection.db_schema</code></td>
+<td>current schema (when connected), asked of the server in its own words: <code>current_schema()</code> on PostgreSQL-wire servers and DuckDB. ODBC has no attribute for it, so on a driver whose server has not been taught the option answers <code>NOT_FOUND</code>.</td>
 </tr>
 <tr>
 <td><code>adbc.odbc.sqllen_32bit</code></td>
@@ -10833,8 +10843,8 @@ ODBC is the first bridge; the name leaves room for the others.</p>
 <td>next</td>
 </tr>
 <tr>
-<td>ADBC Driver Foundry validation suite (<a href="https://github.com/singhpratech/adbcbridge/blob/main/tests/validation/RESULTS.md"><code>tests/validation/RESULTS.md</code></a>): SQLite 212/327 pass, PostgreSQL 265/327 pass on 2026-09-06; baseline findings D1–D9, D11, D14 fixed; D10/D12/D13 are SQLiteODBC's missing precision, verified on PostgreSQL as P1–P4 (TIME/TIMESTAMP precision and zone fidelity) plus P7 (<code>db_schema</code> option) and P8 (schema catalog fill), all small <code>src/</code> changes</td>
-<td>in progress — P1–P4, P7, P8 next</td>
+<td>ADBC Driver Foundry validation suite (<a href="https://github.com/singhpratech/adbcbridge/blob/main/tests/validation/RESULTS.md"><code>tests/validation/RESULTS.md</code></a>): PostgreSQL 293/327 pass with the other 34 declared backend limitations (2026-09-15; was 265 on 2026-09-06), SQLite 212/327 with the remainder being precision SQLiteODBC does not report; baseline findings D1–D9, D11, D14 and the PostgreSQL findings P1–P4 (TIME/TIMESTAMP precision and zone fidelity), P7 (<code>db_schema</code> option) and P8 (schema catalog fill) fixed; <code>tests/test_postgres.py</code> pins them in CI</td>
+<td>done — ships in 0.1.2</td>
 </tr>
 <tr>
 <td>Trust artefacts: security policy with private vulnerability reporting and a stated support window (<code>SECURITY.md</code>); Dependabot on every manifest; <code>SHA256SUMS</code> and its signature (<code>SHA256SUMS.asc</code>) on v0.1.0; every later release signed, attested (GitHub build provenance, <code>gh attestation verify</code>) and shipped with an SPDX SBOM by the release workflow</td>
@@ -11087,7 +11097,7 @@ before it is filed.</p>
 <td>ArcadeDB</td>
 <td><a href="https://github.com/ArcadeData/arcadedb/issues/7188">ArcadeData/arcadedb#7188</a> (opened by the maintainer from the probe follow-up)</td>
 <td><code>COPY (&lt;query&gt;) TO STDOUT</code>, text and binary, is not supported by the PostgreSQL-protocol plugin; the Arrow native PostgreSQL ADBC driver reads every result through binary <code>COPY</code> by default, so with defaults it stops at the first result set. The driver's <code>adbc.postgresql.use_copy=false</code> statement option reads through ordinary binary-format results and works end to end on ArcadeDB, which the issue records.</td>
-<td><strong>fixed on main</strong>: <a href="https://github.com/ArcadeData/arcadedb/pull/7398">ArcadeData/arcadedb#7398</a> (merged 2026-09-10) implemented <code>COPY (&lt;query&gt;) TO STDOUT</code> in text, csv and binary on both protocol paths; the one framing detail left between it and the Arrow driver's default path (the binary header sent as its own <code>CopyData</code> message, <a href="https://github.com/ArcadeData/arcadedb/issues/7188#issuecomment-5647328956">reported</a> with both servers' chunk dumps on 2026-09-12) was fixed by the maintainer in <a href="https://github.com/ArcadeData/arcadedb/pull/7607">ArcadeData/arcadedb#7607</a>, merged 2026-09-15 (3bdb3451b). Verified the same morning on <code>26.10.1-SNAPSHOT</code> build 99f4cb48: the Arrow PostgreSQL ADBC driver 1.12.0 with its defaults passes all seven probe steps and decodes real rows (int64, string, double, date32, bool) through binary COPY, no <code>use_copy=false</code> needed. Ships in ArcadeDB 26.10.1</td>
+<td><strong>fixed on main</strong>: <a href="https://github.com/ArcadeData/arcadedb/pull/7398">ArcadeData/arcadedb#7398</a> (merged 2026-09-10) implemented <code>COPY (&lt;query&gt;) TO STDOUT</code> in text, csv and binary on both protocol paths; the one framing detail left between it and the Arrow driver's default path (the binary header sent as its own <code>CopyData</code> message, <a href="https://github.com/ArcadeData/arcadedb/issues/7188#issuecomment-5647328956">reported</a> with both servers' chunk dumps on 2026-09-12) was fixed by the maintainer in <a href="https://github.com/ArcadeData/arcadedb/pull/7607">ArcadeData/arcadedb#7607</a>, merged 2026-09-15 (3bdb3451b). Verified the same morning on <code>26.10.1-SNAPSHOT</code> build 99f4cb48: the Arrow PostgreSQL ADBC driver 1.12.0 with its defaults passes all seven probe steps and decodes real rows (int64, string, double, date32, bool) through binary COPY, no <code>use_copy=false</code> needed. The maintainer closed the issue on 2026-09-15; re-verified the same day past the probe — an empty result set (header and trailer with no rows, the case the fix names), one row, 10,000 rows in one <code>COPY</code>, a NULL in every column, non-BMP text, <code>GetTableSchema</code> and <code>GetObjects</code> — all correct with the driver's defaults. Ships in ArcadeDB 26.10.1</td>
 </tr>
 <tr>
 <td>2026-09-04</td>
