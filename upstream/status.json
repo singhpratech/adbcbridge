@@ -1,9 +1,9 @@
 {
- "as_of": "2026-09-15T18:11:25Z",
+ "as_of": "2026-09-15T19:33:48Z",
  "window_days": 7,
  "count": 35,
  "with_project_activity": 19,
- "fixed": 5,
+ "fixed": 6,
  "items": [
   {
    "project": "pandas",
@@ -220,7 +220,7 @@
      "url": "https://github.com/panodata/omniload/commit/adee2078e0bc2b1f6ccd5134c50331de8f420731"
     }
    ],
-   "reporter_comments": 5,
+   "reporter_comments": 6,
    "community_comments": 3,
    "last_activity": "2026-09-15T14:53:21Z",
    "pulse": true
@@ -564,8 +564,8 @@
    "reporter": "singhpratech",
    "what": "Affected-row count, open since 2021: still 0 (not −1) for every write on 1.5.5 against 26.7.5.10; noted that the server already sends `written_rows` in `X-ClickHouse-Summary` on every HTTP response by default, which the driver could surface.",
    "kind": "comment on existing issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "fixed",
+   "closed_at": "2026-09-15T19:25:54Z",
    "labels": [],
    "reactions": 3,
    "maintainer_events": [
@@ -595,12 +595,19 @@
      "actor": "slabko",
      "title": "Make SQLRowCount return `-1` when the value is unknown",
      "url": "https://github.com/ClickHouse/clickhouse-odbc/pull/585",
-     "state": "open"
+     "state": "merged"
+    },
+    {
+     "type": "closed",
+     "at": "2026-09-15T19:25:55Z",
+     "actor": "slabko",
+     "reason": null,
+     "commit": null
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-15T17:29:38Z",
+   "last_activity": "2026-09-15T19:25:55Z",
    "pulse": true
   },
   {
