@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 
 #include "odbc_delegate.h"
@@ -1423,12 +1424,17 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
 //   * a keyword the caller set, in the connection string or in the DSN, is never
 //     overridden -- the caller's value wins even where it is the slow one;
 //   * nothing that changes what a query returns is ever set.  On psqlodbc that rules out
-//     TrueIsMinus1 and LFConversion (both rewrite values), ByteaAsLongVarBinary,
-//     TextAsLongVarchar, MaxVarcharSize and UnknownSizes (all change described types or
-//     widths, and so the Arrow schema and the DDL bulk ingest generates), and
-//     UseDeclareFetch and Protocol themselves (server-side cursors and per-statement
-//     SAVEPOINTs are transaction semantics, and not every PostgreSQL-wire server behind
-//     psqlodbc has either);
+//     TrueIsMinus1 (it rewrites values), ByteaAsLongVarBinary, TextAsLongVarchar,
+//     MaxVarcharSize and UnknownSizes (all change described types or widths, and so the
+//     Arrow schema and the DDL bulk ingest generates), and UseDeclareFetch and Protocol
+//     themselves (server-side cursors and per-statement SAVEPOINTs are transaction
+//     semantics, and not every PostgreSQL-wire server behind psqlodbc has either).
+//     LFConversion is the one exception, and only on Windows: psqlodbc's *default* for
+//     it is 1 there and 0 on every other platform (DEFAULT_LFCONVERSION in its
+//     dlg_specific.h), and at 1 the driver rewrites every LF in a fetched text value to
+//     CR LF -- "line1\nline2" comes back as "line1\r\nline2", bytes the server never
+//     stored.  Setting it to 0 is what makes a Windows read return what Linux and macOS
+//     already do, so it is the value that does *not* change what a query returns;
 //   * "adbc.odbc.tune=false" turns the whole thing off.
 //
 // Keep every addition short and worth it.  The LENGTH of a psqlodbc connection string
@@ -1442,6 +1448,19 @@ static bool OdbcConnKeywordSet(const char* conn, const char* dsn, const char* ke
   free(v);
   return set;
 }
+
+#if defined(_WIN32)
+// Case-insensitive substring test, for matching a Driver= value.
+static bool OdbcContainsNoCase(const char* haystack, const char* needle) {
+  const size_t n = strlen(needle);
+  for (const char* p = haystack; *p; p++) {
+    size_t i = 0;
+    while (i < n && p[i] && tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) i++;
+    if (i == n) return true;
+  }
+  return false;
+}
+#endif
 
 // Is a numeric psqlodbc keyword on?  psqlodbc reads all of these with atoi().
 static bool OdbcConnKeywordIsOn(const char* conn, const char* dsn, const char* key) {
@@ -1487,6 +1506,28 @@ static void OdbcTuneConnectionString(const struct OdbcDatabase* db,
     }
     InternalAdbcStringBuilderAppend(sb, "Fetch=%lld;", (long long)fetch);
   }
+
+#if defined(_WIN32)
+  // psqlodbc's LFConversion defaults to 1 on Windows alone (see the rules above).  The
+  // driver is recognised by its Driver= value -- the registered names are "PostgreSQL
+  // Unicode(x64)" / "PostgreSQL ANSI(x64)" (and their x86 spellings), the libraries
+  // psqlodbc35w.dll and podbc35w.dll -- or, behind a DSN with some other name, by a
+  // psqlodbc-only keyword.  A bare "postgresql" is deliberately not matched: other
+  // vendors' PostgreSQL drivers carry the word in their names too, and a keyword they
+  // do not know is theirs to refuse.
+  {
+    char* driver = OdbcConnStringKeyword(conn, dsn, "Driver");
+    const bool psqlodbc = (driver && (OdbcContainsNoCase(driver, "psqlodbc") ||
+                                      OdbcContainsNoCase(driver, "podbc") ||
+                                      OdbcContainsNoCase(driver, "postgresql unicode") ||
+                                      OdbcContainsNoCase(driver, "postgresql ansi"))) ||
+                          OdbcConnKeywordSet(conn, dsn, "UseDeclareFetch");
+    free(driver);
+    if (psqlodbc && !OdbcConnKeywordSet(conn, dsn, "LFConversion")) {
+      InternalAdbcStringBuilderAppend(sb, "LFConversion=0;");
+    }
+  }
+#endif
 
   free(own_dsn);
 }

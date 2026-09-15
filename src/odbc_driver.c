@@ -1510,13 +1510,17 @@ static void OdbcTuneConnectionString(const struct OdbcDatabase* db,
 #if defined(_WIN32)
   // psqlodbc's LFConversion defaults to 1 on Windows alone (see the rules above).  The
   // driver is recognised by its Driver= value -- the registered names are "PostgreSQL
-  // Unicode(x64)" / "PostgreSQL ANSI(x64)", the libraries psqlodbc35w.dll and
-  // podbc35w.dll -- or, behind a DSN with some other name, by a psqlodbc-only keyword.
+  // Unicode(x64)" / "PostgreSQL ANSI(x64)" (and their x86 spellings), the libraries
+  // psqlodbc35w.dll and podbc35w.dll -- or, behind a DSN with some other name, by a
+  // psqlodbc-only keyword.  A bare "postgresql" is deliberately not matched: other
+  // vendors' PostgreSQL drivers carry the word in their names too, and a keyword they
+  // do not know is theirs to refuse.
   {
     char* driver = OdbcConnStringKeyword(conn, dsn, "Driver");
     const bool psqlodbc = (driver && (OdbcContainsNoCase(driver, "psqlodbc") ||
                                       OdbcContainsNoCase(driver, "podbc") ||
-                                      OdbcContainsNoCase(driver, "postgresql"))) ||
+                                      OdbcContainsNoCase(driver, "postgresql unicode") ||
+                                      OdbcContainsNoCase(driver, "postgresql ansi"))) ||
                           OdbcConnKeywordSet(conn, dsn, "UseDeclareFetch");
     free(driver);
     if (psqlodbc && !OdbcConnKeywordSet(conn, dsn, "LFConversion")) {
