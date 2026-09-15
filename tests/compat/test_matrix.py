@@ -282,7 +282,9 @@ DBS = {
         # error for numeric/date/decimal/bool); a NULL bound with a NULL value pointer --
         # the shape the driver's row path uses -- is stored as NULL for every type, so the
         # all-NULL row goes through bound parameters here like everywhere else.  The
-        # driver does not report affected row counts (SQLRowCount answers 0 on every write).
+        # driver does not report affected row counts: 1.5.5 answers 0 from SQLRowCount on
+        # every write, and master since clickhouse-odbc#585 (merged 2026-09-15) answers -1,
+        # the ODBC "unknown" -- either way there is no count to check.
         rowcount=False, big_rows=300),
     "mssql": dict(
         env="MSSQL_ODBC_DRIVER", conn="Driver={drv};Server=127.0.0.1,14331;Database=master;Uid=sa;Pwd=Adbc!Bridge2026;TrustServerCertificate=yes;",
