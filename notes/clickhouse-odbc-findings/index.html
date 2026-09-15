@@ -90,12 +90,26 @@ reproduces on 1.5.5 against 26.7.5.10 —
 which also notes that the server already sends <code>written_rows</code> in the <code>X-ClickHouse-Summary</code>
 header on every HTTP response by default, so the number the driver would need is already
 arriving.</p>
-<p><strong>Fixed on 2026-09-15</strong> in <a href="https://github.com/ClickHouse/clickhouse-odbc/pull/585">ClickHouse/clickhouse-odbc#585</a>:
-<code>SQLRowCount</code> now answers −1, the ODBC "not available", and #335 is closed after five years.
-Verified on the pull request's CI build against ClickHouse 26.7.5.10: −1 after a literal <code>INSERT</code> and after a <code>DELETE</code>, everything else in the
-compatibility entry unchanged. It ships in the first release after 1.5.5. The exact count is
-still on the table: the maintainer will not trust <code>written_rows</code> while <code>async_insert</code> is on
-(ClickHouse/ClickHouse#57768), but reading it when <code>async_insert</code> is off remains possible.</p>
+<p><strong>What was asked.</strong> The comment re-measured the 2021 report on 1.5.5, showed the 0 on every
+write, and asked for either of two things: −1, so that a caller can at least tell "unknown"
+from "nothing written", or the real number, since <code>written_rows</code> is already in every
+response header.</p>
+<p><strong>What the maintainer said, 2026-09-15.</strong> Returning 0 is wrong and will become −1. The header
+is not the answer yet: with <code>async_insert</code> on, the server acknowledges before the rows are
+written and <code>written_rows</code> cannot be trusted (ClickHouse/ClickHouse#57768). With
+<code>async_insert</code> off it should be usable; how to handle the two modes is still open.</p>
+<p><strong>Fixed on 2026-09-15</strong> in <a href="https://github.com/ClickHouse/clickhouse-odbc/pull/585">ClickHouse/clickhouse-odbc#585</a>,
+merged the same day it was opened. The change is small and exact: the statement's
+<code>SQL_DIAG_ROW_COUNT</code> now starts at −1 instead of 0, in the two places it is reset and in
+<code>SQLRowCount</code> itself, with a test that inserts three rows and expects −1. Verified on the pull
+request's CI build against ClickHouse 26.7.5.10: −1 after a literal <code>INSERT</code> and after a
+<code>DELETE</code>, everything else in the compatibility entry unchanged. #335 is closed after five years.</p>
+<p><strong>What it means through adbcBridge.</strong> After an <code>INSERT</code>, <code>UPDATE</code> or <code>DELETE</code> executed as a
+statement, the affected-row count is −1, the ADBC "unknown", instead of a 0 that looked like
+a fact. The bulk-ingest count is unchanged: it comes from the rows adbcBridge sent, not from
+the driver. It ships in the first clickhouse-odbc release after 1.5.5; until then the
+compatibility row says 0 for the release and −1 for master. The exact count stays on the
+table for when <code>async_insert</code> is off.</p>
 <h2>One HTTP request per execute, and what that costs</h2>
 <p>The driver talks to the server over HTTP, one request per execute. With one row per
 statement that is about <strong>16 rows per second</strong> — the floor is the request, not ClickHouse.
