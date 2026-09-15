@@ -17,14 +17,21 @@ The complete list in v0.1.0 is one keyword:
 |---|---|---|---|
 | psqlodbc (PostgreSQL and the thirteen other PostgreSQL-wire servers in the matrix) | you set `UseDeclareFetch=1` and no `Fetch` | `Fetch=8192` (`8 × adbc.odbc.batch_size`, clamped to 8192…65536) | `UseDeclareFetch=1` asks psqlodbc to stream the result set through a server-side cursor instead of buffering all of it client-side. Each `FETCH` then brings back `max(Fetch, rowset)` rows, so psqlodbc's default `Fetch=100` is inert — our rowset always wins it — and the cursor round-trips once per rowset. 1M rows of `(int4, float8, varchar(20), date)` at `batch_size` 1024: **0.72 s** at the default `Fetch` against **0.57 s** with this, which is exactly what the same read costs *not* streaming. Peak process RSS for that read is 158 MB streaming against 422 MB buffered |
 
+On Windows there is a second one, `LFConversion=0`, added for psqlodbc (recognised
+by its `Driver=` value, or by `UseDeclareFetch` behind a DSN) whenever you did not
+set `LFConversion` yourself. psqlodbc's default for that keyword is `1` on Windows
+and `0` everywhere else, and at `1` the driver rewrites every LF in a fetched text
+value to CR LF — `"line1\nline2"` comes back as `"line1\r\nline2"`, bytes the
+server never stored. `0` is what makes a Windows read return what Linux and macOS
+already do.
+
 psqlodbc's other keywords were swept and are deliberately **not** set:
 `ByteaAsLongVarBinary`, `TextAsLongVarchar`, `MaxVarcharSize` and `UnknownSizes`
 change the SQL types and widths the driver reports, and so the Arrow schema and
-the DDL bulk ingest generates; `TrueIsMinus1` and `LFConversion` rewrite values;
-`UseDeclareFetch` and `Protocol` are transaction semantics (a server-side cursor
-and per-statement `SAVEPOINT`s, neither of which every PostgreSQL-wire server
-behind psqlodbc has). Everything else measured flat, within ±4% of the default
-on a 1M-row read.
+the DDL bulk ingest generates; `TrueIsMinus1` rewrites values; `UseDeclareFetch`
+and `Protocol` are transaction semantics (a server-side cursor and per-statement
+`SAVEPOINT`s, neither of which every PostgreSQL-wire server behind psqlodbc has).
+Everything else measured flat, within ±4% of the default on a 1M-row read.
 
 If you do turn `UseDeclareFetch=1` on, note that it is genuinely a different
 mode, not just a buffer size: the read becomes `O(Fetch)` in client memory
