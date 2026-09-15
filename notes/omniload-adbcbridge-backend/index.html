@@ -62,30 +62,96 @@ table-loader backend registered through dlt's own hook, "to make incremental loa
 work as usual", building on the unixODBC, PostgreSQL and SQL Server ODBC drivers the
 omniload container image already ships.</p>
 <h2>What was built</h2>
-<p><a href="https://github.com/panodata/omniload/pull/362">panodata/omniload#362</a> adds <code>--sql-backend adbcbridge</code> next to omniload's <code>sqlalchemy</code>,
-<code>pyarrow</code> and <code>connectorx</code> backends. SQLAlchemy still reflects the table and compiles
-the query, incremental cursor and all; adbcBridge then executes the compiled SQL through
-the database's ODBC driver and yields Arrow record batches, with no Python row in
-between. The ODBC connection string is derived from the source URI the user already
-gives, so a <code>postgresql://</code> or <code>mssql://</code> source needs nothing more inside the omniload
-image; CrateDB is reached over its PostgreSQL wire protocol; anything else takes an
-explicit <code>--sql-odbc-uri</code>. The <code>scd2</code> strategy rejects the backend the way it rejects
-the other Arrow-producing ones, because dlt computes the row hash it needs only for
-Python rows.</p>
+<p><a href="https://github.com/panodata/omniload/pull/362">panodata/omniload#362</a> adds <code>--sql-backend adbcbridge</code>
+next to omniload's <code>sqlalchemy</code>, <code>pyarrow</code> and <code>connectorx</code> backends. It is one commit of
+fourteen files: a loader module, four small changes to the model, command line, API and
+router, a dependency extra, a handbook page with pointers from three source pages, a
+changelog entry, and two test files.</p>
+<h3>How the backend fits dlt</h3>
+<p>dlt's <code>sql_table</code> source builds its query with SQLAlchemy and hands it to a <em>table loader</em>,
+one class per backend, selected by name. dlt 1.22 added <code>register_table_loader_backend()</code>,
+which is the hook omniload's maintainer pointed at. The <code>adbcbridge</code> loader is a small
+subclass of dlt's <code>BaseTableLoader</code>: it lets the base class build the query, cursor filter
+and ordering included, compiles it to SQL text with literal binds, executes that text
+through adbcBridge, and yields Arrow record batches. Because the query is dlt's own,
+<code>--incremental-key</code>, <code>--interval-start</code> and <code>--interval-end</code>, <code>--sql-limit</code> and
+<code>--sql-exclude-columns</code> behave exactly as with the other backends, and dlt's incremental
+state is unchanged. The registration happens the first time the backend is selected, so
+the extra is only needed by users who ask for it.</p>
+<h3>Where the ODBC connection string comes from</h3>
+<p>omniload's users give one URI, the SQLAlchemy one, and that URI is still needed for
+reflection. Asking for a second, ODBC-shaped string on every run would have been a poor
+fit, so the loader derives it from the SQLAlchemy URL for the families whose ODBC drivers
+omniload's container image already installs, plus two more:</p>
+<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
+<thead>
+<tr>
+<th>Source URI</th>
+<th>Derived ODBC connection string</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>postgresql://u:p@host:5432/db?sslmode=require</code></td>
+<td><code>Driver={PostgreSQL Unicode};Server=host;Port=5432;Database=db;Uid=u;SSLmode=require;Pwd=p;</code></td>
+</tr>
+<tr>
+<td><code>mssql://u:p@host:1433/db?driver=ODBC+Driver+18+for+SQL+Server&amp;TrustServerCertificate=yes</code></td>
+<td><code>Driver={ODBC Driver 18 for SQL Server};Server=host,1433;Database=db;Uid=u;Pwd=p;TrustServerCertificate=yes;</code></td>
+</tr>
+<tr>
+<td><code>crate://crate@host:4200/</code></td>
+<td><code>Driver={PostgreSQL Unicode};Server=host;Port=5432;Database=doc;Uid=crate;</code></td>
+</tr>
+<tr>
+<td><code>mysql://u:p@host:3306/db</code></td>
+<td><code>Driver={MySQL ODBC 9.4 Unicode Driver};Server=host;Port=3306;Database=db;User=u;Password=p;</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>These are the shapes adbcBridge's own compatibility matrix verifies per driver. The
+registered driver names are the ones Debian's <code>odbc-postgresql</code> and Microsoft's
+<code>msodbcsql18</code> packages install, which is what the omniload image carries; a
+per-family environment variable renames a driver, and <code>--sql-odbc-uri</code> supplies the whole
+string for any other database, a DSN, or a non-default port. CrateDB's <code>crate://</code> URIs
+name the HTTP port, so a URI on 4200, or with no port, maps to the PostgreSQL wire port.</p>
+<h3>Two rules carried over from omniload</h3>
+<p>omniload's <code>scd2</code> strategy compares rows by a hash dlt computes only for Python rows, so
+it already rejects the <code>pyarrow</code> and <code>connectorx</code> backends by name; <code>adbcbridge</code>
+produces Arrow too and joins that list, with a test. A <code>query:</code> source is read through
+<code>sqlalchemy</code> whatever backend is named, as before.</p>
 <h2>How it was tested</h2>
-<p>In omniload's own test harness, on Linux: the Docker-free unit suite with new tests for
-the option plumbing, the ODBC string derivation for each family, the driver-name override,
-separator quoting, the explicit-string error for an unknown scheme, idempotent registration,
-the router's forwarding and the <code>scd2</code> rejection; and, against containers, on PostgreSQL 18 a
-differential load against omniload's <code>pyarrow</code> backend over integer, double, text with
-non-ASCII characters, numeric, boolean, date, <code>timestamp(0)</code>, <code>timestamptz(3)</code> and
-timestamp columns, incremental <code>append</code> through the command line over three runs, <code>merge</code>
-with a primary key and an update, a page size of seven rows over 1,000 rows and a row limit,
-and a custom <code>query:</code> source; on CrateDB 5.10.11 an <code>append</code> load over the PostgreSQL wire
-protocol with an explicit ODBC string; on SQL Server 2022 a differential load against the
-<code>sqlalchemy</code> backend. All pass. omniload's container image was also built from the branch:
-with no override, a <code>postgresql://</code> source loads through the image's own registered
-PostgreSQL ODBC driver, and a <code>timestamp(0)</code> column arrives at second precision.</p>
+<p>Everything ran in omniload's own harness, on Linux, then again on macOS.</p>
+<ul>
+<li>The Docker-free unit lane, with thirteen new tests: the command-line choice, the
+  derivation table above, the driver-name override, quoting of a value that carries the
+  separator, the explicit-string error for an unknown scheme, idempotent registration,
+  the router forwarding the string to dlt, and the <code>scd2</code> rejection. The suite's failure
+  set before and after the change is identical on Linux; on macOS it has no failures.</li>
+<li>Against containers, in one session: on PostgreSQL 18 a differential load against
+  omniload's <code>pyarrow</code> backend over integer, double, text with non-ASCII characters,
+  numeric, boolean, date, <code>timestamp(0)</code>, <code>timestamptz(3)</code> and timestamp columns;
+  incremental <code>append</code> through the command line over three runs, with a row past the
+  cursor arriving and an older one not; <code>merge</code> with a primary key and an update; a page
+  size of seven rows over 1,000 rows, and a row limit; a custom <code>query:</code> source. On
+  CrateDB 5.10.11 an <code>append</code> load over the PostgreSQL wire protocol with an explicit
+  ODBC string. On SQL Server 2025, the image omniload pins, and on 2022, a differential
+  load against the <code>sqlalchemy</code> backend. Seven of seven pass.</li>
+<li>omniload's container image, built from the branch: with no override, a <code>postgresql://</code>
+  source loads through the image's own registered PostgreSQL ODBC driver on Python 3.14,
+  and a <code>timestamp(0)</code> column arrives at second precision.</li>
+<li>The macOS pass repeated the unit lane and the PostgreSQL differential on a scratch
+  cluster built from source, and that is where the differential failed: the cluster's
+  <code>initdb</code> had taken the host's time zone, and adbcBridge turned out to assume a UTC
+  session on PostgreSQL-wire servers, shifting <code>timestamptz</code> values on read and on
+  ingest. That defect is fixed in adbcBridge 0.1.3, which the extra now pins, and the
+  same cluster passes the differential with it. It is written up on its own page.</li>
+</ul>
+<p>Three things the harness taught along the way, none of them the backend's: SQL Server
+2025 aborts at start on a hybrid-core laptop CPU unless the container is pinned to a
+uniform set of cores; two containers starting at once can lose a race for the harness's
+reaper container, which a retry settles; and omniload's <code>query:</code> path patches dlt for the
+life of the process, so the custom-query test runs in a subprocess.</p>
 <h2>Why it matters</h2>
 <p>For omniload users this is Arrow straight from the driver on databases that have an
 ODBC driver and no native ADBC one, SQL Server first among them, and a second route on
