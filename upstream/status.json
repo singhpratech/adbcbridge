@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-15T19:33:48Z",
+ "as_of": "2026-09-15T21:25:44Z",
  "window_days": 7,
  "count": 35,
  "with_project_activity": 19,
@@ -603,11 +603,19 @@
      "actor": "slabko",
      "reason": null,
      "commit": null
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-15T19:42:12Z",
+     "actor": "slabko",
+     "association": "contributor",
+     "text": "Just realized that `written_rows` in `X-ClickHouse-Summary` also reports rows changed in the associated materialized views.",
+     "url": "https://github.com/ClickHouse/clickhouse-odbc/issues/335#issuecomment-5687071526"
     }
    ],
-   "reporter_comments": 1,
+   "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-09-15T19:25:55Z",
+   "last_activity": "2026-09-15T19:42:12Z",
    "pulse": true
   },
   {
