@@ -125,6 +125,15 @@
 /// nothing that changes what a query returns is ever set.  See OdbcTuneConnectionString
 /// for the complete list of what this adds.
 #define ADBC_ODBC_OPTION_TUNE "adbc.odbc.tune"
+/// Database option: put a PostgreSQL-wire session (psqlodbc) on the UTC time zone at
+/// connect, so timestamp-with-time-zone values read and written through the driver
+/// are the instants they claim to be.  psqlodbc hands a timestamptz over as the
+/// session's wall-clock time with no offset, and sends a bound timestamp parameter
+/// the same way, so on a server whose zone is not UTC every zoned value would be
+/// shifted by that zone's offset in both directions.  "true" (the default) runs
+/// SET TIME ZONE 'UTC' once per connection; "false" leaves the session as the server
+/// configured it, and zoned values are then only correct on a UTC server.
+#define ADBC_ODBC_OPTION_UTC_SESSION "adbc.odbc.utc_session"
 /// Read-only: SQL_DRIVER_NAME of the underlying ODBC driver.  ADBC_INFO_DRIVER_NAME
 /// must be a stable identity for adbcbridge itself, so the backing driver's file
 /// name is exposed here (and, as context, in ADBC_INFO_VENDOR_NAME) instead.

@@ -203,3 +203,69 @@ def test_get_objects_db_schemas_name_the_catalog(conn):
              for o in objs for s in (o["catalog_db_schemas"] or [])]
     assert (catalog, "public") in pairs
     assert all(c == catalog for c, _ in pairs), pairs
+
+
+# --- the session time zone (adbc.odbc.utc_session) -------------------------------------------
+
+@pytest.fixture
+def new_york_database():
+    """Make the database default to a non-UTC zone for the duration of the test.
+
+    A session picks the setting up at connect, so every connection opened inside
+    the test sees America/New_York; the fixture's own connection resets it after.
+    """
+    with dbapi.connect(
+        driver=DRIVER, entrypoint="AdbcDriverInit",
+        db_kwargs={"adbc.odbc.connection_string": connstr(), "adbc.odbc.delegate": "never"},
+        autocommit=True,
+    ) as admin:
+        with admin.cursor() as cur:
+            cur.execute("ALTER DATABASE %s SET timezone TO 'America/New_York'"
+                        % urllib.parse.urlparse(PG_CONN).path.lstrip("/"))
+        try:
+            yield
+        finally:
+            with admin.cursor() as cur:
+                cur.execute("ALTER DATABASE %s RESET timezone"
+                            % urllib.parse.urlparse(PG_CONN).path.lstrip("/"))
+
+
+def _connect(utc_session=None):
+    kwargs = {"adbc.odbc.connection_string": connstr(), "adbc.odbc.delegate": "never"}
+    if utc_session is not None:
+        kwargs["adbc.odbc.utc_session"] = "true" if utc_session else "false"
+    return dbapi.connect(driver=DRIVER, entrypoint="AdbcDriverInit", db_kwargs=kwargs, autocommit=True)
+
+
+def test_zoned_values_are_instants_on_a_non_utc_server(new_york_database):
+    """psqlodbc hands timestamptz over as session wall-clock time without its offset;
+    the driver puts the session on UTC so reads and ingest keep the instant."""
+    instant = datetime.datetime(2024, 2, 29, 13, 45, 10, 123000, tzinfo=UTC)
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SHOW TimeZone")
+            assert cur.fetchone()[0] == "UTC"
+            cur.execute("DROP TABLE IF EXISTS adbc_tz")
+            cur.execute("CREATE TABLE adbc_tz (id int, t timestamptz(3), t0 timestamptz(0))")
+            cur.execute("INSERT INTO adbc_tz VALUES (1, '2024-02-29 13:45:10.123+00', '2024-02-29 13:45:10+00')")
+            cur.execute("SELECT t, t0 FROM adbc_tz")
+            (t, t0) = cur.fetchone()
+            assert t == instant
+            assert t0 == instant.replace(microsecond=0)
+            # Ingest a zoned value and check the instant the server holds.
+            cur.adbc_ingest("adbc_tz_in", pa.table({"t": pa.array([instant], pa.timestamp("ms", tz="UTC"))}), mode="replace")
+            cur.execute("SELECT t AT TIME ZONE 'UTC' FROM adbc_tz_in")
+            assert cur.fetchone()[0] == instant.replace(tzinfo=None)
+            cur.execute("DROP TABLE adbc_tz")
+            cur.execute("DROP TABLE adbc_tz_in")
+
+
+def test_utc_session_can_be_switched_off(new_york_database):
+    with _connect(utc_session=False) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SHOW TimeZone")
+            assert cur.fetchone()[0] == "America/New_York"
+    assert dbapi.connect(driver=DRIVER, entrypoint="AdbcDriverInit",
+                         db_kwargs={"adbc.odbc.connection_string": connstr(),
+                                    "adbc.odbc.delegate": "never",
+                                    "adbc.odbc.utc_session": "false"}).adbc_database.get_option("adbc.odbc.utc_session") == "false"

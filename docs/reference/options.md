@@ -51,6 +51,7 @@ Set with `AdbcDatabaseSetOption` before `AdbcDatabaseInit`.
 | `adbc.odbc.decimal_as_string` | `true` to enable | `false` | Read `DECIMAL`/`NUMERIC` as Arrow `string` instead of `decimal128`. Only the exact value `true` enables it. |
 | `adbc.odbc.sqllen_32bit` | `true`/`false` (`1`/`0`) | autodetected | Force the 32-bit-`SQLLEN` driver quirk on or off. Unset means autodetect from the driver name. |
 | `adbc.odbc.tune` | `true`/`false` (`1`/`0`) | `true` | Allow adbcBridge to add its own ODBC connection keywords where it recognises the driver. |
+| `adbc.odbc.utc_session` | `true`/`false` (`1`/`0`) | `true` | On a PostgreSQL-wire connection (psqlodbc), run `SET TIME ZONE 'UTC'` at connect. psqlodbc hands a `timestamptz` over as the session's wall-clock time without its offset and sends a bound timestamp the same way, so zoned values are only correct when the session zone is UTC; on a server configured for another zone both reads and bulk ingest would be shifted by that zone's offset. `false` keeps the server's setting. Session-dependent SQL (`now()::text`, `date_trunc` on a `timestamptz`) then renders in UTC. |
 | `adbc.odbc.delegate` | `auto` / `never` / `always` | `auto` (or `$ADBC_ODBC_DELEGATE`) | Whether to hand the connection to a native ADBC driver instead of going over ODBC. |
 | `adbc.odbc.delegate.driver` | string | — | The native ADBC driver to delegate to (name, path, or manifest). |
 | `adbc.odbc.delegate.search_path` | path list | — | Extra directories to find the native driver in (honoured only with `allow_paths`). |
