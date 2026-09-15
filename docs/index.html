@@ -196,7 +196,7 @@ See <a href="#reference-connection-strings">Connection strings</a> and
 <thead>
 <tr>
 <th></th>
-<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.2 changes native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05)</th>
+<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changed native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05; 0.1.2 changes PostgreSQL temporal types and Windows array ingest, re-run on 42 Linux rows on 2026-09-15)</th>
 </tr>
 </thead>
 <tbody>
@@ -422,7 +422,7 @@ See <a href="#reference-connection-strings">Connection strings</a> and
 <thead>
 <tr>
 <th></th>
-<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.2 changes native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05)</th>
+<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changed native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05; 0.1.2 changes PostgreSQL temporal types and Windows array ingest, re-run on 42 Linux rows on 2026-09-15)</th>
 </tr>
 </thead>
 <tbody>
@@ -664,7 +664,7 @@ run on any reasonably recent glibc-based distribution.</p>
 tar xzf adbcbridge-v0.1.2-linux-x64.tar.gz
 # → linux-x64/libadbc_driver_odbc.so
 </code></pre>
-<p>The checksum file is signed by the release key (<code>SHA256SUMS.asc</code>); releases after v0.1.2 also
+<p>The checksum file is signed by the release key (<code>SHA256SUMS.asc</code>); releases after v0.1.0 also
 carry a build-provenance attestation for every asset and an SBOM; <a href="#community-security--verifying-a-download">Security</a>
 shows how to check each.</p>
 <p>Point adbcBridge's clients at it with the <code>ADBC_ODBC_DRIVER</code> environment
@@ -1115,7 +1115,7 @@ is kept on Windows too (the build sets it deliberately, so the file is
 <code>win-x64/libadbc_driver_odbc.dll</code>, built for 64-bit x86 with MSVC.</p>
 <p>The release page also carries <code>SHA256SUMS</code>; <code>Get-FileHash adbcbridge-v0.1.2-win-x64.tar.gz -Algorithm SHA256</code>
 in PowerShell gives the value to compare. <a href="#community-security--verifying-a-download">Security</a>
-covers checking the file's GPG signature, and the provenance and SBOM that releases after v0.1.2 add.</p>
+covers checking the file's GPG signature, and the provenance and SBOM that releases after v0.1.0 add.</p>
 <h3 id="from-the-python-wheel">From the Python wheel</h3>
 <p>The Windows wheel bundles the DLL. Install it, plus the ADBC client:</p>
 <pre><code>pip install adbcbridge          # from PyPI
@@ -3280,9 +3280,9 @@ and <code>win-x64</code>, so nothing else needs installing beyond an ODBC driver
 <h3 id="from-a-github-release-local-nuget-source">From a GitHub Release (local NuGet source)</h3>
 <p>The same <code>.nupkg</code> is attached to each release. On a machine without registry access,
 download it, register the folder that holds it as a package source, then add the package:</p>
-<pre><code class="language-sh"># 1. Download AdbcBridge.0.1.0.nupkg from the Release into ./localnuget/
+<pre><code class="language-sh"># 1. Download AdbcBridge.0.1.2.nupkg from the Release into ./localnuget/
 mkdir -p localnuget
-# (place AdbcBridge.0.1.0.nupkg in ./localnuget/)
+# (place AdbcBridge.0.1.2.nupkg in ./localnuget/)
 
 # 2. Register the folder as a NuGet source.
 dotnet nuget add source &quot;$PWD/localnuget&quot; --name adbcbridge-local
@@ -4083,7 +4083,7 @@ its sources and javadoc jars, is attached to the
 <p><code>mvn install:install-file</code> puts a downloaded jar into the local repository, but
 generates a dependency-less POM, so declare the runtime dependencies alongside:</p>
 <pre><code class="language-sh">mvn install:install-file \
-    -Dfile=adbcbridge-0.1.0.jar \
+    -Dfile=adbcbridge-0.1.2.jar \
     -DgroupId=org.adbcbridge \
     -DartifactId=adbcbridge \
     -Dversion=0.1.2 \
@@ -6817,7 +6817,7 @@ while it assembles the connection string, under three rules: a keyword <strong>y
 set (in the connection string or in the DSN) is never overridden, nothing that
 changes what a query returns is ever set, and <code>adbc.odbc.tune=false</code> turns the
 whole thing off.</p>
-<p>The complete list in v0.1.0 is one keyword:</p>
+<p>The complete list as of v0.1.2 is one keyword on every platform, and a second one on Windows only, described below the table:</p>
 <div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
 <thead>
 <tr>
@@ -10844,7 +10844,7 @@ ODBC is the first bridge; the name leaves room for the others.</p>
 </tr>
 <tr>
 <td>ADBC Driver Foundry validation suite (<a href="https://github.com/singhpratech/adbcbridge/blob/main/tests/validation/RESULTS.md"><code>tests/validation/RESULTS.md</code></a>): PostgreSQL 293/327 pass with the other 34 declared backend limitations (2026-09-15; was 265 on 2026-09-06), SQLite 212/327 with the remainder being precision SQLiteODBC does not report; baseline findings D1–D9, D11, D14 and the PostgreSQL findings P1–P4 (TIME/TIMESTAMP precision and zone fidelity), P7 (<code>db_schema</code> option) and P8 (schema catalog fill) fixed; <code>tests/test_postgres.py</code> pins them in CI</td>
-<td>done — ships in 0.1.2</td>
+<td>done — released in 0.1.2 (2026-09-15)</td>
 </tr>
 <tr>
 <td>Trust artefacts: security policy with private vulnerability reporting and a stated support window (<code>SECURITY.md</code>); Dependabot on every manifest; <code>SHA256SUMS</code> and its signature (<code>SHA256SUMS.asc</code>) on v0.1.0; every later release signed, attested (GitHub build provenance, <code>gh attestation verify</code>) and shipped with an SPDX SBOM by the release workflow</td>
@@ -11530,9 +11530,9 @@ re-running it is safe.</p>
 </tbody>
 </table></div>
 <p>All five are built, tested and attached to every
-<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0">GitHub Release</a>;
-the wheel, crate and nupkg are also on PyPI, crates.io and nuget.org (Maven Central
-is still to come). Each resolves the library the
+<a href="https://github.com/singhpratech/adbcbridge/releases/latest">GitHub Release</a>;
+the wheel, crate, nupkg and jar are also on PyPI, crates.io, nuget.org and Maven
+Central. Each resolves the library the
 same way and raises an error when it cannot; Rust, C#, Java and Go list every
 place they looked. See
 <a href="https://github.com/singhpratech/adbcbridge/blob/main/README.md#language-packages">Language packages</a>.</p>
@@ -11684,9 +11684,9 @@ is a driver-manager bug, reported upstream
 <a href="https://github.com/singhpratech/adbcbridge/blob/main/NOTICE"><code>NOTICE</code></a>.</p>
 <h3 id="what-does-the-01x-version-mean">What does the 0.1.x version mean?</h3>
 <p>Early. The read/write path, the 53-database matrix and the five language packages
-are done and 0.1.0 is on PyPI, crates.io and nuget.org; a conformance suite and Maven
-Central are in progress. <code>v0.1.0</code> was tagged 2026-08-25 with four platform libraries,
-four wheels plus an sdist, a crate, a NuGet package and a jar. Treat the API as stabilising, not stable. See
+are done and 0.1.2 is on PyPI, crates.io, nuget.org and Maven Central. <code>v0.1.0</code> was
+tagged 2026-08-25 with four platform libraries, four wheels plus an sdist, a crate, a
+NuGet package and a jar; 0.1.1 (2026-09-05) and 0.1.2 (2026-09-15) followed. Treat the API as stabilising, not stable. See
 the <a href="#roadmap">roadmap</a>.</p>
 <h3 id="what-is-on-the-roadmap">What is on the roadmap?</h3>
 <p>For the ODBC bridge: a driver-bootstrap installer that fetches the open-licence
