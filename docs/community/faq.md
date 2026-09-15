@@ -181,9 +181,9 @@ One driver library, five wrapper packages that locate and load it:
 | Go | `github.com/singhpratech/adbcbridge/go` over `drivermgr` | `adbcbridge.NewDriver(alloc)` |
 
 All five are built, tested and attached to every
-[GitHub Release](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.0);
-the wheel, crate and nupkg are also on PyPI, crates.io and nuget.org (Maven Central
-is still to come). Each resolves the library the
+[GitHub Release](https://github.com/singhpratech/adbcbridge/releases/latest);
+the wheel, crate, nupkg and jar are also on PyPI, crates.io, nuget.org and Maven
+Central. Each resolves the library the
 same way and raises an error when it cannot; Rust, C#, Java and Go list every
 place they looked. See
 [Language packages](../../README.md#language-packages).
@@ -379,9 +379,9 @@ Apache-2.0. Every non-vendored source file carries an
 ### What does the 0.1.x version mean?
 
 Early. The read/write path, the 53-database matrix and the five language packages
-are done and 0.1.0 is on PyPI, crates.io and nuget.org; a conformance suite and Maven
-Central are in progress. `v0.1.0` was tagged 2026-08-25 with four platform libraries,
-four wheels plus an sdist, a crate, a NuGet package and a jar. Treat the API as stabilising, not stable. See
+are done and 0.1.2 is on PyPI, crates.io, nuget.org and Maven Central. `v0.1.0` was
+tagged 2026-08-25 with four platform libraries, four wheels plus an sdist, a crate, a
+NuGet package and a jar; 0.1.1 (2026-09-05) and 0.1.2 (2026-09-15) followed. Treat the API as stabilising, not stable. See
 the [roadmap](../ROADMAP.md).
 
 ### What is on the roadmap?

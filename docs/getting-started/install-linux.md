@@ -93,7 +93,7 @@ tar xzf adbcbridge-v0.1.2-linux-x64.tar.gz
 # → linux-x64/libadbc_driver_odbc.so
 ```
 
-The checksum file is signed by the release key (`SHA256SUMS.asc`); releases after v0.1.2 also
+The checksum file is signed by the release key (`SHA256SUMS.asc`); releases after v0.1.0 also
 carry a build-provenance attestation for every asset and an SBOM; [Security](../community/security.md#verifying-a-download)
 shows how to check each.
 

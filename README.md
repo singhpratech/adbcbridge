@@ -281,9 +281,10 @@ place they looked.
 
 Early (0.1.2). Working: everything under *What it does*, on Linux, macOS (arm64) and
 Windows (x64 and Win32 built and tested in CI on every push; the Windows build lacks
-prefetch and parallel ingest); 0.1.2 on PyPI, crates.io, nuget.org and Maven Central. Next: the ADBC Driver
-Foundry validation suite, a driver bootstrap for the open-licence ODBC
-drivers, the Win32 thread shim; then a JDBC bridge on the same model —
+prefetch and parallel ingest); 0.1.2 on PyPI, crates.io, nuget.org and Maven Central. The ADBC Driver
+Foundry validation suite passes on PostgreSQL apart from declared server limits
+([`tests/validation/RESULTS.md`](tests/validation/RESULTS.md)). Next: a driver bootstrap for
+the open-licence ODBC drivers, the Win32 thread shim; then a JDBC bridge on the same model —
 [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Upstream: giving back

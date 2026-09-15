@@ -100,9 +100,9 @@ The same `.nupkg` is attached to each release. On a machine without registry acc
 download it, register the folder that holds it as a package source, then add the package:
 
 ```sh
-# 1. Download AdbcBridge.0.1.0.nupkg from the Release into ./localnuget/
+# 1. Download AdbcBridge.0.1.2.nupkg from the Release into ./localnuget/
 mkdir -p localnuget
-# (place AdbcBridge.0.1.0.nupkg in ./localnuget/)
+# (place AdbcBridge.0.1.2.nupkg in ./localnuget/)
 
 # 2. Register the folder as a NuGet source.
 dotnet nuget add source "$PWD/localnuget" --name adbcbridge-local
