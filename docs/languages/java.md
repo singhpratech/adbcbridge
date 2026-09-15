@@ -164,7 +164,7 @@ generates a dependency-less POM, so declare the runtime dependencies alongside:
 
 ```sh
 mvn install:install-file \
-    -Dfile=adbcbridge-0.1.0.jar \
+    -Dfile=adbcbridge-0.1.2.jar \
     -DgroupId=org.adbcbridge \
     -DartifactId=adbcbridge \
     -Dversion=0.1.2 \

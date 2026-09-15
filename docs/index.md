@@ -87,7 +87,7 @@ See [Connection strings](reference/connection-strings.md) and
 adbcBridge is early software — version **0.1.2**, published on
 [GitHub Releases](https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.2).
 
-| | Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.2 changes native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05) |
+| | Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changed native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05; 0.1.2 changes PostgreSQL temporal types and Windows array ingest, re-run on 42 Linux rows on 2026-09-15) |
 |---|---|
 | Databases (one workload: types, NULLs, Unicode, parameters, bulk ingest, batched reads, metadata, errors) | **53 on Linux**, **45 on macOS**, **48 on Windows** |
 | Language packages | **five** — Python, Rust, C#, Java, Go (R is smoke-tested) |
