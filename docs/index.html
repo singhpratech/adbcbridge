@@ -10916,6 +10916,34 @@ before it is filed.</p>
 </thead>
 <tbody>
 <tr>
+<td>2026-09-15</td>
+<td>pandas</td>
+<td><a href="https://github.com/pandas-dev/pandas/pull/68178">pandas-dev/pandas#68178</a></td>
+<td>Documentation contribution: an ADBC-over-ODBC entry for the I/O guide's ADBC section, showing <code>read_sql</code> through adbcBridge. Opened 2026-09-05</td>
+<td><strong>closed</strong> 2026-09-15 by a maintainer: that page is for long-established, common usages, which a driver released three weeks earlier is not yet; acknowledged on the PR, to be revisited with usage numbers in a year</td>
+</tr>
+<tr>
+<td>2026-09-15</td>
+<td>Polars</td>
+<td><a href="https://github.com/pola-rs/polars/pull/29176">pola-rs/polars#29176</a></td>
+<td>Documentation contribution: an ADBC-over-ODBC snippet for the user guide's database page. Opened 2026-09-05</td>
+<td><strong>open</strong> — no reviewer yet; the pandas page's bar for established usage may apply here too</td>
+</tr>
+<tr>
+<td>2026-09-15</td>
+<td>conda-forge</td>
+<td><a href="https://github.com/conda-forge/staged-recipes/pull/34738">conda-forge/staged-recipes#34738</a></td>
+<td>Packaging contribution: a <code>libadbcbridge</code> + <code>adbcbridge</code> recipe for Linux and macOS. Opened 2026-09-05</td>
+<td><strong>open</strong> — linter and Linux/Windows builds pass, awaiting a reviewer; nudge due around 2026-09-21</td>
+</tr>
+<tr>
+<td>2026-09-15</td>
+<td>omniload</td>
+<td><a href="https://github.com/panodata/omniload/pull/362">panodata/omniload#362</a> (from the maintainer's request in <a href="https://github.com/panodata/omniload/issues/138">#138</a>)</td>
+<td>A fourth <code>--sql-backend</code>, <code>adbcbridge</code>, for omniload's SQL sources: dlt's registered table-loader hook, SQLAlchemy reflection and query compilation kept, Arrow batches read through the database's ODBC driver via adbcBridge; the ODBC connection string derived from the source URI for PostgreSQL, SQL Server, CrateDB and MySQL, <code>--sql-odbc-uri</code> for the rest; tests on PostgreSQL 18, CrateDB 5.10.11 and SQL Server 2025/2022, a handbook page and changelog entry. Contribution rather than a report: the first integration requested from outside</td>
+<td><strong>open</strong> — under review</td>
+</tr>
+<tr>
 <td>2026-08-25</td>
 <td>unixODBC</td>
 <td><a href="https://github.com/lurcher/unixODBC/issues/239">lurcher/unixODBC#239</a></td>
@@ -10983,7 +11011,7 @@ before it is filed.</p>
 <td>clickhouse-odbc</td>
 <td><a href="https://github.com/ClickHouse/clickhouse-odbc/issues/335#issuecomment-5464127498">ClickHouse/clickhouse-odbc#335 (comment)</a></td>
 <td>Affected-row count, open since 2021: still 0 (not −1) for every write on 1.5.5 against 26.7.5.10; noted that the server already sends <code>written_rows</code> in <code>X-ClickHouse-Summary</code> on every HTTP response by default, which the driver could surface.</td>
-<td>open</td>
+<td><strong>maintainer replied 2026-09-15</strong>: returning 0 is wrong and will be fixed to −1 (the ODBC "unknown" value) for now; <code>X-ClickHouse-Summary</code> is not trusted while <code>async_insert</code> is on (ClickHouse/ClickHouse#57768), so a header-based count is deferred. To verify on the fix build when it lands</td>
 </tr>
 <tr>
 <td>2026-08-29</td>
