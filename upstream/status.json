@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-15T17:26:59Z",
+ "as_of": "2026-09-15T18:11:25Z",
  "window_days": 7,
  "count": 35,
  "with_project_activity": 19,
@@ -588,11 +588,19 @@
      "association": "contributor",
      "text": "@singhpratech, returning `0` by default is indeed incorrect behavior. This absolutely needs to be fixed. However, I'm not sure with X-ClickHouse-Summary. This values provided by this header are not very reliable, see https://github.com/ClickHouse/ClickHouse/issues/57768. It should be possible to use this header when `async_insert` is disabled, but I still need to think about how to handle this cor…",
      "url": "https://github.com/ClickHouse/clickhouse-odbc/issues/335#issuecomment-5684555512"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-15T17:29:38Z",
+     "actor": "slabko",
+     "title": "Make SQLRowCount return `-1` when the value is unknown",
+     "url": "https://github.com/ClickHouse/clickhouse-odbc/pull/585",
+     "state": "open"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-15T17:04:46Z",
+   "last_activity": "2026-09-15T17:29:38Z",
    "pulse": true
   },
   {
