@@ -1970,6 +1970,7 @@ struct ArrayIngest {
   int64_t rows;  // rows carried by one execute
   SQLHSTMT hstmt;
   struct ArrowBuffer* bufs;  // ncols array literals, reused by every execute
+  struct ArrowBuffer* wbufs;  // the same literals as SQLWCHAR, where they are bound wide
   struct ArrowBuffer scratch;  // one value at a time, for the decimal renderer
   SQLLEN* inds;
 };
@@ -2077,6 +2078,11 @@ static void ArrayIngestReset(struct ArrayIngest* ai) {
     free(ai->bufs);
     ai->bufs = NULL;
   }
+  if (ai->wbufs) {
+    for (int64_t i = 0; i < ai->ncols; i++) ArrowBufferReset(&ai->wbufs[i]);
+    free(ai->wbufs);
+    ai->wbufs = NULL;
+  }
   ArrowBufferReset(&ai->scratch);
   free(ai->inds);
   ai->inds = NULL;
@@ -2130,16 +2136,22 @@ static void ArrayIngestSetup(struct ArrayIngest* ai, const struct ArrowSchemaVie
   }
   InternalAdbcStringBuilderReset(&sb);
   ai->bufs = calloc((size_t)ai->ncols, sizeof(*ai->bufs));
+  ai->wbufs = calloc((size_t)ai->ncols, sizeof(*ai->wbufs));
   ai->inds = calloc((size_t)ai->ncols, sizeof(*ai->inds));
-  if (!ai->bufs || !ai->inds) {
+  if (!ai->bufs || !ai->wbufs || !ai->inds) {
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
     free(ai->bufs);
     ai->bufs = NULL;
+    free(ai->wbufs);
+    ai->wbufs = NULL;
     free(ai->inds);
     ai->inds = NULL;
     return;
   }
-  for (int64_t i = 0; i < ai->ncols; i++) ArrowBufferInit(&ai->bufs[i]);
+  for (int64_t i = 0; i < ai->ncols; i++) {
+    ArrowBufferInit(&ai->bufs[i]);
+    ArrowBufferInit(&ai->wbufs[i]);
+  }
   ai->hstmt = hstmt;
   ai->rows = ai->stmt->rows_per_insert > 1 ? ai->stmt->rows_per_insert
                                            : ADBC_ODBC_ARRAY_INGEST_ROWS;
@@ -2434,13 +2446,35 @@ static AdbcStatusCode ArrayIngestExecuteBatch(struct ArrayIngest* ai,
       n = smallest;
     }
     SQLFreeStmt(ai->hstmt, SQL_CLOSE);
+    // Each literal is one text parameter, and it travels the way a string parameter
+    // does on the row path (see BindRowParam's NANOARROW_TYPE_STRING case): wide, as
+    // SQLWCHAR units, unless the driver is one whose narrow path is UTF-8.  Bound
+    // narrow on a Unicode driver, the bytes are read as the client's ANSI code page --
+    // on Windows psqlodbc re-encodes them to UTF-8 a second time, and "héllo" lands as
+    // "hÃ©llo" while the row path stores it correctly (found on Windows).
+    const struct OdbcReaderOptions* opts = &ai->stmt->reader_opts;
+    const bool wide = !(opts->wchar_as_utf8 || opts->narrow_params);
     for (int64_t c = 0; c < ncols; c++) {
-      ai->inds[c] = (SQLLEN)ai->bufs[c].size_bytes;
+      SQLSMALLINT c_type = SQL_C_CHAR, sql_type = SQL_LONGVARCHAR;
+      SQLPOINTER data = (SQLPOINTER)ai->bufs[c].data;
+      SQLULEN column_size = (SQLULEN)ai->bufs[c].size_bytes;
+      SQLLEN bytes = (SQLLEN)ai->bufs[c].size_bytes;
+      if (wide) {
+        int64_t units = 0;
+        CHECK_NA(INTERNAL,
+                 Utf8ToUtf16(&ai->wbufs[c], (const char*)ai->bufs[c].data,
+                             ai->bufs[c].size_bytes, &units, opts->wide_utf16_pairs),
+                 error);
+        c_type = SQL_C_WCHAR;
+        sql_type = SQL_WLONGVARCHAR;
+        data = (SQLPOINTER)ai->wbufs[c].data;
+        column_size = (SQLULEN)units;
+        bytes = (SQLLEN)ai->wbufs[c].size_bytes;
+      }
+      ai->inds[c] = bytes;
       if (!SQL_SUCCEEDED(SQLBindParameter(ai->hstmt, (SQLUSMALLINT)(c + 1), SQL_PARAM_INPUT,
-                                          SQL_C_CHAR, SQL_LONGVARCHAR,
-                                          (SQLULEN)ai->bufs[c].size_bytes, 0,
-                                          (SQLPOINTER)ai->bufs[c].data,
-                                          (SQLLEN)ai->bufs[c].size_bytes, &ai->inds[c]))) {
+                                          c_type, sql_type, column_size, 0, data, bytes,
+                                          &ai->inds[c]))) {
         return OdbcSetError(SQL_HANDLE_STMT, ai->hstmt, "SQLBindParameter", error);
       }
     }
