@@ -190,13 +190,13 @@ searches, so every binding can load it as <code>driver="odbc"</code> with nothin
 See <a href="#reference-connection-strings">Connection strings</a> and
 <a href="#reference-options">Options</a> for the details.</p>
 <h2 id="current-status">Current status</h2>
-<p>adbcBridge is early software — version <strong>0.1.1</strong>, published on
-<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.1">GitHub Releases</a>.</p>
+<p>adbcBridge is early software — version <strong>0.1.2</strong>, published on
+<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.2">GitHub Releases</a>.</p>
 <div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
 <thead>
 <tr>
 <th></th>
-<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changes native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05)</th>
+<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.2 changes native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05)</th>
 </tr>
 </thead>
 <tbody>
@@ -214,7 +214,7 @@ See <a href="#reference-connection-strings">Connection strings</a> and
 </tr>
 <tr>
 <td>Release</td>
-<td>v0.1.1: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; <code>SHA256SUMS</code>, its GPG signature, build provenance and an SBOM on the release (<a href="#community-security--verifying-a-download">how to verify</a>)</td>
+<td>v0.1.2: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; <code>SHA256SUMS</code>, its GPG signature, build provenance and an SBOM on the release (<a href="#community-security--verifying-a-download">how to verify</a>)</td>
 </tr>
 </tbody>
 </table></div>
@@ -416,13 +416,13 @@ searches, so every binding can load it as <code>driver="odbc"</code> with nothin
 See <a href="#reference-connection-strings">Connection strings</a> and
 <a href="#reference-options">Options</a> for the details.</p>
 <h2 id="current-status">Current status</h2>
-<p>adbcBridge is early software — version <strong>0.1.1</strong>, published on
-<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.1">GitHub Releases</a>.</p>
+<p>adbcBridge is early software — version <strong>0.1.2</strong>, published on
+<a href="https://github.com/singhpratech/adbcbridge/releases/tag/v0.1.2">GitHub Releases</a>.</p>
 <div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
 <thead>
 <tr>
 <th></th>
-<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.1 changes native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05)</th>
+<th>Verified as of 2026-09-04 (rows measured on 0.1.0; 0.1.2 changes native delegation only, re-probed on the 14 PostgreSQL-wire rows on 2026-09-05)</th>
 </tr>
 </thead>
 <tbody>
@@ -440,7 +440,7 @@ See <a href="#reference-connection-strings">Connection strings</a> and
 </tr>
 <tr>
 <td>Release</td>
-<td>v0.1.1: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; <code>SHA256SUMS</code>, its GPG signature, build provenance and an SBOM on the release (<a href="#community-security--verifying-a-download">how to verify</a>)</td>
+<td>v0.1.2: four prebuilt libraries, four wheels + sdist, crate, NuGet package, jar; on PyPI, crates.io, nuget.org and Maven Central; <code>SHA256SUMS</code>, its GPG signature, build provenance and an SBOM on the release (<a href="#community-security--verifying-a-download">how to verify</a>)</td>
 </tr>
 </tbody>
 </table></div>
@@ -661,10 +661,10 @@ On Linux the assets are named <code>adbcbridge-&lt;tag&gt;-linux-x64.tar.gz</cod
 <code>adbcbridge-&lt;tag&gt;-linux-arm64.tar.gz</code> (ARM64), built on <code>manylinux_2_28</code> so they
 run on any reasonably recent glibc-based distribution.</p>
 <pre><code class="language-sh">sha256sum -c SHA256SUMS --ignore-missing     # SHA256SUMS is on the same release page
-tar xzf adbcbridge-v0.1.1-linux-x64.tar.gz
+tar xzf adbcbridge-v0.1.2-linux-x64.tar.gz
 # → linux-x64/libadbc_driver_odbc.so
 </code></pre>
-<p>The checksum file is signed by the release key (<code>SHA256SUMS.asc</code>); releases after v0.1.1 also
+<p>The checksum file is signed by the release key (<code>SHA256SUMS.asc</code>); releases after v0.1.2 also
 carry a build-provenance attestation for every asset and an SBOM; <a href="#community-security--verifying-a-download">Security</a>
 shows how to check each.</p>
 <p>Point adbcBridge's clients at it with the <code>ADBC_ODBC_DRIVER</code> environment
@@ -676,7 +676,7 @@ and <a href="#getting-started-install-linux--via-installsh"><code>install.sh</co
 you both the binding and the driver in one step:</p>
 <pre><code class="language-sh">pip install adbcbridge          # from PyPI
 # or, from a downloaded release wheel (the aarch64 wheel is named likewise):
-pip install adbcbridge-0.1.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+pip install adbcbridge-0.1.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 pip install adbc-driver-manager pyarrow
 </code></pre>
 <p>The wheel's own <code>adbcbridge.driver_path()</code> finds the bundled library, so nothing
@@ -977,7 +977,7 @@ manager registered it:</p>
 <code>osx-arm64/libadbc_driver_odbc.dylib</code>. It is built against unixODBC, for Apple
 Silicon.</p>
 <pre><code class="language-sh">shasum -a 256 -c SHA256SUMS --ignore-missing   # SHA256SUMS is on the same release page
-tar xzf adbcbridge-v0.1.1-osx-arm64.tar.gz
+tar xzf adbcbridge-v0.1.2-osx-arm64.tar.gz
 # → osx-arm64/libadbc_driver_odbc.dylib
 </code></pre>
 <h3 id="from-the-python-wheel-bundles-the-library">From the Python wheel (bundles the library)</h3>
@@ -987,7 +987,7 @@ release build passes <code>_PYTHON_HOST_PLATFORM=macosx-14.0-arm64</code>, which
 tag normalises to).</p>
 <pre><code class="language-sh">pip install adbcbridge          # from PyPI
 # or a downloaded release wheel:
-pip install adbcbridge-0.1.1-py3-none-macosx_14_0_arm64.whl
+pip install adbcbridge-0.1.2-py3-none-macosx_14_0_arm64.whl
 pip install adbc-driver-manager pyarrow
 </code></pre>
 <blockquote>
@@ -1113,14 +1113,14 @@ is kept on Windows too (the build sets it deliberately, so the file is
 <h3 id="from-the-github-release-prebuilt-library">From the GitHub Release (prebuilt library)</h3>
 <p>The Windows release asset is <code>adbcbridge-&lt;tag&gt;-win-x64.tar.gz</code>, containing
 <code>win-x64/libadbc_driver_odbc.dll</code>, built for 64-bit x86 with MSVC.</p>
-<p>The release page also carries <code>SHA256SUMS</code>; <code>Get-FileHash adbcbridge-v0.1.1-win-x64.tar.gz -Algorithm SHA256</code>
+<p>The release page also carries <code>SHA256SUMS</code>; <code>Get-FileHash adbcbridge-v0.1.2-win-x64.tar.gz -Algorithm SHA256</code>
 in PowerShell gives the value to compare. <a href="#community-security--verifying-a-download">Security</a>
-covers checking the file's GPG signature, and the provenance and SBOM that releases after v0.1.1 add.</p>
+covers checking the file's GPG signature, and the provenance and SBOM that releases after v0.1.2 add.</p>
 <h3 id="from-the-python-wheel">From the Python wheel</h3>
 <p>The Windows wheel bundles the DLL. Install it, plus the ADBC client:</p>
 <pre><code>pip install adbcbridge          # from PyPI
 # or, from a downloaded release wheel:
-pip install adbcbridge-0.1.1-py3-none-win_amd64.whl
+pip install adbcbridge-0.1.2-py3-none-win_amd64.whl
 pip install adbc-driver-manager pyarrow
 </code></pre>
 <h3 id="from-source-and-the-cmake-install-layout">From source, and the <code>cmake --install</code> layout</h3>
@@ -1559,9 +1559,9 @@ Install the wheel for your platform:</p>
 <pre><code class="language-sh">pip install adbcbridge
 </code></pre>
 <p>That installs the wheel from <a href="https://pypi.org/project/adbcbridge/">PyPI</a>. The same
-wheels are attached to the GitHub Release (<code>adbcbridge-0.1.1-py3-none-&lt;platform&gt;.whl</code>),
+wheels are attached to the GitHub Release (<code>adbcbridge-0.1.2-py3-none-&lt;platform&gt;.whl</code>),
 so an offline machine can install one directly:</p>
-<pre><code class="language-sh">pip install ./adbcbridge-0.1.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+<pre><code class="language-sh">pip install ./adbcbridge-0.1.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 </code></pre>
 <p>Or install from a source checkout:</p>
 <pre><code class="language-sh">pip install ./python
@@ -2540,7 +2540,7 @@ on Unix, <code>odbc32</code> on Windows for ODBC; <code>adbc_driver_manager</cod
 </tr>
 <tr>
 <td>Version</td>
-<td><code>0.1.1</code> (early)</td>
+<td><code>0.1.2</code> (early)</td>
 </tr>
 <tr>
 <td>Edition</td>
@@ -2671,7 +2671,7 @@ adbc_core = &quot;0.24&quot;
 </code></pre>
 <p><strong>From git</strong> (a pinned tag, if you prefer the repository over the registry):</p>
 <pre><code class="language-toml">[dependencies]
-adbcbridge = { git = &quot;https://github.com/singhpratech/adbcbridge&quot;, tag = &quot;v0.1.1&quot; }
+adbcbridge = { git = &quot;https://github.com/singhpratech/adbcbridge&quot;, tag = &quot;v0.1.2&quot; }
 adbc_core = &quot;0.24&quot;
 </code></pre>
 <p><strong>From a local checkout</strong> (a build tree next to a source checkout is also found
@@ -3075,7 +3075,7 @@ the same way that adbcBridge's <code>adbc.odbc.max_bind_bytes</code> does, so th
 bounded identically.</p>
 <h2 id="known-limitations">Known limitations</h2>
 <ul>
-<li><strong>Early release (0.1.1).</strong> The API surface is small and may change. The
+<li><strong>Early release (0.1.2).</strong> The API surface is small and may change. The
   ADBC Driver Foundry validation suite runs against the driver from
   <code>tests/validation/</code> (latest results in <code>tests/validation/RESULTS.md</code>; driver
   defects it found are still being worked through); prebuilt driver tarballs
@@ -3104,7 +3104,7 @@ back — all through the ADBC traits.</p>
 <p><code>Cargo.toml</code>:</p>
 <pre><code class="language-toml">[package]
 name = &quot;adbcbridge-example&quot;
-version = &quot;0.1.1&quot;
+version = &quot;0.1.2&quot;
 edition = &quot;2021&quot;
 
 [dependencies]
@@ -3222,7 +3222,7 @@ statements, Arrow record batches — is the <code>Apache.Arrow.Adbc</code> API.<
 </tr>
 <tr>
 <td>Version</td>
-<td><code>0.1.1</code></td>
+<td><code>0.1.2</code></td>
 </tr>
 <tr>
 <td>Target frameworks</td>
@@ -3273,7 +3273,7 @@ automatically.</p>
 <hr />
 <h2 id="install">Install</h2>
 <h3 id="from-nugetorg">From nuget.org</h3>
-<pre><code class="language-sh">dotnet add package AdbcBridge --version 0.1.1
+<pre><code class="language-sh">dotnet add package AdbcBridge --version 0.1.2
 </code></pre>
 <p>The package carries the native library for <code>linux-x64</code>, <code>linux-arm64</code>, <code>osx-arm64</code>
 and <code>win-x64</code>, so nothing else needs installing beyond an ODBC driver for your database.</p>
@@ -3288,7 +3288,7 @@ mkdir -p localnuget
 dotnet nuget add source &quot;$PWD/localnuget&quot; --name adbcbridge-local
 
 # 3. Add the package to your project.
-dotnet add package AdbcBridge --version 0.1.1 --source adbcbridge-local
+dotnet add package AdbcBridge --version 0.1.2 --source adbcbridge-local
 </code></pre>
 <p>The release <code>.nupkg</code> is available on the project's GitHub Releases page at
 <a href="https://github.com/singhpratech/adbcbridge/releases">https://github.com/singhpratech/adbcbridge/releases</a>. The package's own
@@ -3842,7 +3842,7 @@ result.</p>
   &lt;ItemGroup&gt;
     &lt;!-- From nuget.org; for a release .nupkg instead, add a local source:
          dotnet nuget add source &quot;$PWD/localnuget&quot; --name adbcbridge-local --&gt;
-    &lt;PackageReference Include=&quot;AdbcBridge&quot; Version=&quot;0.1.1&quot; /&gt;
+    &lt;PackageReference Include=&quot;AdbcBridge&quot; Version=&quot;0.1.2&quot; /&gt;
   &lt;/ItemGroup&gt;
 
 &lt;/Project&gt;
@@ -3961,7 +3961,7 @@ connections, statements, <code>ArrowReader</code>, <code>VectorSchemaRoot</code>
 </tr>
 <tr>
 <td>version</td>
-<td><code>0.1.1</code></td>
+<td><code>0.1.2</code></td>
 </tr>
 <tr>
 <td>Automatic-Module-Name</td>
@@ -4070,7 +4070,7 @@ plugin's argument list. For example, with the Surefire test plugin:</p>
 <pre><code class="language-xml">&lt;dependency&gt;
   &lt;groupId&gt;org.adbcbridge&lt;/groupId&gt;
   &lt;artifactId&gt;adbcbridge&lt;/artifactId&gt;
-  &lt;version&gt;0.1.1&lt;/version&gt;
+  &lt;version&gt;0.1.2&lt;/version&gt;
 &lt;/dependency&gt;
 </code></pre>
 <p><code>adbc-core</code>, <code>adbc-driver-jni</code>, <code>arrow-vector</code> and <code>arrow-memory-netty</code> come in
@@ -4086,14 +4086,14 @@ generates a dependency-less POM, so declare the runtime dependencies alongside:<
     -Dfile=adbcbridge-0.1.0.jar \
     -DgroupId=org.adbcbridge \
     -DartifactId=adbcbridge \
-    -Dversion=0.1.1 \
+    -Dversion=0.1.2 \
     -Dpackaging=jar
 </code></pre>
 <pre><code class="language-xml">&lt;dependencies&gt;
   &lt;dependency&gt;
     &lt;groupId&gt;org.adbcbridge&lt;/groupId&gt;
     &lt;artifactId&gt;adbcbridge&lt;/artifactId&gt;
-    &lt;version&gt;0.1.1&lt;/version&gt;
+    &lt;version&gt;0.1.2&lt;/version&gt;
   &lt;/dependency&gt;
   &lt;!-- Only needed for a locally installed jar; Maven Central resolves them transitively. --&gt;
   &lt;dependency&gt;
@@ -4660,7 +4660,7 @@ through the SQLite ODBC driver, runs a query, and reads the Arrow result.</p>
   &lt;dependency&gt;
     &lt;groupId&gt;org.adbcbridge&lt;/groupId&gt;
     &lt;artifactId&gt;adbcbridge&lt;/artifactId&gt;
-    &lt;version&gt;0.1.1&lt;/version&gt;
+    &lt;version&gt;0.1.2&lt;/version&gt;
   &lt;/dependency&gt;
 
   &lt;!-- Only needed when adbcbridge was installed from a downloaded jar;
