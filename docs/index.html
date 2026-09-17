@@ -10934,7 +10934,7 @@ before it is filed.</p>
 <td>DuckDB ODBC</td>
 <td><a href="https://github.com/duckdb/duckdb-odbc/pull/523">duckdb/duckdb-odbc#523</a></td>
 <td><code>SQLGetInfo(SQL_DBMS_VER)</code> on 1.5.5: under unixODBC the process segfaults (the driver's internal <code>SQLAllocHandle</code> call binds to the driver manager, fails, and the error path frees an uninitialized handle); linked directly it returns <code>SQL_SUCCESS</code>, the right length and an empty string (read into one buffer, returned from another). Sent as a fix: the version comes straight from the engine, with a test against <code>pragma_version()</code></td>
-<td><strong>fix PR open</strong> (ours), opened 2026-09-17; reproduced on the 1.5.5 release and verified on a patched build, where the driver's whole test suite passes</td>
+<td><strong>merged 2026-09-17</strong> (ours) — approved ("Thanks for the PR! It looks good to me.") and merged by a DuckDB maintainer the day it was opened, green on Linux, macOS and Windows; reproduced on the 1.5.5 release and verified on a build of the fix, where the driver's whole test suite passes. Ships in the first duckdb-odbc release after v1.5.5.0</td>
 </tr>
 <tr>
 <td>2026-09-15</td>

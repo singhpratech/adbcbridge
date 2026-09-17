@@ -62,7 +62,9 @@ identifying the server it has just connected to. On Windows the same call answer
 at all on the first machine of the Windows campaign, whose entry records
 <code>DuckDB (via ODBC)</code> with the version missing; the second machine's run of the same entry
 records <code>DuckDB (via ODBC) 1.5.5</code>.</p>
-<p><strong>Sent upstream as a fix on 2026-09-17:</strong> <a href="https://github.com/duckdb/duckdb-odbc/pull/523">duckdb/duckdb-odbc#523</a>.
+<p><strong>Fixed upstream on 2026-09-17:</strong> <a href="https://github.com/duckdb/duckdb-odbc/pull/523">duckdb/duckdb-odbc#523</a> was
+approved and merged by a DuckDB maintainer the day it was opened, green on Linux, macOS and Windows; it ships in
+the first driver release after 1.5.5.
 The cause is two defects in one code path. Under unixODBC the driver's internal call to
 <code>SQLAllocHandle</code> binds to the driver manager's function of the same name, fails, and the error
 path frees an uninitialized handle, which is the segfault. Linked directly, the call succeeds
