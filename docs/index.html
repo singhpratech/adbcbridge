@@ -9971,7 +9971,7 @@ table with neither gets one partition. The numbers are in
 <td>DuckDB (latest)</td>
 <td>duckdb-odbc</td>
 <td>PASS</td>
-<td>driver quirks handled: 2048-row vectors (the driver writes a full vector into bound buffers whatever the rowset size), no <code>SQL_BIT</code> params (booleans go as integers), no usable parameter arrays</td>
+<td>driver quirks handled: 2048-row vectors (the driver writes a full vector into bound buffers whatever the rowset size), no <code>SQL_BIT</code> params (booleans go as integers), no usable parameter arrays on 1.5.5 (fixed on main by <a href="https://github.com/duckdb/duckdb-odbc/pull/524">duckdb-odbc#524</a>, in the first release after v1.5.5.0)</td>
 </tr>
 <tr>
 <td>PostgreSQL 16</td>
@@ -10927,7 +10927,7 @@ before it is filed.</p>
 <td>DuckDB ODBC</td>
 <td><a href="https://github.com/duckdb/duckdb-odbc/pull/524">duckdb/duckdb-odbc#524</a></td>
 <td>Parameter arrays on 1.5.5 and on main: with <code>SQL_ATTR_PARAMSET_SIZE</code> above 1, every fixed-length parameter receives set 0's value in every row under <code>SQL_SUCCESS</code> with the right processed count; only character and binary parameters step (the fixed-length branches read from the start of the bound buffer). Sent as a fix: each set reads its own element, with a test over six types and a NULL set</td>
-<td><strong>fix PR open</strong> (ours), opened 2026-09-17, CI passing so far on Linux (amd64, aarch64), macOS and Windows (amd64); reproduced on the 1.5.5 release and on main, verified on a patched build, where the driver's whole test suite passes</td>
+<td><strong>merged 2026-09-17</strong> (ours) — approved ("Thanks for the PR! Looks good to me.") and merged by a DuckDB maintainer the day it was opened (merge <code>1e065eaf</code>), green on Linux, macOS and Windows on both architectures; reproduced on the 1.5.5 release and on main, verified on a build of the fix, where the driver's whole test suite passes. Ships in the first duckdb-odbc release after v1.5.5.0; adbcBridge keeps binding row by row for DuckDB until then</td>
 </tr>
 <tr>
 <td>2026-09-17</td>
@@ -11249,7 +11249,7 @@ time allows, and a reproduction contributed by anyone is welcome.</p>
 </tr>
 <tr>
 <td>DuckDB ODBC 1.5.5 (Linux)</td>
-<td>(<code>SQLGetInfo(SQL_DBMS_VER)</code> segfault: reported with a fix, and the parameter-array defect: both sent upstream as fixes, see duckdb/duckdb-odbc#523 and #524 above.) A fetch writes the full 2048-row vector into bound buffers whatever the rowset size. adbcBridge binds row by row and fetches 2048-row rowsets there.</td>
+<td>(<code>SQLGetInfo(SQL_DBMS_VER)</code> segfault and the parameter-array defect: both sent upstream as fixes and both merged on 2026-09-17, see duckdb/duckdb-odbc#523 and #524 above.) A fetch writes the full 2048-row vector into bound buffers whatever the rowset size. adbcBridge binds row by row and fetches 2048-row rowsets there.</td>
 <td><code>COMPATIBILITY.md</code>, <code>tests/compat/README.md</code></td>
 </tr>
 <tr>

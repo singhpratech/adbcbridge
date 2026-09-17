@@ -102,7 +102,7 @@ pdf = pd.read_sql(&quot;SELECT * FROM my_table&quot;, conn)                   # 
 </code></pre>
 <p><code>pip install adbcbridge</code> brings the driver library; the DuckDB ODBC driver is installed the way its vendor documents, then named in <code>Driver=</code>. Rust, Go, C# and Java use the same connection string through their ADBC driver managers — see the <a href="/docs/">docs</a>.</p>
 <h2>What the matrix recorded</h2>
-<p class="lead">driver quirks handled: 2048-row vectors (the driver writes a full vector into bound buffers whatever the rowset size), no <code>SQL_BIT</code> params (booleans go as integers), no usable parameter arrays</p>
+<p class="lead">driver quirks handled: 2048-row vectors (the driver writes a full vector into bound buffers whatever the rowset size), no <code>SQL_BIT</code> params (booleans go as integers), no usable parameter arrays on 1.5.5 (fixed on main by <a href="https://github.com/duckdb/duckdb-odbc/pull/524">duckdb-odbc#524</a>, in the first release after v1.5.5.0)</p>
 <h2>Read next</h2><ul class="points"><li><a href="/notes/five-fixes-sent-upstream-in-a-day/">Five defects from the sweep, sent upstream as fixes instead of reports</a></li><li><a href="/notes/duckdb-odbc-findings/">Four things DuckDB&#x27;s ODBC driver does that a caller has to know about</a></li></ul>
 <div class="links"><a href="/matrix/#duckdb">This row in the interactive matrix</a><a href="/bench/">Benchmarks</a><a href="/docs/">Documentation</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></div>
 </main>
