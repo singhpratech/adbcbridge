@@ -76,7 +76,7 @@ def paged(url, token):
 
 
 def reported_rows(md_path):
-    """Yield (date, project, issue_url, what) for every row of the Reported table."""
+    """Yield (date, project, issue_url, anchor, what, status) for every row of the Reported table."""
     in_table = False
     for line in open(md_path, encoding="utf-8"):
         if line.startswith("## Reported"):
@@ -90,7 +90,7 @@ def reported_rows(md_path):
         if len(cells) < 4:
             continue
         for m in re.finditer(r"\((https://github\.com/[^/]+/[^/]+/(?:issues|pull|discussions)/\d+)(#[^)]*)?\)", cells[2]):
-            yield cells[0], cells[1], m.group(1), (m.group(2) or ""), cells[3]
+            yield cells[0], cells[1], m.group(1), (m.group(2) or ""), cells[3], (cells[4] if len(cells) > 4 else "")
 
 
 def clean(text):
@@ -183,7 +183,7 @@ def discussion_item(owner, repo, num, url, reported_on, project, what, token, no
 def build(md_path, token):
     items = []
     now = dt.datetime.now(dt.timezone.utc)
-    for reported_on, project, url, anchor, what in reported_rows(md_path):
+    for reported_on, project, url, anchor, what, status in reported_rows(md_path):
         owner, repo, kind, num = re.match(r"https://github\.com/([^/]+)/([^/]+)/(issues|pull|discussions)/(\d+)", url).groups()
         if kind == "discussions":
             item = discussion_item(owner, repo, num, url, reported_on, project, what, token, now)
@@ -247,13 +247,19 @@ def build(md_path, token):
         events.sort(key=lambda e: e.get("at") or "")
         last = max([e.get("at") for e in events if e.get("at")] + [issue.get("closed_at") or ""] + [""])
         state = "closed" if issue["state"] == "closed" else "open"
-        if state == "closed":
+        is_pr = bool(issue.get("pull_request"))
+        if state == "closed" and is_pr:
+            # a row that links a pull request: a merged fix is a fix; a merged contribution of another kind is "merged"
+            if issue["pull_request"].get("merged_at"):
+                is_fix = "as a fix" in what.lower() or status.lower().lstrip("* ").startswith("fixed")
+                state = "fixed" if is_fix else "merged"
+        elif state == "closed":
             state = {"completed": "fixed", "not_planned": "closed (not planned)", "duplicate": "closed (duplicate)"}.get(issue.get("state_reason"), "closed")
         pulse = bool(last) and (now - dt.datetime.fromisoformat(last.replace("Z", "+00:00"))).days <= PULSE_DAYS
         items.append({
             "project": project, "repo": f"{owner}/{repo}", "number": int(num), "url": url + anchor,
             "title": issue["title"], "reported": reported_on, "reporter": reporter, "what": what,
-            "kind": "comment on existing issue" if is_comment_report else "issue",
+            "kind": "comment on existing issue" if is_comment_report else ("pull request" if is_pr else "issue"),
             "state": state, "closed_at": iso(issue.get("closed_at")),
             "labels": [l["name"] for l in issue.get("labels", []) if not is_comment_report],
             "reactions": issue.get("reactions", {}).get("total_count", 0),
