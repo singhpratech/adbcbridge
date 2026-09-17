@@ -77,6 +77,11 @@ driver writes <strong>set 0's value into every row</strong> for every fixed-leng
 the call returns <code>SQL_SUCCESS</code>, and <code>SQL_ATTR_PARAMS_PROCESSED_PTR</code> comes back with the
 right count. In a measured 20,000-row insert with arrays forced on, the visible symptom was
 a wrong row count.</p>
+<p><strong>Sent upstream as a fix on 2026-09-17:</strong> <a href="https://github.com/duckdb/duckdb-odbc/pull/524">duckdb/duckdb-odbc#524</a>.
+The fixed-length branches of the driver's parameter code always read from the start of the
+bound array, where the string branches stepped to the current set; the driver's only array
+test binds strings, so it never reached them. Each set now reads its own element, with a test
+over <code>INTEGER</code>, <code>BIGINT</code>, <code>DOUBLE</code>, <code>DATE</code>, <code>TIMESTAMP</code> and <code>VARCHAR</code> that includes a NULL set.</p>
 <p>The workaround is to bind one execute per row, which sounds like a heavy price and is not.
 Two things pay it back. Turning autocommit off for the duration and committing once takes
 that path from 10,131 to 16,421 rows/s on its own. Rewriting the insert as a multi-row

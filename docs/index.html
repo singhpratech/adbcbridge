@@ -10918,6 +10918,13 @@ before it is filed.</p>
 <tr>
 <td>2026-09-17</td>
 <td>DuckDB ODBC</td>
+<td><a href="https://github.com/duckdb/duckdb-odbc/pull/524">duckdb/duckdb-odbc#524</a></td>
+<td>Parameter arrays on 1.5.5 and on main: with <code>SQL_ATTR_PARAMSET_SIZE</code> above 1, every fixed-length parameter receives set 0's value in every row under <code>SQL_SUCCESS</code> with the right processed count; only character and binary parameters step (the fixed-length branches read from the start of the bound buffer). Sent as a fix: each set reads its own element, with a test over six types and a NULL set</td>
+<td><strong>fix PR open</strong> (ours), opened 2026-09-17; reproduced on the 1.5.5 release and on main, verified on a patched build, where the driver's whole test suite passes</td>
+</tr>
+<tr>
+<td>2026-09-17</td>
+<td>DuckDB ODBC</td>
 <td><a href="https://github.com/duckdb/duckdb-odbc/pull/523">duckdb/duckdb-odbc#523</a></td>
 <td><code>SQLGetInfo(SQL_DBMS_VER)</code> on 1.5.5: under unixODBC the process segfaults (the driver's internal <code>SQLAllocHandle</code> call binds to the driver manager, fails, and the error path frees an uninitialized handle); linked directly it returns <code>SQL_SUCCESS</code>, the right length and an empty string (read into one buffer, returned from another). Sent as a fix: the version comes straight from the engine, with a test against <code>pragma_version()</code></td>
 <td><strong>fix PR open</strong> (ours), opened 2026-09-17; reproduced on the 1.5.5 release and verified on a patched build, where the driver's whole test suite passes</td>
@@ -11235,7 +11242,7 @@ time allows, and a reproduction contributed by anyone is welcome.</p>
 </tr>
 <tr>
 <td>DuckDB ODBC 1.5.5 (Linux)</td>
-<td>(<code>SQLGetInfo(SQL_DBMS_VER)</code> segfault: reported with a fix, see duckdb/duckdb-odbc#523 above.) A parameter array (<code>SQL_ATTR_PARAMSET_SIZE</code> &gt; 1) stores set 0's value in every row for every fixed-length C type (only <code>SQL_C_CHAR</code> steps), with <code>SQL_SUCCESS</code> and the right <code>SQL_ATTR_PARAMS_PROCESSED_PTR</code>; a fetch writes the full 2048-row vector into bound buffers whatever the rowset size. adbcBridge binds row by row and fetches 2048-row rowsets there.</td>
+<td>(<code>SQLGetInfo(SQL_DBMS_VER)</code> segfault: reported with a fix, and the parameter-array defect: both sent upstream as fixes, see duckdb/duckdb-odbc#523 and #524 above.) A fetch writes the full 2048-row vector into bound buffers whatever the rowset size. adbcBridge binds row by row and fetches 2048-row rowsets there.</td>
 <td><code>COMPATIBILITY.md</code>, <code>tests/compat/README.md</code></td>
 </tr>
 <tr>
