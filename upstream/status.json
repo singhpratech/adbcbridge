@@ -1,10 +1,30 @@
 {
- "as_of": "2026-09-17T16:21:05Z",
+ "as_of": "2026-09-17T16:38:08Z",
  "window_days": 7,
- "count": 36,
+ "count": 37,
  "with_project_activity": 20,
  "fixed": 6,
  "items": [
+  {
+   "project": "DuckDB ODBC",
+   "repo": "duckdb/duckdb-odbc",
+   "number": 524,
+   "url": "https://github.com/duckdb/duckdb-odbc/pull/524",
+   "title": "Parameter arrays: read each set's own value for fixed-length C types",
+   "reported": "2026-09-17",
+   "reporter": "singhpratech",
+   "what": "Parameter arrays on 1.5.5 and on main: with `SQL_ATTR_PARAMSET_SIZE` above 1, every fixed-length parameter receives set 0's value in every row under `SQL_SUCCESS` with the right processed count; only character and binary parameters step (the fixed-length branches read from the start of the bound buffer). Sent as a fix: each set reads its own element, with a test over six types and a NULL set",
+   "kind": "issue",
+   "state": "open",
+   "closed_at": null,
+   "labels": [],
+   "reactions": 0,
+   "maintainer_events": [],
+   "reporter_comments": 0,
+   "community_comments": 0,
+   "last_activity": null,
+   "pulse": false
+  },
   {
    "project": "DuckDB ODBC",
    "repo": "duckdb/duckdb-odbc",
