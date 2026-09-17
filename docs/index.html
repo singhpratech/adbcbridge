@@ -10917,6 +10917,13 @@ before it is filed.</p>
 <tbody>
 <tr>
 <td>2026-09-17</td>
+<td>ArcadeDB</td>
+<td><a href="https://github.com/ArcadeData/arcadedb/pull/7815">ArcadeData/arcadedb#7815</a></td>
+<td>PostgreSQL wire, simple query protocol: <code>BEGIN</code>, <code>COMMIT</code>, <code>ROLLBACK</code> and the savepoint statements are answered with a zero-field <code>RowDescription</code> before the <code>CommandComplete</code>, so libpq reports <code>PGRES_TUPLES_OK</code> instead of <code>PGRES_COMMAND_OK</code>; <code>psql</code> prints an empty table after <code>BEGIN</code> and the Arrow PostgreSQL ADBC driver, whose DB-API starts with autocommit off, fails <code>[libpq] Failed to begin transaction:</code>. psqlodbc ignores the status, so adbcBridge was never affected. Sent as a fix with a wire-level test</td>
+<td><strong>fix PR open</strong> (ours), opened 2026-09-17; found on <code>26.10.1-SNAPSHOT</code> while re-checking #7188; the new test fails on <code>main</code>, and with the fix every integration test of the PostgreSQL module passes (243)</td>
+</tr>
+<tr>
+<td>2026-09-17</td>
 <td>DuckDB ODBC</td>
 <td><a href="https://github.com/duckdb/duckdb-odbc/pull/524">duckdb/duckdb-odbc#524</a></td>
 <td>Parameter arrays on 1.5.5 and on main: with <code>SQL_ATTR_PARAMSET_SIZE</code> above 1, every fixed-length parameter receives set 0's value in every row under <code>SQL_SUCCESS</code> with the right processed count; only character and binary parameters step (the fixed-length branches read from the start of the bound buffer). Sent as a fix: each set reads its own element, with a test over six types and a NULL set</td>
@@ -11137,7 +11144,7 @@ before it is filed.</p>
 <td>SingleStore Connector/ODBC</td>
 <td><a href="https://github.com/memsql/singlestore-odbc-connector/issues/45">memsql/singlestore-odbc-connector#45</a></td>
 <td><code>SQLGetTypeInfo</code> fails <code>42S22 Unknown column 'json' in 'field list' (1054)</code> whenever <code>sql_mode</code> contains <code>ANSI_QUOTES</code>: the type-info result set is built from a template with double-quoted string literals (<code>ma_info.c</code>), which that mode turns into identifiers. <code>SQLTables</code>/<code>SQLColumns</code>/queries unaffected; MySQL Connector/ODBC fine on the same server.</td>
-<td>open</td>
+<td>open — <strong>fix PR <a href="https://github.com/memsql/singlestore-odbc-connector/pull/48">#48</a> (ours)</strong>, opened 2026-09-17: single-quoted literals in the template, with a test under <code>ANSI_QUOTES</code>; verified against SingleStore 9.1.1</td>
 </tr>
 <tr>
 <td>2026-09-05</td>
@@ -11158,7 +11165,7 @@ before it is filed.</p>
 <td>SingleStore Connector/ODBC</td>
 <td><a href="https://github.com/memsql/singlestore-odbc-connector/issues/46">memsql/singlestore-odbc-connector#46</a></td>
 <td><code>SQLColumns</code> with a NULL <code>CatalogName</code> segfaults the client on a connection opened without <code>Database=</code>: <code>TABLE_CAT</code> falls back to the client library's current-database field, which stays NULL after <code>USE</code>, and <code>strdup(NULL)</code> is called (<code>ma_statement.c</code>). Zero matching rows, an explicit catalog, or <code>Database=</code> in the connection string avoid it.</td>
-<td>open</td>
+<td>open — <strong>fix PR <a href="https://github.com/memsql/singlestore-odbc-connector/pull/47">#47</a> (ours)</strong>, opened 2026-09-17: <code>TABLE_CAT</code> NULL instead of <code>strdup(NULL)</code> in <code>SQLColumns</code> and <code>SQLPrimaryKeys</code>, with a test; verified against SingleStore 9.1.1</td>
 </tr>
 </tbody>
 </table></div>

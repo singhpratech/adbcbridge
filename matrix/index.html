@@ -127,6 +127,56 @@ const DATA = {"counts": {"linux": 53, "macos": 45, "windows": 48}, "entries": [{
 const CHIP = {pass:'✓ pass', read:'✓ read', platform:'platform', detail:'note'};
 const OSNAMES = {linux:'Linux', macos:'macOS arm64', windows:'Windows x64'};
 const NOTES = {
+ "duckdb": [
+  {
+   "title": "Five defects from the sweep, sent upstream as fixes instead of reports",
+   "url": "/notes/five-fixes-sent-upstream-in-a-day/"
+  },
+  {
+   "title": "Four things DuckDB's ODBC driver does that a caller has to know about",
+   "url": "/notes/duckdb-odbc-findings/"
+  }
+ ],
+ "arcadedb": [
+  {
+   "title": "Five defects from the sweep, sent upstream as fixes instead of reports",
+   "url": "/notes/five-fixes-sent-upstream-in-a-day/"
+  },
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build",
+   "url": "/notes/arcadedb-fixed-the-pg-type-bootstrap-within-a-day/"
+  },
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
+ "singlestore": [
+  {
+   "title": "Five defects from the sweep, sent upstream as fixes instead of reports",
+   "url": "/notes/five-fixes-sent-upstream-in-a-day/"
+  },
+  {
+   "title": "SingleStore's ODBC connector loses SQLGetTypeInfo under ANSI_QUOTES",
+   "url": "/notes/singlestore-odbc-connector-findings/"
+  },
+  {
+   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
+   "url": "/notes/mysql-connector-odbc-findings/"
+  }
+ ],
  "postgres": [
   {
    "title": "An ADBC-over-ODBC backend for omniload, built on request",
@@ -305,28 +355,6 @@ const NOTES = {
   {
    "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
    "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "arcadedb": [
-  {
-   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
-   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
-  },
-  {
-   "title": "ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build",
-   "url": "/notes/arcadedb-fixed-the-pg-type-bootstrap-within-a-day/"
-  },
-  {
-   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
-   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
-  },
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
   },
   {
    "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
@@ -541,16 +569,6 @@ const NOTES = {
    "url": "/notes/go-odbc-and-arrow-finalizers/"
   }
  ],
- "singlestore": [
-  {
-   "title": "SingleStore's ODBC connector loses SQLGetTypeInfo under ANSI_QUOTES",
-   "url": "/notes/singlestore-odbc-connector-findings/"
-  },
-  {
-   "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
-   "url": "/notes/mysql-connector-odbc-findings/"
-  }
- ],
  "ignite": [
   {
    "title": "A parameter array in Ignite's ODBC driver takes every row's NULL flag from row 0",
@@ -727,12 +745,6 @@ const NOTES = {
   {
    "title": "A Unicode string parameter cannot reach a MySQL-wire warehouse's prepare",
    "url": "/notes/mysql-wire-warehouses-prepared-statements/"
-  }
- ],
- "duckdb": [
-  {
-   "title": "Four things DuckDB's ODBC driver does that a caller has to know about",
-   "url": "/notes/duckdb-odbc-findings/"
   }
  ]
 };

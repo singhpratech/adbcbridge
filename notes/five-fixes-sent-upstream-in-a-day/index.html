@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SingleStore&#x27;s ODBC connector loses SQLGetTypeInfo under ANSI_QUOTES — adbcBridge notes</title>
-<meta name="description" content="Two defects in SingleStore Connector/ODBC 1.2.2 with their exact errors - SQLGetTypeInfo failing 42S22 under ANSI_QUOTES, and a SQLColumns segfault on a…">
-<link rel="canonical" href="https://adbcbridge.org/notes/singlestore-odbc-connector-findings/">
+<title>Five defects from the sweep, sent upstream as fixes instead of reports — adbcBridge notes</title>
+<meta name="description" content="DuckDB ODBC (SQL_DBMS_VER segfault, parameter arrays that store set 0 in every row), ArcadeDB (BEGIN answered with a RowDescription) and SingleStore…">
+<link rel="canonical" href="https://adbcbridge.org/notes/five-fixes-sent-upstream-in-a-day/">
 <link rel="alternate" type="application/atom+xml" title="adbcBridge notes" href="/notes/feed.xml">
-<meta property="og:type" content="article"><meta property="og:title" content="SingleStore&#x27;s ODBC connector loses SQLGetTypeInfo under ANSI_QUOTES"><meta property="og:description" content="Two defects in SingleStore Connector/ODBC 1.2.2 with their exact errors - SQLGetTypeInfo failing 42S22 under ANSI_QUOTES, and a SQLColumns segfault on a…"><meta property="og:url" content="https://adbcbridge.org/notes/singlestore-odbc-connector-findings/"><meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
+<meta property="og:type" content="article"><meta property="og:title" content="Five defects from the sweep, sent upstream as fixes instead of reports"><meta property="og:description" content="DuckDB ODBC (SQL_DBMS_VER segfault, parameter arrays that store set 0 in every row), ArcadeDB (BEGIN answered with a RowDescription) and SingleStore…"><meta property="og:url" content="https://adbcbridge.org/notes/five-fixes-sent-upstream-in-a-day/"><meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
 <link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
 <link rel="preload" href="/fonts/newsreader-normal-latin.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/public-sans-normal-latin.woff2" as="font" type="font/woff2" crossorigin><style>/* Newsreader, Public Sans, JetBrains Mono — SIL Open Font License 1.1; latin and latin-ext subsets, one variable file per face with a weight range, self-hosted. */@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}</style>
 <style>
@@ -50,75 +50,159 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-09-03</div><h1>SingleStore&#x27;s ODBC connector loses SQLGetTypeInfo under ANSI_QUOTES</h1><p class="meta">Two defects in SingleStore Connector/ODBC 1.2.2 with their exact errors - SQLGetTypeInfo failing 42S22 under ANSI_QUOTES, and a SQLColumns segfault on a NULL catalog - and what it gets right.</p><p>SingleStore serves the MySQL wire protocol and announces itself as <code>5.7.32</code>, so MySQL
-Connector/ODBC drives it. It also publishes a free ODBC driver of its own, a MariaDB
-Connector/ODBC fork, and running both side by side through the same compatibility workload
-on 2026-09-03 turned up two defects in the SingleStore driver. Both were filed on
-2026-09-04 with plain-ODBC reproductions.</p>
-<h2><code>42S22 Unknown column 'json' in 'field list' (1054)</code></h2>
-<pre><code>SQLGetTypeInfo(SQL_ALL_TYPES) -&gt; 42S22  [ss-1.2.2][9.1.1]Unknown column 'json'
-                                        in 'field list' (1054) (SQLGetTypeInfo)
-SQLGetTypeInfo(SQL_TYPE_TIMESTAMP) -&gt; 42S22  … Unknown column 'datetime' …
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-09-17</div><h1>Five defects from the sweep, sent upstream as fixes instead of reports</h1><p class="meta">DuckDB ODBC (SQL_DBMS_VER segfault, parameter arrays that store set 0 in every row), ArcadeDB (BEGIN answered with a RowDescription) and SingleStore Connector/ODBC (strdup(NULL) in SQLColumns, SQLGetTypeInfo under ANSI_QUOTES) - what each bug was, how it was pinned down, and the pull request that fixes it.</p><p>Until now every finding went upstream as a report with a reproduction. On 2026-09-17 five of
+them went as pull requests instead: the cause was already known, the fix was small, and a
+fix with a test is less work for a maintainer than a report. Each section below has the
+failure as a caller sees it, the cause in the project's own source, and what the pull
+request changes.</p>
+<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
+<thead>
+<tr>
+<th>Project</th>
+<th>What a caller saw</th>
+<th>Pull request</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DuckDB ODBC</td>
+<td><code>SQLGetInfo(SQL_DBMS_VER)</code> segfaults under unixODBC; returns an empty string when linked directly</td>
+<td><a href="https://github.com/duckdb/duckdb-odbc/pull/523">duckdb/duckdb-odbc#523</a></td>
+</tr>
+<tr>
+<td>DuckDB ODBC</td>
+<td>a parameter array stores set 0's value in every row, under <code>SQL_SUCCESS</code></td>
+<td><a href="https://github.com/duckdb/duckdb-odbc/pull/524">duckdb/duckdb-odbc#524</a></td>
+</tr>
+<tr>
+<td>ArcadeDB</td>
+<td><code>[libpq] Failed to begin transaction:</code> from the Arrow PostgreSQL ADBC driver</td>
+<td><a href="https://github.com/ArcadeData/arcadedb/pull/7815">ArcadeData/arcadedb#7815</a></td>
+</tr>
+<tr>
+<td>SingleStore Connector/ODBC</td>
+<td><code>SQLColumns</code> with a NULL catalog segfaults</td>
+<td><a href="https://github.com/memsql/singlestore-odbc-connector/pull/47">memsql/singlestore-odbc-connector#47</a></td>
+</tr>
+<tr>
+<td>SingleStore Connector/ODBC</td>
+<td><code>42S22 Unknown column 'json'</code> from <code>SQLGetTypeInfo</code> under <code>ANSI_QUOTES</code></td>
+<td><a href="https://github.com/memsql/singlestore-odbc-connector/pull/48">memsql/singlestore-odbc-connector#48</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2>DuckDB ODBC: <code>SQLGetInfo(SQL_DBMS_VER)</code></h2>
+<p>Twelve lines of plain ODBC against the 1.5.5 release:</p>
+<pre><code>SQLDriverConnect -&gt; 0
+SQL_DBMS_NAME -&gt; 0 &quot;DuckDB&quot;
+Segmentation fault
+
+#0  duckdb::FreeHandle(short, void*)                    libduckdb_odbc.so
+#1  GetInfoInternal&lt;unsigned char&gt;(void*, unsigned short, void*, short, short*)
+#2  ?? ()                                               libodbc.so.2
 </code></pre>
-<p>The call succeeds on a fresh connection and fails on the same connection once
-<code>ANSI_QUOTES</code> is in <code>sql_mode</code>. The named column is always the <em>first type name the call
-would have returned</em> — <code>json</code> for <code>SQL_ALL_TYPES</code>, <code>datetime</code> for <code>SQL_TYPE_TIMESTAMP</code> —
-which says exactly what is happening: the driver builds its type table from a template
-of double-quoted string literals (<code>ma_info.c</code>), and <code>ANSI_QUOTES</code> turns every one of them
-into an identifier. <code>SQLColumns</code>, <code>SQLTables</code> and ordinary queries are unaffected;
-only <code>SQLGetTypeInfo</code> breaks, and MySQL Connector/ODBC is fine against the same server in
-the same mode. Filed as
-<a href="https://github.com/memsql/singlestore-odbc-connector/issues/45">memsql/singlestore-odbc-connector#45</a>.</p>
-<p>The failure is silent to anything that treats a failing <code>SQLGetTypeInfo</code> as "this driver
-has no such type" and falls through to a portable ANSI type name — which is the right
-thing to do here. The only visible effect is the spelling in generated DDL: <code>text</code> and
-<code>tinyint(1)</code> from the fallback where MySQL's connector's type table gives <code>mediumtext</code> and
-<code>bit(1)</code>. Both are valid SingleStore columns and both pass a read-back. The alternative is
-not to set <code>ANSI_QUOTES</code>, which costs you double-quoted identifiers.</p>
-<p><strong>Sent upstream as a fix on 2026-09-17:</strong> <a href="https://github.com/memsql/singlestore-odbc-connector/pull/48">memsql/singlestore-odbc-connector#48</a>
-switches the template to single-quoted literals, doubling the single quote that is the literal
-prefix of the character types, with a test that runs <code>SQLGetTypeInfo</code> under <code>ANSI_QUOTES</code>.</p>
-<h2><code>SQLColumns</code> with a NULL catalog segfaults the process</h2>
-<p>On a connection opened <em>without</em> <code>Database=</code> in the connection string, <code>SQLColumns</code> with a
-NULL <code>CatalogName</code> crashes the client on <code>strdup(NULL)</code> (<code>ma_statement.c</code>). The mechanism: <code>TABLE_CAT</code> falls back to the client library's
-current-database field, which stays NULL even after a <code>USE</code> statement has selected a
-database, and the driver copies it unconditionally. It only fires when at least one column
-matches: zero matching rows return cleanly. Filed as
-<a href="https://github.com/memsql/singlestore-odbc-connector/issues/46">memsql/singlestore-odbc-connector#46</a>.
-Three things avoid it: pass an explicit catalog, put <code>Database=</code> in the connection string,
-or ask for a table that does not exist.</p>
-<p><strong>Sent upstream as a fix on 2026-09-17:</strong> <a href="https://github.com/memsql/singlestore-odbc-connector/pull/47">memsql/singlestore-odbc-connector#47</a>
-leaves <code>TABLE_CAT</code> NULL when there is neither a catalog argument nor a connect-time database, in
-<code>SQLColumns</code> and in <code>SQLPrimaryKeys</code>, with a test that connects without <code>DATABASE=</code>.</p>
-<h2>What the driver gets right</h2>
-<p>It passes the whole workload — the emoji round trip, <code>VARBINARY(10)</code>, <code>DECIMAL(10,3)</code>,
-NULL parameters, affected-row counts, catalog metadata and the batched ingest and read —
-and it is the better of the two drivers on three counts. It reports <code>SQL_DBMS_NAME</code>
-<code>SingleStore</code> and <code>SQL_DBMS_VER</code> <code>09.01.0001</code>, the real build, where MySQL's connector
-reports the wire's <code>MySQL</code> / <code>5.7.32</code>. It describes a <code>DATETIME(6)</code> column as <code>COLUMN_SIZE</code>
-26 / <code>DECIMAL_DIGITS</code> 6, where MySQL Connector/ODBC says 19/0 with a <code>SQLGetTypeInfo</code> row
-of 21 — enough for pyodbc to store <code>13:45:10.123456</code> as <code>13:45:10.1</code>, and exact through
-this one. And it needs neither the <code>PLUGIN_DIR=</code> that MySQL Connector/ODBC needs here for
-<code>mysql_native_password</code>, nor the <code>LD_PRELOAD=…/libstdc++.so.6</code> that same connector needs
-in any Linux process that has imported pyarrow.</p>
-<p>Related: <a href="/notes/mysql-connector-odbc-findings/">What MySQL Connector/ODBC does to a DATETIME(6), and six other findings</a></p>
-<h2>Two things about the server, while we are here</h2>
-<p><strong>Tables are columnstore by default.</strong> <code>@@default_table_type</code> is <code>columnstore</code>, so a plain
-<code>CREATE TABLE</code> gets one — <code>SHOW CREATE TABLE</code> adds <code>SORT KEY __UNORDERED ()</code> and <code>SHARD KEY
-()</code>, and no explicit key of either kind is needed. The same DDL spelled <code>CREATE ROWSTORE
-TABLE</code> was run through the whole probe side by side and behaves identically on every point
-the workload checks: the emoji, the binary bytes, microseconds, <code>DECIMAL(10,3)</code>, the
-all-NULL row, <code>SQLColumns</code> ordering and affected-row counts.</p>
-<p><strong>Measure twice.</strong> SingleStore compiles each query shape to machine code the first time it
-sees it, about 100 ms apiece, and caches the plan. A first run on a cold container measured
-ingest 75,107 rows/s against 109,123 with parameter arrays, which reads as "arrays are 45%
-faster"; the second run, plans cached, gave 163,686 and 159,329 — the two forms within 3%
-of each other. The first run was measuring the compiler. Warm, it is the fastest ingest of
-the twelve MySQL-wire entries in the matrix.</p>
-<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
-database's ODBC driver on Linux, macOS and Windows and records each failure with its first
-error; the row for this database is at <a href="https://adbcbridge.org/matrix/#singlestore">https://adbcbridge.org/matrix/#singlestore</a>, and the
-finding is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<p>The driver answers this one info type by running <code>SELECT library_version FROM
+pragma_version()</code> through the public <code>SQLAllocHandle</code> / <code>SQLExecDirect</code> / <code>SQLFetch</code> /
+<code>SQLGetData</code> entry points. Two defects share those thirty lines. Under unixODBC the call to
+<code>SQLAllocHandle</code> inside the driver binds to the driver manager's function of the same name
+(<code>LD_DEBUG=bindings</code> shows it), which rejects the driver's handle; the statement handle is
+still uninitialized and the error path frees it. Linked directly, as the driver's own tests
+are, the call succeeds but the value is read into the caller's buffer and then overwritten
+from a second, zero-filled one: <code>SQL_SUCCESS</code>, length 6, six NUL bytes. That second form is
+the Windows entry in the matrix that recorded <code>DuckDB (via ODBC)</code> with nothing after it.</p>
+<p>The fix returns <code>DuckDB::LibraryVersion()</code> directly, the same value <code>pragma_version()</code>
+reports, and the new test compares the two.</p>
+<h2>DuckDB ODBC: parameter arrays</h2>
+<p>Four sets of <code>(SQL_C_SLONG, SQL_C_DOUBLE, SQL_C_CHAR)</code>, <code>(10, 1.5, "a")</code> to
+<code>(40, 4.5, "dddd")</code>, on the release and on <code>main</code>:</p>
+<pre><code>execute -&gt; 0, processed = 4
+  row: i=10 d=1.5 s=a
+  row: i=10 d=1.5 s=bb
+  row: i=10 d=1.5 s=ccc
+  row: i=10 d=1.5 s=dddd
+</code></pre>
+<p>In <code>ParameterDescriptor::SetValue</code> the string and binary branches index the bound buffer by
+the current set; the fixed-length branches all load from the start of it, and a <code>TODO</code> above
+them says so. The driver's one parameter-array test binds <code>SQL_C_CHAR</code> only, which is why it
+never failed. The fix steps each fixed-length load to the current set's element; the new
+test covers <code>INTEGER</code>, <code>BIGINT</code>, <code>DOUBLE</code>, <code>DATE</code>, <code>TIMESTAMP</code> and <code>VARCHAR</code> with a NULL set
+in the middle.</p>
+<h2>ArcadeDB: <code>BEGIN</code> answered with a <code>RowDescription</code></h2>
+<pre><code>→ Q &quot;BEGIN&quot;
+← T  RowDescription, 0 fields
+← C  &quot;BEGIN&quot;
+← Z  ReadyForQuery 'T'
+</code></pre>
+<p>PostgreSQL answers a statement that returns no rows with the bare <code>CommandComplete</code>. The
+zero-field <code>RowDescription</code> in front of it makes libpq report <code>PGRES_TUPLES_OK</code> instead of
+<code>PGRES_COMMAND_OK</code>. <code>psql</code> shows an empty table after <code>BEGIN</code>; the Arrow PostgreSQL ADBC
+driver checks the status when it opens a transaction and gives up, and since its Python
+DB-API starts with autocommit off, <code>adbc_driver_postgresql.dbapi.connect(uri)</code> cannot run one
+query until <code>autocommit=True</code> is passed. psqlodbc ignores the status, so the ODBC route
+never noticed. In <code>PostgresNetworkExecutor.queryCommand</code> the transaction-control and
+savepoint branches now skip the <code>RowDescription</code>; the new test speaks the wire directly and
+fails on <code>main</code> at <code>BEGIN</code> and at <code>SAVEPOINT</code>.</p>
+<h2>SingleStore Connector/ODBC: two catalog functions</h2>
+<p><code>SQLColumns</code> with a NULL catalog, on a connection opened without <code>DATABASE=</code>:</p>
+<pre><code>#1  __GI___strdup (s=0x0)
+#2  MADB_StmtColumnsNoInfoSchema (... CatalogName=0x0, NameLength1=0 ...) at ma_statement.c:5063
+</code></pre>
+<p><code>TABLE_CAT</code> falls back to the client library's current-database field, which only the
+connect-time database sets; <code>USE</code> does not. The same line exists in <code>SQLPrimaryKeys</code>. Both
+now leave <code>TABLE_CAT</code> NULL.</p>
+<p><code>SQLGetTypeInfo</code> with <code>ANSI_QUOTES</code> in <code>sql_mode</code>:</p>
+<pre><code>[42S22] [ss-1.2.2][9.1.1] Unknown column 'json' in 'field list' (1054) (SQLGetTypeInfo)
+</code></pre>
+<p>The result set is built from a SQL template with double-quoted values, which that mode
+turns into identifiers. The template now uses single-quoted literals, and because the
+literal prefix of the character types is itself a single quote, the values go through a
+helper that doubles it.</p>
+<h2>How each one was checked</h2>
+<div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
+<thead>
+<tr>
+<th>Fix</th>
+<th>Reproduced on</th>
+<th>New test on unpatched code</th>
+<th>With the fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DuckDB <code>SQL_DBMS_VER</code></td>
+<td>1.5.5 release zip, checksum matched</td>
+<td>fails, <code>"" == "v2.1.0-alpha…"</code></td>
+<td>whole suite passes, 93 test cases; no crash through unixODBC</td>
+</tr>
+<tr>
+<td>DuckDB parameter arrays</td>
+<td>1.5.5 release and <code>main</code></td>
+<td>fails at row two</td>
+<td>whole suite passes, 93 test cases; rows read 10, 20, 30, 40</td>
+</tr>
+<tr>
+<td>ArcadeDB transaction control</td>
+<td><code>26.10.1-SNAPSHOT</code> container, wire capture</td>
+<td>fails at <code>BEGIN</code> and at <code>SAVEPOINT</code></td>
+<td>every integration test of the PostgreSQL module passes, 243</td>
+</tr>
+<tr>
+<td>SingleStore <code>SQLColumns</code></td>
+<td>SingleStore 9.1.1, build of <code>master</code></td>
+<td>segfault</td>
+<td>catalog tests pass in both prepared-statement modes</td>
+</tr>
+<tr>
+<td>SingleStore <code>SQLGetTypeInfo</code></td>
+<td>SingleStore 9.1.1, build of <code>master</code></td>
+<td><code>42S22</code></td>
+<td>info tests pass in both modes; 56 rows with and without <code>ANSI_QUOTES</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The reproductions are plain ODBC or plain wire protocol in every case, the failing outputs
+above are copied from those runs, and the status of each pull request is tracked in the
+upstream record.</p></article>
 </main>
 <footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>. Corrections and additions: <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/community/contributing.md">open an issue or a pull request</a> on the repository.</footer>
 </div>
