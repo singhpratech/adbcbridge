@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-17T14:06:33Z",
+ "as_of": "2026-09-17T14:28:42Z",
  "window_days": 7,
  "count": 35,
  "with_project_activity": 20,
@@ -201,7 +201,7 @@
      "url": "https://github.com/panodata/omniload/pull/362#issuecomment-5715667517"
     }
    ],
-   "reporter_comments": 2,
+   "reporter_comments": 3,
    "community_comments": 0,
    "last_activity": "2026-09-17T14:03:15Z",
    "pulse": true
