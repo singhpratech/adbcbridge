@@ -10920,14 +10920,14 @@ before it is filed.</p>
 <td>ArcadeDB</td>
 <td><a href="https://github.com/ArcadeData/arcadedb/pull/7815">ArcadeData/arcadedb#7815</a></td>
 <td>PostgreSQL wire, simple query protocol: <code>BEGIN</code>, <code>COMMIT</code>, <code>ROLLBACK</code> and the savepoint statements are answered with a zero-field <code>RowDescription</code> before the <code>CommandComplete</code>, so libpq reports <code>PGRES_TUPLES_OK</code> instead of <code>PGRES_COMMAND_OK</code>; <code>psql</code> prints an empty table after <code>BEGIN</code> and the Arrow PostgreSQL ADBC driver, whose DB-API starts with autocommit off, fails <code>[libpq] Failed to begin transaction:</code>. psqlodbc ignores the status, so adbcBridge was never affected. Sent as a fix with a wire-level test</td>
-<td><strong>fix PR open</strong> (ours), opened 2026-09-17; found on <code>26.10.1-SNAPSHOT</code> while re-checking #7188; the new test fails on <code>main</code>, and with the fix every integration test of the PostgreSQL module passes (243)</td>
+<td><strong>fixed on main</strong> — our fix PR was merged by the maintainer on 2026-09-17, the day it was opened (merge <code>7ed83075</code>); found on <code>26.10.1-SNAPSHOT</code> while re-checking #7188; the new test fails before the fix, and the maintainer re-ran the PostgreSQL module's integration suite on it (244 tests, 0 failures) and extended the fix so a prefixed <code>{sql}BEGIN</code> gets its command tag too. That savepoint statements are accepted without being implemented is tracked separately as <a href="https://github.com/ArcadeData/arcadedb/issues/7846">ArcadeData/arcadedb#7846</a>. Expected in 26.10.1</td>
 </tr>
 <tr>
 <td>2026-09-17</td>
 <td>DuckDB ODBC</td>
 <td><a href="https://github.com/duckdb/duckdb-odbc/pull/524">duckdb/duckdb-odbc#524</a></td>
 <td>Parameter arrays on 1.5.5 and on main: with <code>SQL_ATTR_PARAMSET_SIZE</code> above 1, every fixed-length parameter receives set 0's value in every row under <code>SQL_SUCCESS</code> with the right processed count; only character and binary parameters step (the fixed-length branches read from the start of the bound buffer). Sent as a fix: each set reads its own element, with a test over six types and a NULL set</td>
-<td><strong>fix PR open</strong> (ours), opened 2026-09-17; reproduced on the 1.5.5 release and on main, verified on a patched build, where the driver's whole test suite passes</td>
+<td><strong>fix PR open</strong> (ours), opened 2026-09-17, CI passing so far on Linux (amd64, aarch64), macOS and Windows (amd64); reproduced on the 1.5.5 release and on main, verified on a patched build, where the driver's whole test suite passes</td>
 </tr>
 <tr>
 <td>2026-09-17</td>

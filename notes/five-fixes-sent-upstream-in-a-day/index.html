@@ -77,7 +77,7 @@ request changes.</p>
 <tr>
 <td>ArcadeDB</td>
 <td><code>[libpq] Failed to begin transaction:</code> from the Arrow PostgreSQL ADBC driver</td>
-<td><a href="https://github.com/ArcadeData/arcadedb/pull/7815">ArcadeData/arcadedb#7815</a></td>
+<td><a href="https://github.com/ArcadeData/arcadedb/pull/7815">ArcadeData/arcadedb#7815</a>, <strong>merged the same day</strong></td>
 </tr>
 <tr>
 <td>SingleStore Connector/ODBC</td>
@@ -142,6 +142,11 @@ query until <code>autocommit=True</code> is passed. psqlodbc ignores the status,
 never noticed. In <code>PostgresNetworkExecutor.queryCommand</code> the transaction-control and
 savepoint branches now skip the <code>RowDescription</code>; the new test speaks the wire directly and
 fails on <code>main</code> at <code>BEGIN</code> and at <code>SAVEPOINT</code>.</p>
+<p>The maintainer merged it the same day after re-running the module's integration suite, and added
+two things on top: the column lookup is skipped entirely for transaction control, and the
+command tag is now built from the statement with its <code>{sql}</code> language prefix stripped, so
+<code>{sql}BEGIN</code> answers <code>BEGIN</code> instead of an empty tag. The fact that the savepoint statements are
+accepted without being implemented is tracked separately as ArcadeData/arcadedb#7846.</p>
 <h2>SingleStore Connector/ODBC: two catalog functions</h2>
 <p><code>SQLColumns</code> with a NULL catalog, on a connection opened without <code>DATABASE=</code>:</p>
 <pre><code>#1  __GI___strdup (s=0x0)
