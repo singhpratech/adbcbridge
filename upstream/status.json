@@ -1,10 +1,30 @@
 {
- "as_of": "2026-09-17T14:28:42Z",
+ "as_of": "2026-09-17T16:21:05Z",
  "window_days": 7,
- "count": 35,
+ "count": 36,
  "with_project_activity": 20,
  "fixed": 6,
  "items": [
+  {
+   "project": "DuckDB ODBC",
+   "repo": "duckdb/duckdb-odbc",
+   "number": 523,
+   "url": "https://github.com/duckdb/duckdb-odbc/pull/523",
+   "title": "SQLGetInfo(SQL_DBMS_VER): return the library version directly (segfault under unixODBC, empty string otherwise)",
+   "reported": "2026-09-17",
+   "reporter": "singhpratech",
+   "what": "`SQLGetInfo(SQL_DBMS_VER)` on 1.5.5: under unixODBC the process segfaults (the driver's internal `SQLAllocHandle` call binds to the driver manager, fails, and the error path frees an uninitialized handle); linked directly it returns `SQL_SUCCESS`, the right length and an empty string (read into one buffer, returned from another). Sent as a fix: the version comes straight from the engine, with a test against `pragma_version()`",
+   "kind": "issue",
+   "state": "open",
+   "closed_at": null,
+   "labels": [],
+   "reactions": 0,
+   "maintainer_events": [],
+   "reporter_comments": 0,
+   "community_comments": 0,
+   "last_activity": null,
+   "pulse": false
+  },
   {
    "project": "pandas",
    "repo": "pandas-dev/pandas",
