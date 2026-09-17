@@ -517,14 +517,16 @@ fetch('/upstream/status.json',{cache:'no-cache'}).then(function(r){ if(!r.ok) th
     if(!items.length) return;
     tracked++;
     var fixed=items.filter(function(i){return i.state==='fixed';}).length;
-    var closed=items.filter(function(i){return i.state!=='open'&&i.state!=='fixed';}).length;
-    var open=items.length-fixed-closed;
+    var merged=items.filter(function(i){return i.state==='merged';}).length;
+    var closed=items.filter(function(i){return i.state!=='open'&&i.state!=='fixed'&&i.state!=='merged';}).length;
+    var open=items.length-fixed-closed-merged;
     var evs=items.reduce(function(n,i){return n+i.maintainer_events.length;},0);
     var prs=items.reduce(function(n,i){return n+i.maintainer_events.filter(function(e){return e.type==='pull_request'&&e.state!=='closed';}).length;},0);
     var pulse=items.some(function(i){return i.pulse;});
     var last=items.map(function(i){return i.last_activity||'';}).sort().pop();
     var parts=[];
     if(fixed) parts.push('<span class="st fixed">'+fixed+' fixed</span>');
+    if(merged) parts.push('<span class="st fixed">'+merged+' merged</span>');
     if(open) parts.push('<span class="st">'+open+' open</span>');
     if(closed) parts.push('<span class="st">'+closed+' closed</span>');
     if(prs) parts.push('<span class="st prs">'+(prs>1?prs+' fix PRs open':'fix PR open')+'</span>');
