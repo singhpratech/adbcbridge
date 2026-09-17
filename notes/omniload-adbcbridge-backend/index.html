@@ -62,7 +62,7 @@ table-loader backend registered through dlt's own hook, "to make incremental loa
 work as usual", building on the unixODBC, PostgreSQL and SQL Server ODBC drivers the
 omniload container image already ships.</p>
 <h2>What was built</h2>
-<p><a href="https://github.com/panodata/omniload/pull/362">panodata/omniload#362</a> adds <code>--sql-backend adbcbridge</code>
+<p><strong>Merged on 2026-09-17</strong> by the maintainer, after a second review that added five small fixes (a loader-level batch-size test, a differential that runs against a non-UTC session zone, a wrapped error for a driver the manager cannot load, and two documentation corrections); the backend is documented in omniload's handbook under <a href="https://omniload.readthedocs.io/getting-started/sql-backends.html">SQL backends</a>. <a href="https://github.com/panodata/omniload/pull/362">panodata/omniload#362</a> adds <code>--sql-backend adbcbridge</code>
 next to omniload's <code>sqlalchemy</code>, <code>pyarrow</code> and <code>connectorx</code> backends. It is one commit of
 fourteen files: a loader module, four small changes to the model, command line, API and
 router, a dependency extra, a handbook page with pointers from three source pages, a
