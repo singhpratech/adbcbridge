@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-17T21:24:10Z",
+ "as_of": "2026-09-17T21:49:03Z",
  "window_days": 7,
  "count": 38,
  "with_project_activity": 22,
@@ -15,8 +15,8 @@
    "reporter": "singhpratech",
    "what": "PostgreSQL wire, simple query protocol: `BEGIN`, `COMMIT`, `ROLLBACK` and the savepoint statements are answered with a zero-field `RowDescription` before the `CommandComplete`, so libpq reports `PGRES_TUPLES_OK` instead of `PGRES_COMMAND_OK`; `psql` prints an empty table after `BEGIN` and the Arrow PostgreSQL ADBC driver, whose DB-API starts with autocommit off, fails `[libpq] Failed to begin transaction:`. psqlodbc ignores the status, so adbcBridge was never affected. Sent as a fix with a wire-level test",
    "kind": "issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "closed",
+   "closed_at": "2026-09-17T21:28:49Z",
    "labels": [],
    "reactions": 0,
    "maintainer_events": [
@@ -43,11 +43,32 @@
      "association": "member",
      "text": "Reviewed the PR, the linked #7188 re-check context, and both `claude-review` rounds. The core fix is correct and well-tested: I re-ran the full `postgresw` integration suite (`mvn verify -DskipTests -Pintegration -pl postgresw`) on the branch, 244 tests / 0 failures. Pushed a follow-up commit addressing the two remaining points from `claude-review`: - Moved the `columns`/`resolveEmptyResultSchemaC…",
      "url": "https://github.com/ArcadeData/arcadedb/pull/7815#issuecomment-5721435907"
+    },
+    {
+     "type": "closed",
+     "at": "2026-09-17T21:28:49Z",
+     "actor": "lvca",
+     "reason": null,
+     "commit": null
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-17T21:29:03Z",
+     "actor": "lvca",
+     "association": "member",
+     "text": "Thanks @singhpratech !!!",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/7815#issuecomment-5721492970"
+    },
+    {
+     "type": "milestoned",
+     "at": "2026-09-17T21:29:19Z",
+     "actor": "lvca",
+     "milestone": "26.10.1"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-17T21:24:07Z",
+   "last_activity": "2026-09-17T21:29:19Z",
    "pulse": true
   },
   {
@@ -101,7 +122,7 @@
      "state": "open"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-09-17T21:08:21Z",
    "pulse": true
@@ -1384,6 +1405,14 @@
      "label": "postgresql-wire"
     },
     {
+     "type": "comment",
+     "at": "2026-09-06T02:59:06Z",
+     "actor": "singhpratech",
+     "association": "contributor",
+     "text": "Confirmed on the merged code (the CI image built from ed96c1f3, the PR's final head, same settings as the probe, and this time with the fixture types created before the native run): - **Connect succeeds.** The bootstrap queries are answered and the driver builds its type resolver. - **`GetObjects` at depth \"tables\" lists both types.** - **With the driver's defaults**, `SELECT` still stops at `COPY…",
+     "url": "https://github.com/ArcadeData/arcadedb/issues/7178#issuecomment-5556495828"
+    },
+    {
      "type": "commit",
      "at": "2026-09-06T07:30:37Z",
      "actor": "tae898",
@@ -1397,7 +1426,7 @@
     }
    ],
    "reporter_comments": 3,
-   "community_comments": 1,
+   "community_comments": 0,
    "last_activity": "2026-09-06T07:30:38Z",
    "pulse": false
   },
@@ -1454,10 +1483,26 @@
      "url": "https://github.com/ArcadeData/arcadedb/commit/099db3321209e147da16de2afb7ea20fa31d5995"
     },
     {
+     "type": "comment",
+     "at": "2026-09-12T16:55:45Z",
+     "actor": "singhpratech",
+     "association": "contributor",
+     "text": "Thank you, Luca. This is a much bigger piece than the issue asked for, and it landed in the snapshot within six minutes of the merge, so I could measure it the same afternoon. Tested on `arcadedata/arcadedb:26.10.1-SNAPSHOT` (server log build `8e9e3d39`), with the fixture types created before the native run. **COPY works on the wire.** `COPY (SELECT 1) TO STDOUT` in text and binary, simple and ext…",
+     "url": "https://github.com/ArcadeData/arcadedb/issues/7188#issuecomment-5647328956"
+    },
+    {
      "type": "commit",
      "at": "2026-09-15T02:38:38Z",
      "actor": "oc007us",
      "url": "https://github.com/ArcadeData/arcadedb/commit/1725d3933758140a49a6ae2071981c14298a1e6f"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-15T04:23:18Z",
+     "actor": "singhpratech",
+     "association": "contributor",
+     "text": "Thank you, Luca, that was quick. I ran the same checks on this morning's `26.10.1-SNAPSHOT` (server build `99f4cb48`, which contains `3bdb3451b`) with the Arrow PostgreSQL ADBC driver 1.12.0 left on its defaults, so every read goes through `COPY … TO STDOUT (FORMAT binary)`: [code] The full probe passes as well: connect, `SELECT 1`, `GetTableSchema`, `GetObjects` and the fixture read, all without …",
+     "url": "https://github.com/ArcadeData/arcadedb/issues/7188#issuecomment-5674700336"
     },
     {
      "type": "pull_request",
@@ -1473,11 +1518,11 @@
      "actor": "singhpratech",
      "title": "PostgreSQL wire: answer BEGIN, COMMIT, ROLLBACK and savepoint statements with CommandComplete only",
      "url": "https://github.com/ArcadeData/arcadedb/pull/7815",
-     "state": "open"
+     "state": "merged"
     }
    ],
    "reporter_comments": 3,
-   "community_comments": 2,
+   "community_comments": 0,
    "last_activity": "2026-09-17T16:52:23Z",
    "pulse": true
   },
