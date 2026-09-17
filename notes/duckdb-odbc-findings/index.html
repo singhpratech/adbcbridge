@@ -62,6 +62,14 @@ identifying the server it has just connected to. On Windows the same call answer
 at all on the first machine of the Windows campaign, whose entry records
 <code>DuckDB (via ODBC)</code> with the version missing; the second machine's run of the same entry
 records <code>DuckDB (via ODBC) 1.5.5</code>.</p>
+<p><strong>Sent upstream as a fix on 2026-09-17:</strong> <a href="https://github.com/duckdb/duckdb-odbc/pull/523">duckdb/duckdb-odbc#523</a>.
+The cause is two defects in one code path. Under unixODBC the driver's internal call to
+<code>SQLAllocHandle</code> binds to the driver manager's function of the same name, fails, and the error
+path frees an uninitialized handle, which is the segfault. Linked directly, the call succeeds
+but the version is read into one buffer and returned from another, zero-filled one, which is
+the empty string Windows recorded. The fix returns the engine's library version directly, with
+a test that compares it to <code>pragma_version()</code>; reproduced on the 1.5.5 release and verified on
+a patched build, where the driver's whole test suite passes.</p>
 <h2>A parameter array stores set 0's value in every row</h2>
 <p>Set <code>SQL_ATTR_PARAMSET_SIZE</code> above 1, bind columns of a parameter array, execute — and the
 driver writes <strong>set 0's value into every row</strong> for every fixed-length C type. Only
