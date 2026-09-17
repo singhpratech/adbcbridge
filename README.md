@@ -16,7 +16,7 @@ Arrow-native ADBC driver — columnar record batches out, bulk ingest in — fro
 Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
 
 **Integrated in [omniload](https://github.com/panodata/omniload):** the dlt-based loader ships an
-`adbcbridge` SQL backend since [v0.17.0](https://github.com/panodata/omniload/releases/tag/v0.17.0)
+`adbcbridge` SQL backend since its [0.17 release](https://github.com/panodata/omniload/releases)
 (`omniload ingest --sql-backend adbcbridge`), requested, reviewed and merged by its maintainers on
 2026-09-17. [How it was built and tested](https://adbcbridge.org/notes/omniload-adbcbridge-backend/) ·
 [omniload's handbook page](https://omniload.readthedocs.io/getting-started/sql-backends.html).
