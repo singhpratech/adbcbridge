@@ -1,8 +1,8 @@
 {
- "as_of": "2026-09-17T16:59:17Z",
+ "as_of": "2026-09-17T21:24:10Z",
  "window_days": 7,
  "count": 38,
- "with_project_activity": 20,
+ "with_project_activity": 22,
  "fixed": 6,
  "items": [
   {
@@ -19,11 +19,36 @@
    "closed_at": null,
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
-   "reporter_comments": 0,
+   "maintainer_events": [
+    {
+     "type": "comment",
+     "at": "2026-09-17T17:45:36Z",
+     "actor": "lvca",
+     "association": "member",
+     "text": "@claude review this",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/7815#issuecomment-5718787539"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-17T20:04:57Z",
+     "actor": "lvca",
+     "association": "member",
+     "text": "@claude review this",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/7815#issuecomment-5720502415"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-17T21:24:07Z",
+     "actor": "lvca",
+     "association": "member",
+     "text": "Reviewed the PR, the linked #7188 re-check context, and both `claude-review` rounds. The core fix is correct and well-tested: I re-ran the full `postgresw` integration suite (`mvn verify -DskipTests -Pintegration -pl postgresw`) on the branch, 244 tests / 0 failures. Pushed a follow-up commit addressing the two remaining points from `claude-review`: - Moved the `columns`/`resolveEmptyResultSchemaC…",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/7815#issuecomment-5721435907"
+    }
+   ],
+   "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-09-17T21:24:07Z",
+   "pulse": true
   },
   {
    "project": "DuckDB ODBC",
@@ -55,15 +80,31 @@
    "reporter": "singhpratech",
    "what": "`SQLGetInfo(SQL_DBMS_VER)` on 1.5.5: under unixODBC the process segfaults (the driver's internal `SQLAllocHandle` call binds to the driver manager, fails, and the error path frees an uninitialized handle); linked directly it returns `SQL_SUCCESS`, the right length and an empty string (read into one buffer, returned from another). Sent as a fix: the version comes straight from the engine, with a test against `pragma_version()`",
    "kind": "issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "closed",
+   "closed_at": "2026-09-17T21:05:00Z",
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "closed",
+     "at": "2026-09-17T21:05:00Z",
+     "actor": "staticlibs",
+     "reason": null,
+     "commit": null
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-17T21:08:21Z",
+     "actor": "staticlibs",
+     "title": "SQL_DBMS_VER: return the version directly (1.5)",
+     "url": "https://github.com/duckdb/duckdb-odbc/pull/525",
+     "state": "open"
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-09-17T21:08:21Z",
+   "pulse": true
   },
   {
    "project": "pandas",
@@ -259,11 +300,19 @@
      "association": "member",
      "text": "Your contribution was included in [v0.17.0](https://github.com/panodata/omniload/releases/tag/v0.17.0), thank you again.",
      "url": "https://github.com/panodata/omniload/pull/362#issuecomment-5715667517"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-17T18:34:21Z",
+     "actor": "amotl",
+     "association": "member",
+     "text": "Hi. Thank you for adding omniload to your README. We took the chance to submit it also to another list where we may have initially picked up ingestr. - https://github.com/igorbarinov/awesome-data-engineering/pull/370",
+     "url": "https://github.com/panodata/omniload/pull/362#issuecomment-5719376236"
     }
    ],
    "reporter_comments": 3,
    "community_comments": 0,
-   "last_activity": "2026-09-17T14:03:15Z",
+   "last_activity": "2026-09-17T18:34:21Z",
    "pulse": true
   },
   {
