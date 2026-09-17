@@ -15,6 +15,12 @@ One plain-C11 shared library that turns every ODBC driver on your machine into a
 Arrow-native ADBC driver — columnar record batches out, bulk ingest in — from Python,
 Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
 
+**Integrated in [omniload](https://github.com/panodata/omniload):** the dlt-based loader ships an
+`adbcbridge` SQL backend since [v0.17.0](https://github.com/panodata/omniload/releases/tag/v0.17.0)
+(`omniload ingest --sql-backend adbcbridge`), requested, reviewed and merged by its maintainers on
+2026-09-17. [How it was built and tested](https://adbcbridge.org/notes/omniload-adbcbridge-backend/) ·
+[omniload's handbook page](https://omniload.readthedocs.io/getting-started/sql-backends.html).
+
 Site and docs: <https://adbcbridge.org> · Launch write-up with the numbers:
 <https://theaivibe.org/blog/adbcbridge-apache-arrow-adbc-driver-for-any-odbc-database> ·
 Write-up on the ADBC docs listing:
