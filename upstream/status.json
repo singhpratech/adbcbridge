@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-17T21:52:59Z",
+ "as_of": "2026-09-17T21:57:34Z",
  "window_days": 7,
  "count": 38,
  "with_project_activity": 22,
@@ -66,7 +66,7 @@
      "milestone": "26.10.1"
     }
    ],
-   "reporter_comments": 1,
+   "reporter_comments": 2,
    "community_comments": 0,
    "last_activity": "2026-09-17T21:29:19Z",
    "pulse": true
