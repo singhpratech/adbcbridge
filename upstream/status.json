@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-17T22:12:24Z",
+ "as_of": "2026-09-18T11:22:55Z",
  "window_days": 7,
  "count": 38,
  "with_project_activity": 23,
@@ -64,11 +64,27 @@
      "at": "2026-09-17T21:29:19Z",
      "actor": "lvca",
      "milestone": "26.10.1"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-17T22:42:20Z",
+     "actor": "lvca",
+     "title": "Postgres wire: refuse ROLLBACK TO SAVEPOINT instead of accepting it as a no-op",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/7848",
+     "state": "merged"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-18T11:06:44Z",
+     "actor": "ruispereira",
+     "title": "Add opt-in OTLP log export, decorating the configured logger",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/7727",
+     "state": "open"
     }
    ],
    "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-09-17T21:29:19Z",
+   "last_activity": "2026-09-18T11:06:44Z",
    "pulse": true
   },
   {
@@ -100,11 +116,19 @@
      "title": "Parameter arrays: read each set's own value (1.5)",
      "url": "https://github.com/duckdb/duckdb-odbc/pull/526",
      "state": "open"
+    },
+    {
+     "type": "comment",
+     "at": "2026-09-17T22:16:12Z",
+     "actor": "staticlibs",
+     "association": "member",
+     "text": "Thanks for your contributions! Both fixes are planned to be included into 1.5.6 update that is coming on Sep 28.",
+     "url": "https://github.com/duckdb/duckdb-odbc/pull/524#issuecomment-5721962663"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-17T22:03:01Z",
+   "last_activity": "2026-09-17T22:16:12Z",
    "pulse": true
   },
   {
