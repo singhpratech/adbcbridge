@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-18T20:57:23Z",
+ "as_of": "2026-09-19T11:06:49Z",
  "window_days": 7,
  "count": 38,
  "with_project_activity": 23,
@@ -80,11 +80,17 @@
      "title": "Add opt-in OTLP log export, decorating the configured logger",
      "url": "https://github.com/ArcadeData/arcadedb/pull/7727",
      "state": "open"
+    },
+    {
+     "type": "commit",
+     "at": "2026-09-19T10:52:05Z",
+     "actor": "gramian",
+     "url": "https://github.com/ArcadeData/arcadedb/commit/db56f64502a94fefeff4872c2ae16c4bd8857dda"
     }
    ],
    "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-09-18T11:06:44Z",
+   "last_activity": "2026-09-19T10:52:05Z",
    "pulse": true
   },
   {
