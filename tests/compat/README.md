@@ -3505,12 +3505,20 @@ that path, since every other driver answers the enumeration.
 * **`BoolsAsChar=0`** in the connection string. Without it psqlodbc reports every
   `BOOLEAN` as a `VARCHAR(5)` holding `"1"`/`"0"` instead of `SQL_BIT`. Same setting, same
   reason, as the `questdb` entry.
-* **`not_null=("bo",)`.** With `BoolsAsChar=0` a boolean property has no NULL state on
-  the wire: row 2's `bo` goes in as `NULL` and reads back `False`.
+* **`not_null=("bo",)`.** With `BoolsAsChar=0` a boolean property had no NULL state on
+  the wire: row 2's `bo` went in as `NULL` and read back `False`. Observed on 26.8.1
+  (2026-08-28). Fixed upstream in
+  [ArcadeData/arcadedb#6674](https://github.com/ArcadeData/arcadedb/issues/6674), which a
+  project contributor filed and closed on 2026-08-24, and the fix shipped in 26.9.1: a
+  retest on the 26.9.1 image on 2026-09-21 reads a NULL property and an absent property
+  both back as SQL NULL, on the text and the binary result format. The flag stays for now
+  because the matrix still records 26.9 for this entry.
 * **`decimal_type="decimal128(28, 3)"`.** ArcadeDB reports no declared precision for a
   `DECIMAL` property, so psqlodbc falls back to its own maximum (28) with the scale of the
   values in the result set — as it does for RisingWave's unqualified `NUMERIC`.
-* **Timestamp literals need the ISO-8601 `T`.** `'2024-02-29 13:45:10.123456'` into a
+* **Timestamp literals need the ISO-8601 `T`.** Reported upstream on 2026-09-21 as
+  [ArcadeData/arcadedb#8090](https://github.com/ArcadeData/arcadedb/issues/8090),
+  `severity:critical`. `'2024-02-29 13:45:10.123456'` into a
   `DATETIME_MICROS` property is stored as `NULL`, silently;
   `'2024-02-29T13:45:10.123456'` round-trips to the microsecond. (A bound
   `SQL_TYPE_TIMESTAMP` parameter goes as the space form, so it hits the same silent NULL —
