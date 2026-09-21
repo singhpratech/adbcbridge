@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <script>(function(){try{var t=localStorage.getItem('adbcbridge-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0 — adbcBridge notes</title>
-<meta name="description" content="Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column…">
-<link rel="canonical" href="https://adbcbridge.org/notes/apache-ignite-odbc-findings/">
+<title>A timestamp that stores NULL and says it worked, and a boolean note that went stale — adbcBridge notes</title>
+<meta name="description" content="ArcadeDB stores a space-separated timestamp with a fraction as NULL under a successful INSERT - the exact form psqlodbc binds.">
+<link rel="canonical" href="https://adbcbridge.org/notes/arcadedb-timestamp-null-and-a-boolean-retest/">
 <link rel="alternate" type="application/atom+xml" title="adbcBridge notes" href="/notes/feed.xml">
-<meta property="og:type" content="article"><meta property="og:title" content="A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0"><meta property="og:description" content="Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column…"><meta property="og:url" content="https://adbcbridge.org/notes/apache-ignite-odbc-findings/"><meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
+<meta property="og:type" content="article"><meta property="og:title" content="A timestamp that stores NULL and says it worked, and a boolean note that went stale"><meta property="og:description" content="ArcadeDB stores a space-separated timestamp with a fraction as NULL under a successful INSERT - the exact form psqlodbc binds."><meta property="og:url" content="https://adbcbridge.org/notes/arcadedb-timestamp-null-and-a-boolean-retest/"><meta property="og:image" content="https://adbcbridge.org/hero.jpg"><meta property="og:image:width" content="1600"><meta property="og:image:height" content="914"><meta property="og:image:alt" content="A steel bridge at dusk; streams of data cross it as columns of light"><meta name="twitter:card" content="summary_large_image"><meta name="referrer" content="strict-origin-when-cross-origin">
 <link rel="icon" href="/favicon.ico?v=3" sizes="16x16 32x32 48x48"><link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=3"><link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=3"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
 <link rel="preload" href="/fonts/newsreader-normal-latin.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/public-sans-normal-latin.woff2" as="font" type="font/woff2" crossorigin><style>/* Newsreader, Public Sans, JetBrains Mono — SIL Open Font License 1.1; latin and latin-ext subsets, one variable file per face with a weight range, self-hosted. */@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/jetbrains-mono-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:italic;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-italic-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Newsreader';font-style:normal;font-weight:400 500;font-display:swap;src:url(/fonts/newsreader-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin-ext.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}@font-face {font-family:'Public Sans';font-style:normal;font-weight:400 600;font-display:swap;src:url(/fonts/public-sans-normal-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}</style>
 <style>
@@ -50,85 +50,83 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-08-29</div><h1>A parameter array in Ignite&#x27;s ODBC driver takes every row&#x27;s NULL flag from row 0</h1><p class="meta">Apache Ignite&#x27;s ODBC driver drops a NULL below the first row of a column-wise parameter array - a character column stores an empty string, a BINARY column segfaults the client inside SQLExecute.</p><h2>What you see</h2>
-<p>Bind a two-column, three-row column-wise parameter array on <code>INSERT INTO t (a, b) VALUES
-(?, ?)</code> with <code>SQL_ATTR_PARAMSET_SIZE=3</code> and indicators <code>{SQL_NTS, SQL_NULL_DATA, SQL_NTS}</code>.
-Everything reports success: <code>rc=0</code>, <code>SQL_ATTR_PARAMS_PROCESSED_PTR</code> 3, every entry of the
-parameter-status array <code>SQL_PARAM_SUCCESS</code>. Then read row 2 back and <code>b IS NULL</code> is false —
-the column holds an <em>empty string</em>. A fixed-width column stores whatever bytes sit in that
-row's value slot. On a <code>BINARY</code> or <code>VARBINARY</code> column the client does not get that far:</p>
-<pre><code>__memcpy_avx_unaligned_erms
-ignite::odbc::query::BatchQuery::MakeRequestExecuteBatch
-ignite::odbc::query::BatchQuery::Execute
-ignite::odbc::Statement::ExecuteSqlQuery
-ignite::SQLExecute
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-08-28</div><h1>A timestamp that stores NULL and says it worked, and a boolean note that went stale</h1><p class="meta">ArcadeDB stores a space-separated timestamp with a fraction as NULL under a successful INSERT - the exact form psqlodbc binds. Filed by the project as a critical issue. And the NULL BOOLEAN note from August turned out to be fixed before we published it.</p><p>Two behaviours sat in this project's ArcadeDB compatibility notes since 2026-08-28, written
+down but never filed: a timestamp form that silently stored <code>NULL</code>, and a NULL <code>BOOLEAN</code> that
+read back as <code>false</code>. Both have now been settled, and in opposite directions. One turned out
+to be worse than the note said and is a critical issue in ArcadeDB's own tracker. The other
+had already been fixed before the note was ever published, which is the more useful lesson.</p>
+<h2>The timestamp: success, and no value</h2>
+<p>A <code>DATETIME_MICROS</code> property fed the string <code>'2024-02-29 13:45:10.123456'</code> stores <code>NULL</code>. The
+<code>INSERT</code> reports success. Nothing in the result says a value was dropped.</p>
+<p>Either half of that literal on its own is fine:</p>
+<pre><code>literal='2024-02-29T13:45:10.123456'   stored=2024-02-29T13:45:10.123456
+literal='2024-02-29 13:45:10.123456'   stored=&gt;&gt;&gt; NULL &lt;&lt;&lt;
+literal='2024-02-29 13:45:10'          stored=2024-02-29T13:45:10
 </code></pre>
-<p>The server is untouched in all three cases. A NULL in row 0 goes the other way and nulls the
-whole batch. Row-wise binding is not an escape: <code>SQL_ATTR_PARAM_BIND_TYPE</code> answers <code>HYC00
-Only binding by column is currently supported</code>.</p>
-<h2>What is actually happening</h2>
-<p><code>odbc/src/app/parameter.cpp</code> writes a parameter like this:</p>
-<pre><code class="language-cpp">void Parameter::Write(BinaryWriterImpl&amp; writer, int offset, SqlUlen idx) const
-{
-    if (buffer.GetInputSize() == SQL_NULL_DATA) { writer.WriteNull(); return; }
+<p>The <code>T</code> separator round-trips to the microsecond, and the space separator without a fraction
+round-trips too. Only the combination fails, and the combination is exactly what psqlodbc
+renders a bound <code>SQL_TYPE_TIMESTAMP</code> parameter as. So an application that binds a timestamp
+parameter — the ordinary thing to do — writes nothing and is told it wrote something.</p>
+<p>ArcadeDB filed this themselves on 2026-09-21 as
+<a href="https://github.com/ArcadeData/arcadedb/issues/8090">ArcadeData/arcadedb#8090</a>, labelled
+<code>severity:critical</code>, after this project's notes were shared with them. Their issue names the
+cause, which our note could not: a blanket <code>catch</code> in <code>Type.convert()</code> logs the parse failure
+at <code>FINE</code> and returns <code>null</code>, and the insert carries on. It affects every PostgreSQL-wire
+client that binds a timestamp against a sub-second-precision property, not just this driver.</p>
+<p>The literal is not the only way in. Binding the value as a parameter — the ordinary thing an
+application does, and the reason the form appears at all — loses it the same way, through
+psqlodbc and out the other side as Arrow:</p>
+<pre><code>INSERT INTO RetestT SET lbl = ?, ts = ?   with datetime(2024, 2, 29, 13, 45, 10, 123456)
 
-    ApplicationDataBuffer buf(buffer);   // the copy...
-    buf.SetByteOffset(offset);
-    buf.SetElementOffset(idx);           // ...is where the row offset is applied
+DATETIME_MICROS column as Arrow:
+   bound-param  -&gt; None   &lt;- value lost server-side
 </code></pre>
-<p><code>GetInputSize()</code> reads <code>*GetResLen()</code>, and <code>GetResLen()</code> applies the buffer's <em>own</em> element
-offset — still 0 at that point. So the NULL test always inspects row 0's indicator and every
-row of the chunk inherits row 0's NULL-ness. A NULL further down is therefore written as a
-value: the <code>SQL_CHAR</code> branch reads that row's indicator, -1, and <code>SqlStringToString</code> returns
-the empty string for any negative length that is not <code>SQL_NTS</code>, while the <code>SQL_BINARY</code> branch
-hands the same -1 to <code>writer.WriteInt8Array</code> as a length and <code>memcpy</code> runs off the end.</p>
-<p>The workaround is one execute per row, where the element offset really is 0. Reported on
-2026-08-29 as <a href="https://github.com/apache/ignite/issues/13537">apache/ignite#13537</a>, with the
-plain-ODBC reproduction above and <code>parameter.cpp</code> cited; open. A fix was prepared on
-2026-09-18: the indicator is read from the parameter's buffer before the row offset is applied
-to the copy that supplies the value, so every row inherits row 0's NULL-ness, and in the binary
-branch the row's own <code>-1</code> then reaches <code>memcpy</code> as a length, which is the client crash. The
-change reads the indicator at the same offset as the value and comes with the first unit test
-for that class; it goes upstream as a pull request once the JIRA ticket Apache Ignite asks for
-exists.</p>
-<h2>The server rule behind it: no table without a primary key</h2>
-<p>Every Ignite SQL table <em>is</em> a cache and its <code>PRIMARY KEY</code> is the cache key, so:</p>
-<pre><code>CREATE TABLE nopk (a BIGINT, b VARCHAR)
--&gt; 42000  No PRIMARY KEY defined for CREATE TABLE
+<p>Confirmed on the same 26.9.1 image on 2026-09-21. The <code>INSERT</code> succeeds, <code>SQLExecute</code> returns
+<code>SQL_SUCCESS</code>, and the column is empty. Nothing between the application and the storage engine
+has a way to notice.</p>
+<p>Until it is fixed, the way through is to write timestamps as ISO text with the <code>T</code>, which is
+what the compatibility entry for ArcadeDB says and what its parameter settings do.</p>
+<h2>The boolean: a note that aged badly</h2>
+<p>The second note said a NULL <code>BOOLEAN</code> had no NULL state over the wire: row 2's <code>bo</code> went in as
+<code>NULL</code> and read back as <code>False</code>, so the compatibility entry marks that column <code>not_null</code>.</p>
+<p>That was observed on 2026-08-28 against <code>arcadedata/arcadedb:latest</code>, which was 26.8.1 at the
+time. It is not true any more, and it had already stopped being true before we wrote it up: a
+project contributor filed the same behaviour as
+<a href="https://github.com/ArcadeData/arcadedb/issues/6674">#6674</a> on 2026-08-24 and closed it the
+same day, and the fix shipped in 26.9.1 on 2026-09-03.</p>
+<p>A retest on 2026-09-21 against the official 26.9.1 image (<code>arcadedata/arcadedb:26.9.1</code>),
+through the route the compatibility entry actually describes — psqlodbc 16 with
+<code>BoolsAsChar=0</code>, then adbcBridge into Arrow:</p>
+<pre><code>BOOLEAN column as Arrow:
+  schema: bool
+   true-row    -&gt; True
+   false-row   -&gt; False
+   null-row    -&gt; None   &lt;- SQL NULL
+   absent-row  -&gt; None   &lt;- SQL NULL
 </code></pre>
-<p>Generated ingest DDL has no notion of a key, and no column of an arbitrary payload can be
-one: Ignite allows neither a NULL key (<code>23000 Null value is not allowed for column 'A'</code>) nor
-the duplicates an append would then insert (<code>23000 Failed to INSERT some keys because they
-are already in cache</code>). Nor can the server fill one in — a <code>DEFAULT</code> must be a constant
-(<code>Non-constant DEFAULT expressions are not supported</code> for <code>RANDOM_UUID()</code>), and <code>IDENTITY</code>,
-<code>AUTO_INCREMENT</code> and <code>SERIAL</code> are all <code>HYC00 AUTO_INCREMENT columns are not supported</code>. This
-is a property of the server, not of its driver, and no client-side workaround exists: write
-into a table that declares its own key.</p>
-<h2>There is no Linux driver to download</h2>
-<p>Apache ships <code>libignite-odbc.so</code> for Windows only, as two <code>.msi</code> installers; the Linux
-binary release carries the C++ <em>sources</em> it would be built from. The image has them under
-<code>/opt/ignite/apache-ignite/platforms/cpp</code>, and the ODBC driver alone builds root-free in
-about two minutes against system unixODBC and OpenSSL headers with <code>-DWITH_ODBC=ON
--DWITH_CORE=OFF</code> — <code>WITH_CORE=OFF</code> is what keeps it short, since the C++ core module embeds
-a JVM and the ODBC driver needs neither JVM nor JNI. On macOS there is nothing to build:
-<code>platforms/cpp</code> carries only <code>common/os/{linux,win}</code> and the Darwin build stops at
-<code>concurrent_os.cpp:18 fatal error: 'sys/sysinfo.h' file not found</code>.</p>
-<h2>On Windows the statement text has to go narrow</h2>
-<p><code>ignite.odbc.dll</code> (2.18.0, registered as <code>Apache Ignite</code>) exports no <code>W</code> entry points at all,
-so the Windows driver manager maps every wide call onto it through the system ANSI code page:
-a wide fetch of <code>héllo 🚀</code> comes back <code>hÃ©llo ðŸš€</code> and a statement literal <code>'héllo'</code> matches
-nothing, pyodbc identical for both. Its own narrow path is untouched UTF-8 in both directions,
-so sending caller statement text through the narrow entry points, and keeping the narrow fetch
-route, passes the whole workload and is 2.5× faster: 775,660 rows/s against 316,230.</p>
-<p>Related: <a href="/notes/windows-ansi-code-page-three-disguises/">Five Windows-only ODBC failures are one thing wearing different clothes</a></p>
-<p>Two smaller things worth knowing. <code>SQL_DRIVER_VER</code> and <code>SQL_DBMS_VER</code> are both the hardcoded
-<code>02.04.0000</code>, neither the server's version nor the protocol actually negotiated. And the
-driver truncates a character parameter to the <code>ColumnSize</code> given to <code>SQLBindParameter</code>,
-client-side and with no warning, so pass the real width.</p>
-<p>Where this comes from: the adbcBridge compatibility matrix runs one workload through every
-database's ODBC driver on Linux, macOS and Windows and records each failure with its first
-error; the row for this database is at <a href="https://adbcbridge.org/matrix/#ignite">https://adbcbridge.org/matrix/#ignite</a>, and the finding
-is on file with its reproduction in docs/UPSTREAM.md of the repository.</p></article>
+<p>A NULL property and an absent property both arrive as SQL <code>NULL</code>, and <code>true</code>/<code>false</code> arrive
+intact. The behaviour is correct.</p>
+<h2>What that is worth saying out loud</h2>
+<p>A compatibility matrix is a set of claims with dates on them, and a claim about a fast-moving
+database is perishable. This one went stale in nine days, between the observation and the
+write-up, and the only reason it was caught is that the project read the note and pushed back
+on it rather than accepting it.</p>
+<p>Two habits come out of that, and both are now in this project's routine. Every quirk carries
+the version it was seen on, so a reader can tell what a cell is actually about. And a quirk
+that is documented but not filed gets re-tested against the current release before it is
+repeated anywhere, because "documented, not reported" is exactly where a fixed bug goes to
+live on.</p>
+<p>The ArcadeDB compatibility entry keeps its <code>not_null</code> flag for the boolean column for now,
+because the matrix row still records 26.9; it moves when the row is re-measured on 26.9.1.</p>
+<h2>Where these are tracked</h2>
+<ul>
+<li>Timestamp: <a href="https://github.com/ArcadeData/arcadedb/issues/8090">ArcadeData/arcadedb#8090</a>,
+  open, <code>severity:critical</code>, filed by the project on 2026-09-21.</li>
+<li>Boolean: <a href="https://github.com/ArcadeData/arcadedb/issues/6674">ArcadeData/arcadedb#6674</a>,
+  closed 2026-08-24 by a project contributor, shipped in 26.9.1, retested here on 2026-09-21.</li>
+</ul>
+<p>Both rows are in this project's <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">upstream record</a>,
+and the ArcadeDB entry with its settings is on the <a href="/db/arcadedb/">ArcadeDB page</a>.</p></article>
 </main>
 <footer>adbcBridge is Apache-2.0 licensed. Findings on this page are recorded, with reproductions, in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">docs/UPSTREAM.md</a>; the measurements are in the <a href="/matrix/">compatibility matrix</a>. Corrections and additions: <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/community/contributing.md">open an issue or a pull request</a> on the repository.</footer>
 </div>

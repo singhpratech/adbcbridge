@@ -86,6 +86,13 @@ and reports the <em>original</em> byte length in <code>StrLen_or_Ind</code> — 
 indicator gets the mojibake cut mid-sequence. The workaround is to put no <code>Charset=</code> in the
 connection string at all. <a href="https://github.com/openlink/virtuoso-opensource/issues/1471">openlink/virtuoso-opensource#1471</a>,
 open.</p>
+<p><strong>Sent upstream as a fix on 2026-09-18:</strong> <a href="https://github.com/openlink/virtuoso-opensource/pull/1477">openlink/virtuoso-opensource#1477</a>.
+Building the driver from <code>develop/7</code> showed the abort is not a compare at all but a double
+free: <code>SQLDriverConnect</code> stores the parsed <code>Charset=</code> value in the connection as the same
+buffer it later frees as an option, and the login path frees it again as a box. With a box of
+its own every spelling connects, and a charset the server does not have gets the <code>CL035</code>
+warning the code always meant to give. The doubly encoded wide columns are a separate matter
+and stay open.</p>
 <h2>3. <code>SQL_C_SBIGINT</code> parameters store 0</h2>
 <p>Whatever the value — <code>42</code> as much as <code>1234567890123</code> — and whether it is declared <code>SQL_BIGINT</code>,
 <code>SQL_NUMERIC</code> or <code>SQL_DECIMAL</code>. The driver's conversion table has no <code>SQL_C_SBIGINT</code>. The read
@@ -114,6 +121,11 @@ the damage is invisible unless a date, time or timestamp column is in the batch.
 elements out <code>ColumnSize</code> bytes apart, or binding row-wise, is correct in every case; turning
 parameter arrays off is the blunter fix.
 <a href="https://github.com/openlink/virtuoso-opensource/issues/1473">openlink/virtuoso-opensource#1473</a>, open.</p>
+<p><strong>Sent upstream as a fix on 2026-09-18:</strong> <a href="https://github.com/openlink/virtuoso-opensource/pull/1478">openlink/virtuoso-opensource#1478</a>.
+The size switch the parameter code uses lists the ODBC 2 names <code>SQL_C_DATE</code>, <code>SQL_C_TIME</code> and
+<code>SQL_C_TIMESTAMP</code> but not their ODBC 3 spellings, so <code>SQL_C_TYPE_DATE</code> falls to the default
+branch and the stride becomes <code>ColumnSize</code>. Nine lines add the three names the way the file's
+other switches already do; a packed array of four dates then inserts four dates.</p>
 <h2>5. On Windows, <code>SQLSetPos</code> and a four-byte indicator stride</h2>
 <p><code>virtodbc.dll</code> 7.2.17 advertises the <code>SQL_GD_*</code> extensions, but <code>SQLSetPos(SQL_POSITION)</code>
 fails on a block cursor, and the bound-column indicator array is written at a four-byte

@@ -11025,7 +11025,7 @@ before it is filed.</p>
 <td>clickhouse-odbc</td>
 <td><a href="https://github.com/ClickHouse/clickhouse-odbc/issues/582">ClickHouse/clickhouse-odbc#582</a></td>
 <td>Two parameter-binding defects on 1.5.5.20260810, each with a standalone C program: <code>SQL_NULL_DATA</code> is ignored whenever a value buffer is bound and an empty string is sent instead (silently <code>''</code> into <code>String</code>, the epoch into <code>DateTime64</code>, a server parse error for numeric, date, decimal and bool; <code>SQL_DEFAULT_PARAM</code> the same; a NULL value pointer works); and parameter arrays — the driver's own <code>SQLExecute</code> + <code>SQLMoreResults</code>-per-set protocol from #324 — stop after set 1 because <code>SQLMoreResults</code> executes it and answers <code>SQL_NO_DATA</code>, so a 5-set array lands 2 rows with no diagnostic.</td>
-<td>open</td>
+<td>open — the <code>SQL_NULL_DATA</code> half <strong>sent upstream as a fix, <a href="https://github.com/ClickHouse/clickhouse-odbc/pull/586">ClickHouse/clickhouse-odbc#586</a></strong> (ours, opened 2026-09-18): a helper that treats a parameter as NULL when the value pointer is null or the indicator is <code>SQL_NULL_DATA</code>, used at both sites in <code>driver/statement.cpp</code>, with two unit and two integration tests that fail on master; the parameter-array half is a separate mechanism (<code>SQLMoreResults</code> reports result sets, not parameter sets) and stays open for its own PR</td>
 </tr>
 <tr>
 <td>2026-08-29</td>
@@ -11046,7 +11046,7 @@ before it is filed.</p>
 <td>OpenLink Virtuoso</td>
 <td><a href="https://github.com/openlink/virtuoso-opensource/issues/1471">openlink/virtuoso-opensource#1471</a></td>
 <td>Any <code>Charset=</code> value but the exact literal <code>UTF-8</code> aborts the process inside <code>SQLDriverConnect</code> (<code>GPF: Dkbox.c:638 Double free</code>), including every charset Virtuoso itself lists; <code>Charset=UTF-8</code> connects but returns wide columns doubly encoded with the original byte length in the indicator.</td>
-<td>open</td>
+<td>open — the abort <strong>sent upstream as a fix, <a href="https://github.com/openlink/virtuoso-opensource/pull/1477">openlink/virtuoso-opensource#1477</a></strong> (ours, opened 2026-09-18): the cause is a double free, not a compare — <code>con_charset_name</code> aliases the parsed option buffer and two owners release it; the fix gives it a box of its own (<code>libsrc/Wi/CLIsql3.c</code>, +8/−1), after which every charset connects and an unknown one gets the intended <code>CL035</code> warning. The doubly encoded wide columns under <code>Charset=UTF-8</code> stay open</td>
 </tr>
 <tr>
 <td>2026-08-29</td>
@@ -11060,7 +11060,7 @@ before it is filed.</p>
 <td>OpenLink Virtuoso</td>
 <td><a href="https://github.com/openlink/virtuoso-opensource/issues/1473">openlink/virtuoso-opensource#1473</a></td>
 <td>A column-wise <code>SQL_C_TYPE_DATE</code> parameter array is stepped by <code>SQLBindParameter</code>'s <code>ColumnSize</code> rather than by <code>sizeof(SQL_DATE_STRUCT)</code>: <code>ColumnSize</code> 0 inserts row 0's date into every row, other values insert garbage dates, all <code>SQL_SUCCESS</code>.</td>
-<td>open</td>
+<td><strong>sent upstream as a fix, <a href="https://github.com/openlink/virtuoso-opensource/pull/1478">openlink/virtuoso-opensource#1478</a></strong> (ours, opened 2026-09-18): <code>sqlc_sizeof_1()</code> in <code>libsrc/Wi/CLIuti.c</code> lists the ODBC 2 names <code>SQL_C_DATE/TIME/TIMESTAMP</code> but not the ODBC 3 <code>SQL_C_TYPE_*</code> ones, so those fall to <code>ColumnSize</code>; the fix adds the three names under <code>ODBCVER &gt;= 0x0300</code> as the file's other switches do, verified on a driver built from <code>develop/7</code></td>
 </tr>
 <tr>
 <td>2026-08-29</td>
@@ -11081,7 +11081,7 @@ before it is filed.</p>
 <td>Apache Ignite ODBC</td>
 <td><a href="https://github.com/apache/ignite/issues/13537">apache/ignite#13537</a></td>
 <td>Column-wise parameter arrays test the NULL indicator of row 0 for every row: a <code>SQL_NULL_DATA</code> below row 0 stores an empty string (<code>VARCHAR</code>) or segfaults the client inside <code>SQLExecute</code> (<code>BINARY</code>, <code>WriteInt8Array</code> handed the -1 as a length); a NULL in row 0 nulls the whole batch; row-wise binding refused. <code>parameter.cpp</code> cited, fix suggested.</td>
-<td>open</td>
+<td>open — fix prepared 2026-09-18 (the indicator is read from the un-offset buffer in <code>modules/platforms/cpp/odbc/src/app/parameter.cpp</code>, before the row offset is applied; a negative length also reaches <code>memcpy</code> in the binary branch), with a unit test for <code>app::Parameter</code>, which had none; the pull request waits for the ASF JIRA ticket Ignite requires</td>
 </tr>
 <tr>
 <td>2026-08-29</td>
@@ -11166,6 +11166,13 @@ before it is filed.</p>
 <td><a href="https://github.com/memsql/singlestore-odbc-connector/issues/46">memsql/singlestore-odbc-connector#46</a></td>
 <td><code>SQLColumns</code> with a NULL <code>CatalogName</code> segfaults the client on a connection opened without <code>Database=</code>: <code>TABLE_CAT</code> falls back to the client library's current-database field, which stays NULL after <code>USE</code>, and <code>strdup(NULL)</code> is called (<code>ma_statement.c</code>). Zero matching rows, an explicit catalog, or <code>Database=</code> in the connection string avoid it.</td>
 <td>open — <strong>fix PR <a href="https://github.com/memsql/singlestore-odbc-connector/pull/47">#47</a> (ours)</strong>, opened 2026-09-17: <code>TABLE_CAT</code> NULL instead of <code>strdup(NULL)</code> in <code>SQLColumns</code> and <code>SQLPrimaryKeys</code>, with a test; verified against SingleStore 9.1.1</td>
+</tr>
+<tr>
+<td>2026-09-21</td>
+<td>ArcadeDB</td>
+<td><a href="https://github.com/ArcadeData/arcadedb/issues/8090">ArcadeData/arcadedb#8090</a></td>
+<td>A <code>DATETIME_MICROS</code> (also <code>DATETIME_NANOS</code>, <code>DATETIME</code>) value written as a string with a space separator <strong>and</strong> a fractional second — <code>'2024-02-29 13:45:10.123456'</code>, exactly the form psqlodbc renders a bound timestamp in — is stored as <code>NULL</code> while the <code>INSERT</code> reports success. Either half alone is fine: the <code>T</code> separator round-trips, and the space form without a fraction round-trips. Carried into the project's own tracker by a maintainer after we documented it in the compatibility notes, with the root cause named: a blanket catch in <code>Type.convert()</code> logs at <code>FINE</code> and returns <code>null</code>. Every PostgreSQL-wire client that binds a timestamp against a sub-second property is affected, not only this driver</td>
+<td><strong>open</strong>, filed 2026-09-21 by the project (Luca Garulli) and labelled <code>severity:critical</code>, crediting the report; a reproducer and the root cause are in the issue</td>
 </tr>
 </tbody>
 </table></div>
@@ -11261,11 +11268,6 @@ time allows, and a reproduction contributed by anyone is welcome.</p>
 <td>OceanBase CE 4.4.2</td>
 <td>A server-side prepared execute in which a parameter arrives as <code>MYSQL_TYPE_NULL</code> (what MySQL Connector/ODBC sends for a NULL before a value has fixed the type) is refused with <code>Object type error</code> (4001); MySQL accepts the same sequence.</td>
 <td><code>COMPATIBILITY.md</code></td>
-</tr>
-<tr>
-<td>ArcadeDB 26.9 (PostgreSQL wire)</td>
-<td>A <code>DATETIME_MICROS</code> literal written with a space separator and a fraction (<code>'2024-02-29 13:45:10.123456'</code>, the form psqlodbc renders a bound timestamp in) is stored as NULL under <code>SQL_SUCCESS</code>; a NULL <code>BOOLEAN</code> arrives over the wire as <code>false</code> with a non-NULL indicator.</td>
-<td><code>tests/compat/README.md</code></td>
 </tr>
 <tr>
 <td><code>alexbrainman/odbc</code> (Go, Windows)</td>

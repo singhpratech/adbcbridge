@@ -80,7 +80,14 @@ client that follows the specification instead — one <code>SQLExecute</code> fo
 one row.</p>
 <p>Both defects were filed together, each with a standalone C program, as
 <a href="https://github.com/ClickHouse/clickhouse-odbc/issues/582">ClickHouse/clickhouse-odbc#582</a>,
-open. Until it is fixed, treat parameter arrays as unusable here: the compatibility matrix
+open.</p>
+<p><strong>The NULL half sent upstream as a fix on 2026-09-18:</strong> <a href="https://github.com/ClickHouse/clickhouse-odbc/pull/586">ClickHouse/clickhouse-odbc#586</a>.
+Two lines in <code>driver/statement.cpp</code> decided whether a parameter is NULL from the value pointer
+alone and never looked at the indicator; a small helper now checks both, and four new tests
+(two against the request the driver builds, two against a live server) fail on <code>master</code> and
+pass with the change. The parameter-array half is a different mechanism, <code>SQLMoreResults</code>
+reporting result sets rather than parameter sets, and stays open for its own pull request.</p>
+<p>Until both are fixed, treat parameter arrays as unusable here: the compatibility matrix
 turns them off for this driver and batches rows into a multi-row <code>INSERT</code> instead.</p>
 <h2>No affected-row count, since 2021</h2>
 <p><code>SQLRowCount</code> answers 0 for every write. Not −1, which ODBC defines as "not available" — 0,
