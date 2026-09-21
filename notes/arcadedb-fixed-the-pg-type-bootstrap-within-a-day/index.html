@@ -156,6 +156,8 @@ registers <code>pg_type</code> as a query family of its own so the filter is eva
 <p>So the fix does exactly what #7178 says, and with one driver option the native driver now
 runs the read workload against ArcadeDB end to end apart from the schema lookup. adbcBridge
 over psqlodbc passes all seven steps before and after, as it did in the original probe.</p>
+<p>ArcadeDB published their own account of this fix and the three that followed it on 2026-09-21:
+<a href="https://arcadedb.com/blog/arcadedb-apache-arrow-adbc-postgresql-wire/">ArcadeDB in the Apache Arrow Ecosystem, Through Its PostgreSQL Wire Protocol</a>.</p>
 <h2>What is left, and where it is tracked</h2>
 <p>Both items were in <a href="https://github.com/ArcadeData/arcadedb/issues/7180">#7180</a> with the
 driver's exact statements; one is fixed, one is tracked on its own:</p>
