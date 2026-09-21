@@ -1358,9 +1358,11 @@ DBS = {
         # falls back to its own maximum (28) with the scale of the values in the result
         # set -- as it does for RisingWave's unqualified NUMERIC.
         decimal_type="decimal128(28, 3)",
-        # A BOOLEAN property has no NULL state on the wire: row 2's `bo` was inserted as
-        # NULL and reads back false, as QuestDB's and Access's booleans do.
-        not_null=("bo",),
+        # Until 26.9.1 a NULL BOOLEAN came back as false over the wire (the text
+        # serializer wrote "0" for a NULL; ArcadeData/arcadedb#6674, fixed 2026-08-24) and
+        # this entry carried not_null=("bo",) for it.  Retested on 26.9.1 on 2026-09-21:
+        # row 2's `bo` reads back NULL on the text and binary paths and through psqlodbc,
+        # so the flag is gone and the all-NULL row check covers `bo` again.
         # ArcadeDB is a graph database as much as a document one, which nothing in the
         # standard workload touches, so the `extra` steps build a small graph through the
         # ODBC path and traverse it: three vertices, two edges, then one- and two-hop

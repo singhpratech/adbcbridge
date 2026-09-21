@@ -3505,8 +3505,13 @@ that path, since every other driver answers the enumeration.
 * **`BoolsAsChar=0`** in the connection string. Without it psqlodbc reports every
   `BOOLEAN` as a `VARCHAR(5)` holding `"1"`/`"0"` instead of `SQL_BIT`. Same setting, same
   reason, as the `questdb` entry.
-* **`not_null=("bo",)`.** With `BoolsAsChar=0` a boolean property has no NULL state on
-  the wire: row 2's `bo` goes in as `NULL` and reads back `False`.
+* **NULL booleans, fixed upstream.** On 26.8.1 a NULL `BOOLEAN` property came back over
+  the wire as `false` with a non-NULL indicator (the text serializer wrote `"0"` for a
+  NULL; [ArcadeData/arcadedb#6674](https://github.com/ArcadeData/arcadedb/issues/6674),
+  reported by an ArcadeDB contributor, fixed 2026-08-24, shipped in 26.9.1). The entry
+  carried `not_null=("bo",)` for it until 2026-09-21, when a retest on 26.9.1 showed row
+  2's `bo` reading back `NULL` on the text and binary paths and through psqlodbc; the
+  flag is gone and the all-NULL row check covers `bo` again.
 * **`decimal_type="decimal128(28, 3)"`.** ArcadeDB reports no declared precision for a
   `DECIMAL` property, so psqlodbc falls back to its own maximum (28) with the scale of the
   values in the result set — as it does for RisingWave's unqualified `NUMERIC`.
@@ -3514,7 +3519,12 @@ that path, since every other driver answers the enumeration.
   `DATETIME_MICROS` property is stored as `NULL`, silently;
   `'2024-02-29T13:45:10.123456'` round-trips to the microsecond. (A bound
   `SQL_TYPE_TIMESTAMP` parameter goes as the space form, so it hits the same silent NULL —
-  a reason to write timestamps as ISO text against this server.)
+  a reason to write timestamps as ISO text against this server.) Reproduced on 26.9.1
+  on 2026-09-21: the space alone parses and the fraction alone parses, the two together
+  fail to parse and a blanket handler in the type converter turns the value into NULL
+  under a successful `INSERT`. Tracked as
+  [ArcadeData/arcadedb#8090](https://github.com/ArcadeData/arcadedb/issues/8090), opened
+  by the maintainer with the root cause and a reproducer.
 * **No binary transport.** A bound `bytea` parameter is refused by the protocol layer
   outright (`Error on parsing bind message: Type with code 0 not supported for
   deserializing`), and a `BINARY` property fed a string hands the string straight back.
