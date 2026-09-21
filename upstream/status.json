@@ -1,8 +1,8 @@
 {
- "as_of": "2026-09-19T11:06:49Z",
+ "as_of": "2026-09-21T16:59:10Z",
  "window_days": 7,
- "count": 38,
- "with_project_activity": 23,
+ "count": 39,
+ "with_project_activity": 24,
  "fixed": 9,
  "items": [
   {
@@ -1591,6 +1591,70 @@
    "community_comments": 0,
    "last_activity": null,
    "pulse": false
+  },
+  {
+   "project": "ArcadeDB",
+   "repo": "ArcadeData/arcadedb",
+   "number": 8090,
+   "url": "https://github.com/ArcadeData/arcadedb/issues/8090",
+   "title": "DATETIME_MICROS literal with a space separator and a fraction ('2024-02-29 13:45:10.123456', the psqlodbc bound-timestamp form) is silently stored as NULL",
+   "reported": "2026-09-21",
+   "reporter": "lvca",
+   "what": "A `DATETIME_MICROS` (also `DATETIME_NANOS`, `DATETIME`) value written as a string with a space separator **and** a fractional second — `'2024-02-29 13:45:10.123456'`, exactly the form psqlodbc renders a bound timestamp in — is stored as `NULL` while the `INSERT` reports success. Either half alone is fine: the `T` separator round-trips, and the space form without a fraction round-trips. Carried into the project's own tracker by a maintainer after we documented it in the compatibility notes, with the root cause named: a blanket catch in `Type.convert()` logs at `FINE` and returns `null`. Every PostgreSQL-wire client that binds a timestamp against a sub-second property is affected, not only this driver",
+   "kind": "issue",
+   "state": "open",
+   "closed_at": null,
+   "labels": [
+    "in progress",
+    "sql",
+    "bug",
+    "postgresql-wire",
+    "engine",
+    "severity:critical"
+   ],
+   "reactions": 0,
+   "maintainer_events": [
+    {
+     "type": "labeled",
+     "at": "2026-09-21T16:16:24Z",
+     "actor": "github-actions[bot]",
+     "label": "bug"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-09-21T16:16:24Z",
+     "actor": "github-actions[bot]",
+     "label": "engine"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-09-21T16:16:24Z",
+     "actor": "github-actions[bot]",
+     "label": "postgresql-wire"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-09-21T16:16:24Z",
+     "actor": "github-actions[bot]",
+     "label": "severity:critical"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-09-21T16:16:24Z",
+     "actor": "github-actions[bot]",
+     "label": "sql"
+    },
+    {
+     "type": "milestoned",
+     "at": "2026-09-21T16:32:19Z",
+     "actor": "robfrank",
+     "milestone": "26.10.1"
+    }
+   ],
+   "reporter_comments": 0,
+   "community_comments": 0,
+   "last_activity": "2026-09-21T16:32:19Z",
+   "pulse": true
   }
  ]
 }
