@@ -1,8 +1,8 @@
 {
- "as_of": "2026-09-22T11:45:41Z",
+ "as_of": "2026-09-22T21:23:42Z",
  "window_days": 7,
  "count": 39,
- "with_project_activity": 24,
+ "with_project_activity": 25,
  "fixed": 10,
  "items": [
   {
@@ -1420,11 +1420,18 @@
    "closed_at": null,
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "commit",
+     "at": "2026-09-22T19:17:41Z",
+     "actor": "pmishchenko-ua",
+     "url": "https://github.com/memsql/singlestore-odbc-connector/commit/fd647590d469c9559285f785a8d7071385c050f1"
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-09-22T19:17:41Z",
+   "pulse": true
   },
   {
    "project": "ArcadeDB",
@@ -1648,11 +1655,17 @@
      "at": "2026-09-21T16:32:19Z",
      "actor": "robfrank",
      "milestone": "26.10.1"
+    },
+    {
+     "type": "commit",
+     "at": "2026-09-22T13:42:11Z",
+     "actor": "oc007us",
+     "url": "https://github.com/ArcadeData/arcadedb/commit/5a425d0b0b439da416e7e043db6b7e31a1daca1d"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-22T04:07:37Z",
+   "last_activity": "2026-09-22T13:42:11Z",
    "pulse": true
   }
  ]
