@@ -3516,13 +3516,22 @@ that path, since every other driver answers the enumeration.
 * **`decimal_type="decimal128(28, 3)"`.** ArcadeDB reports no declared precision for a
   `DECIMAL` property, so psqlodbc falls back to its own maximum (28) with the scale of the
   values in the result set — as it does for RisingWave's unqualified `NUMERIC`.
-* **Timestamp literals need the ISO-8601 `T`.** Reported upstream on 2026-09-21 as
+* **Timestamp literals need the ISO-8601 `T`** on the released 26.9.1, and no longer on
+  26.10.1. Reported upstream on 2026-09-21 as
   [ArcadeData/arcadedb#8090](https://github.com/ArcadeData/arcadedb/issues/8090),
-  `severity:critical`. `'2024-02-29 13:45:10.123456'` into a
-  `DATETIME_MICROS` property is stored as `NULL`, silently;
-  `'2024-02-29T13:45:10.123456'` round-trips to the microsecond. (A bound
+  `severity:critical`, and fixed in
+  [#8096](https://github.com/ArcadeData/arcadedb/pull/8096), merged 2026-09-22. On 26.9.1,
+  `'2024-02-29 13:45:10.123456'` into a `DATETIME_MICROS` property is stored as `NULL`,
+  silently, while `'2024-02-29T13:45:10.123456'` round-trips to the microsecond; a bound
   `SQL_TYPE_TIMESTAMP` parameter goes as the space form, so it hits the same silent NULL —
-  a reason to write timestamps as ISO text against this server.)
+  a reason to write timestamps as ISO text against that release. Retested on
+  `26.10.1-SNAPSHOT` (build `382ae09d`) on 2026-09-22: both the literal and the bound
+  parameter round-trip, a value no parser can read fails the write (SQLSTATE 22023 through
+  psqlodbc) rather than storing `NULL`, and the column reaches Arrow as `timestamp[us]`
+  instead of a string. The ISO form works on both, so writing ISO text stays the portable
+  choice. One narrower shape is still refused after a space separator, a trailing offset
+  given to the second (`+05:30:00`); it is accepted after a `T`, and `+05`, `+05:30` and
+  `Z` are accepted after either.
 * **No binary transport.** A bound `bytea` parameter is refused by the protocol layer
   outright (`Error on parsing bind message: Type with code 0 not supported for
   deserializing`), and a `BINARY` property fed a string hands the string straight back.
