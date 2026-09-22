@@ -1,9 +1,9 @@
 {
- "as_of": "2026-09-21T16:59:10Z",
+ "as_of": "2026-09-22T11:45:41Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 24,
- "fixed": 9,
+ "fixed": 10,
  "items": [
   {
    "project": "ArcadeDB",
@@ -1602,10 +1602,9 @@
    "reporter": "lvca",
    "what": "A `DATETIME_MICROS` (also `DATETIME_NANOS`, `DATETIME`) value written as a string with a space separator **and** a fractional second — `'2024-02-29 13:45:10.123456'`, exactly the form psqlodbc renders a bound timestamp in — is stored as `NULL` while the `INSERT` reports success. Either half alone is fine: the `T` separator round-trips, and the space form without a fraction round-trips. Carried into the project's own tracker by a maintainer after we documented it in the compatibility notes, with the root cause named: a blanket catch in `Type.convert()` logs at `FINE` and returns `null`. Every PostgreSQL-wire client that binds a timestamp against a sub-second property is affected, not only this driver",
    "kind": "issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "fixed",
+   "closed_at": "2026-09-22T04:07:37Z",
    "labels": [
-    "in progress",
     "sql",
     "bug",
     "postgresql-wire",
@@ -1651,9 +1650,9 @@
      "milestone": "26.10.1"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-21T16:32:19Z",
+   "last_activity": "2026-09-22T04:07:37Z",
    "pulse": true
   }
  ]
