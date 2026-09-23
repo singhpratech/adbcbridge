@@ -120,12 +120,21 @@ def looks_like_ours(text, pos):
     19.0.0, Maven plugins ...).  Ours sit on a line that names the package -- a wheel,
     jar or nupkg file name, ``adbcbridge = "..."``, ``AdbcBridge --version`` -- or on
     the line right after ``<artifactId>adbcbridge</artifactId>`` in a Maven snippet.
+
+    A markdown link decides on its own, whatever else the line says: a version inside
+    ``[v0.17.0](https://github.com/panodata/omniload/releases/tag/v0.17.0)`` belongs to
+    the project the link points at, not to us.  Without that, a sentence naming our own
+    backend *and* citing the host project's release -- which the omniload and dlt
+    integration lines do -- would be read as an adbcbridge version.
     """
     start = text.rfind("\n", 0, pos) + 1
     prev_start = text.rfind("\n", 0, max(start - 1, 0)) + 1
     end = text.find("\n", pos)
     line = text[start:end if end != -1 else len(text)].lower()
     prev = text[prev_start:start].lower()
+    for m in re.finditer(r"\[[^\]]*\]\(([^)]*)\)", line):
+        if m.start() <= pos - start < m.end():
+            return "adbcbridge" in m.group(1)
     if "adbcbridge" in line:
         return True
     return "<artifactid>adbcbridge</artifactid>" in prev and "<version>" in line
