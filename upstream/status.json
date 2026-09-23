@@ -1,9 +1,9 @@
 {
- "as_of": "2026-09-22T21:23:42Z",
+ "as_of": "2026-09-23T11:44:59Z",
  "window_days": 7,
  "count": 39,
- "with_project_activity": 25,
- "fixed": 10,
+ "with_project_activity": 26,
+ "fixed": 11,
  "items": [
   {
    "project": "ArcadeDB",
@@ -1416,8 +1416,8 @@
    "reporter": "singhpratech",
    "what": "`SQLGetTypeInfo` fails `42S22 Unknown column 'json' in 'field list' (1054)` whenever `sql_mode` contains `ANSI_QUOTES`: the type-info result set is built from a template with double-quoted string literals (`ma_info.c`), which that mode turns into identifiers. `SQLTables`/`SQLColumns`/queries unaffected; MySQL Connector/ODBC fine on the same server.",
    "kind": "issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "fixed",
+   "closed_at": "2026-09-23T09:34:41Z",
    "labels": [],
    "reactions": 0,
    "maintainer_events": [
@@ -1426,11 +1426,18 @@
      "at": "2026-09-22T19:17:41Z",
      "actor": "pmishchenko-ua",
      "url": "https://github.com/memsql/singlestore-odbc-connector/commit/fd647590d469c9559285f785a8d7071385c050f1"
+    },
+    {
+     "type": "closed",
+     "at": "2026-09-23T09:34:41Z",
+     "actor": "pmishchenko-ua",
+     "reason": null,
+     "commit": null
     }
    ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": "2026-09-22T19:17:41Z",
+   "last_activity": "2026-09-23T09:34:41Z",
    "pulse": true
   },
   {
@@ -1593,11 +1600,18 @@
    "closed_at": null,
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "commit",
+     "at": "2026-09-23T09:37:33Z",
+     "actor": "pmishchenko-ua",
+     "url": "https://github.com/memsql/singlestore-odbc-connector/commit/bc000a406ea8ee43d57326c490041e61bc20528d"
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-09-23T09:37:33Z",
+   "pulse": true
   },
   {
    "project": "ArcadeDB",
