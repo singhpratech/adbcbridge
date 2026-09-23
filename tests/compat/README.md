@@ -6507,7 +6507,7 @@ Each has one thing the other does not:
 | `PLUGIN_DIR=` | required (`mysql_native_password`) | not needed |
 | `LD_PRELOAD=libstdc++.so.6` under pyarrow | required | not needed |
 | `DATETIME(6)` described as | size 19, scale 0 | size 26, scale 6 |
-| `SQLGetTypeInfo` under `ANSI_QUOTES` | works | **fails, 42S22** |
+| `SQLGetTypeInfo` under `ANSI_QUOTES` | works | **fails, 42S22** on 1.2.2; fixed upstream in [#48](https://github.com/memsql/singlestore-odbc-connector/pull/48) (merged 2026-09-23, unreleased) |
 | already provisioned | yes, `$MYSQL_ODBC_DRIVER` | separate download |
 
 **The entry uses MySQL Connector/ODBC**, because it is what the eleven other MySQL-wire
@@ -6516,11 +6516,16 @@ costs one `export SINGLESTORE_ODBC_DRIVER=$MYSQL_ODBC_DRIVER` line and no new dr
 because its `SQLGetTypeInfo` survives the `ANSI_QUOTES` the entry sets, so generated
 ingest DDL is spelled in the server's own type names.
 
-### The SingleStore driver's `SQLGetTypeInfo` breaks under `ANSI_QUOTES` (42S22)
+### The SingleStore driver's `SQLGetTypeInfo` breaks under `ANSI_QUOTES` (42S22), fixed upstream
 
 Worth recording precisely, because it is a real driver bug and the failure is silent
-through adbcBridge. Against SingleStore ODBC 1.2.2, `SQLGetTypeInfo` succeeds on a fresh
-connection and fails on the same connection once `ANSI_QUOTES` is in `sql_mode`:
+through adbcBridge. Reported as
+[memsql/singlestore-odbc-connector#45](https://github.com/memsql/singlestore-odbc-connector/issues/45)
+and fixed by our
+[PR #48](https://github.com/memsql/singlestore-odbc-connector/pull/48), merged 2026-09-23; the
+behaviour below is what SingleStore ODBC 1.2.2, the current release, still does. On 1.2.2
+`SQLGetTypeInfo` succeeds on a fresh connection and fails on the same connection once
+`ANSI_QUOTES` is in `sql_mode`:
 
 ```
 SQLGetTypeInfo(SQL_ALL_TYPES) -> 42S22  [ss-1.2.2][9.1.1]Unknown column 'json'
