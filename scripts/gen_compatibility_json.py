@@ -17,9 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -136,6 +134,48 @@ def verdict(cell: str) -> tuple[str, str | None]:
     return ("other", bare or None)
 
 
+def read_dbs() -> dict[str, dict]:
+    """The harness's DBS dict, read with ast rather than imported.
+
+    tests/compat/test_matrix.py imports pyarrow, which the version-agreement CI job does
+    not have and should not need; parsing also avoids running a test module for its data.
+    Entries are ``dict(k=v, ...)`` calls whose values are literals, so each keyword is
+    literal_eval'd and anything that is not a literal is kept as its source text.
+    """
+    import ast
+
+    tree = ast.parse((ROOT / "tests" / "compat" / "test_matrix.py").read_text(encoding="utf-8"))
+    node = None
+    for stmt in tree.body:
+        targets = getattr(stmt, "targets", [])
+        if targets and isinstance(targets[0], ast.Name) and targets[0].id == "DBS":
+            node = stmt.value
+            break
+    if not isinstance(node, ast.Dict):
+        sys.exit("tests/compat/test_matrix.py: could not find a DBS = {...} assignment")
+
+    def value(v):
+        try:
+            return ast.literal_eval(v)
+        except Exception:
+            return ast.unparse(v)
+
+    def entry(v) -> dict:
+        if isinstance(v, ast.Dict):
+            return {k.value: value(val) for k, val in zip(v.keys, v.values)
+                    if isinstance(k, ast.Constant)}
+        if isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "dict":
+            return {kw.arg: value(kw.value) for kw in v.keywords if kw.arg}
+        sys.exit(f"DBS holds an entry this script cannot read: {ast.unparse(v)[:60]}")
+
+    out = {}
+    for k, v in zip(node.keys, node.values):
+        if not isinstance(k, ast.Constant):
+            sys.exit("DBS has a non-literal key")
+        out[k.value] = entry(v)
+    return out
+
+
 def main() -> int:
     text = MD.read_text(encoding="utf-8")
     tbl = tables(text)
@@ -146,10 +186,7 @@ def main() -> int:
     if len(os_rows) != len(human_rows):
         sys.exit(f"the two tables disagree: {len(os_rows)} per-OS rows, {len(human_rows)} human rows")
 
-    sys.path.insert(0, str(ROOT / "tests" / "compat"))
-    import test_matrix  # noqa: E402  -- needs the path inserted above
-
-    dbs = test_matrix.DBS
+    dbs = read_dbs()
     unknown = [r[0] for r in os_rows if r[0] not in dbs]
     if unknown:
         sys.exit(f"entries in the table that the harness does not define: {', '.join(unknown)}")
@@ -221,19 +258,11 @@ def main() -> int:
             "the landing page)" % (counts, expected)
         )
 
-    try:
-        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
-                                capture_output=True, text=True, check=True).stdout.strip()
-    except Exception:
-        commit = None
-
     doc = {
         "$schema": "https://adbcbridge.org/compatibility.schema.json",
         "about": "Which databases adbcBridge is verified against, per operating system, with the "
                  "driver quirks each entry needs. Generated from docs/COMPATIBILITY.md and the "
-                 "harness in tests/compat/test_matrix.py; do not edit by hand.",
-        "generated": date.today().isoformat(),
-        "source_commit": commit,
+                 "harness in tests/compat/test_matrix.py; do not edit by hand. Deliberately carries no\n                  generation date or commit: CI regenerates it and diffs, so the output has to be\n                  reproducible, and git records when it changed.",
         "counts": counts,
         "status_values": ["pass", "fail", "driver-unavailable", "server-unavailable", "not-run", "other"],
         "databases": databases,

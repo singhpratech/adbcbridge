@@ -1,8 +1,6 @@
 {
   "$schema": "https://adbcbridge.org/compatibility.schema.json",
-  "about": "Which databases adbcBridge is verified against, per operating system, with the driver quirks each entry needs. Generated from docs/COMPATIBILITY.md and the harness in tests/compat/test_matrix.py; do not edit by hand.",
-  "generated": "2026-09-24",
-  "source_commit": "9cb7101",
+  "about": "Which databases adbcBridge is verified against, per operating system, with the driver quirks each entry needs. Generated from docs/COMPATIBILITY.md and the harness in tests/compat/test_matrix.py; do not edit by hand. Deliberately carries no\n                  generation date or commit: CI regenerates it and diffs, so the output has to be\n                  reproducible, and git records when it changed.",
   "counts": {
     "linux": 53,
     "macos_arm64": 45,
@@ -161,7 +159,7 @@
       },
       "quirks": {
         "ddl": "CREATE TABLE adbc_t (i NUMBER(10), f BINARY_DOUBLE, s VARCHAR2(50), b RAW(10), d DATE, ts TIMESTAMP(6), n NUMBER(10,3), bo BOOLEAN)",
-        "ident": "<method 'upper' of 'str' objects>",
+        "ident": "str.upper",
         "unicode_env": "NLS_LANG=.AL32UTF8",
         "wide_text_rows": 3000
       },
@@ -383,7 +381,7 @@
       "quirks": {
         "bool_type": "int8",
         "ddl": "CREATE TABLE adbc_t (i INT PRIMARY KEY, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
-        "ingest_types": "{DataType(bool): DataType(int8)}"
+        "ingest_types": "{pa.bool_(): pa.int8()}"
       },
       "notes": "`mysql_native_password` only, so run from the tarball the connector needs `PLUGIN_DIR=`; server side: a table without a PRIMARY KEY gets a hidden `__mo_fake_pk_col` that `SQLColumns` reports in `GetObjects`; a parameter array bound into a `BIT` column aborts the server once it holds NULLs (`malloc(): unaligned fastbin chunk detected`; single parameters and NULL-free arrays are fine), so ingest sends booleans as `TINYINT` \u2014 fixed on MatrixOne `main` by [matrixorigin/matrixone#27645](https://github.com/matrixorigin/matrixone/pull/27645) (2026-08-26): on the 2026-08-28 nightly a bound NULL stores as NULL and the same 999-set array runs clean, so the mapping is for the released 4.2.0; driver quirk handled: MatrixOne describes a TEXT column as `SQL_WLONGVARCHAR` one third of its widest value's byte length wide (5 characters for the benchmark's 16-byte strings, 0 for an empty result set), so binding at that width truncates every row; a no-declared-length column is bound at `long_bind_bytes` instead of re-reading every row (2.05M rows/s in the fix's own measurement). `SHOW VARIABLES` and `SHOW COLLATION` kill the client with `SIGFPE` inside Connector/ODBC 9.4's `get_column_size` (a zero charset width in the result metadata); the bridge issues neither; ingest 97.5k rows/s (86.5k with array binding), fetch 1.97M rows/s"
     },
@@ -409,7 +407,7 @@
         "big_rows": 2000,
         "bool_type": "int8",
         "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARCHAR(50), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN) DISTRIBUTED BY RANDOM BUCKETS AUTO",
-        "ingest_types": "{DataType(double): Decimal128Type(decimal128(12, 3))}",
+        "ingest_types": "{pa.float64(): pa.decimal128(12, 3)}",
         "quote": "`"
       },
       "notes": "MPP analytic warehouse; reports no transaction support (`SQL_TC_NONE`), so the Databend quirk (`_binary` parameter literals rewritten as text, portable ingest type names) applies unchanged and `NO_SSPS=1` is required (the FE prepares only a point `SELECT` on a `store_row_column` unique-key table -- any other `SELECT` is refused with `Only support prepare SelectStmt point query now` -- or an `INSERT`, and a server-side prepared `INSERT` executes only for parameters bound from `SQL_C_CHAR` or to a matching non-character SQL type: a parameter bound to a character SQL type from any other C type -- `SQL_C_WCHAR` included, which is how this connector binds a string -- gets a bare `NullPointerException` from the FE); every OLAP table has to declare how its rows are distributed, so generated ingest DDL appends `DISTRIBUTED BY RANDOM BUCKETS AUTO` plus `enable_duplicate_without_keys_by_default` (`ddl_table_options`) \u2014 a duplicate table with no key columns, without which Doris refuses any table whose first column is `TEXT`/`STRING` -- what a generated string column is here -- `FLOAT` or `DOUBLE` (`The olap table first column could not be float, double, string ...`; a leading `VARCHAR(n)`, `CHAR(n)` or `DECIMAL(p,s)` is accepted) \u2014 keyed on `@@version_comment` since `version()` is a bare MySQL number; no binary column type and no `DOUBLE PRECISION` spelling; `ANSI_QUOTES` is accepted but ignored, so identifiers are backtick-quoted; ingest 2.2k rows/s (2.3k with array binding) -- like StarRocks an `INSERT` is a load transaction whatever it carries, so multi-row batching is worth ~300x (7 rows/s without it); fetch 1.36M rows/s \u2014 pyodbc's ingest column is empty: its row-at-a-time binding sends `date`, `datetime` and `bytes` parameters as `_binary'...'` literals, which Doris' parser rejects (the same values passed as `str` insert fine), and its `fast_executemany` stages first set `autocommit=False`, which Doris refuses (`Transactions are not enabled`)"
@@ -459,7 +457,7 @@
       "quirks": {
         "bool_type": "int8",
         "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6) TIME INDEX, n DECIMAL(10,3), bo BOOLEAN) WITH ('append_mode'='true')",
-        "ingest_types": "{DataType(double): Decimal128Type(decimal128(12, 3))}",
+        "ingest_types": "{pa.float64(): pa.decimal128(12, 3)}",
         "not_null": [
           "ts"
         ],
@@ -558,7 +556,7 @@
       },
       "quirks": {
         "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
-        "ident": "<method 'upper' of 'str' objects>",
+        "ident": "str.upper",
         "text_sortable": true
       },
       "notes": "32-bit `SQLLEN` (see `adbc.odbc.sqllen_32bit`); ingest DDL spells an Arrow string as the widest `VARCHAR`, not the `LONG VARCHAR` the driver's `SQLGetTypeInfo(SQL_LONGVARCHAR)` names (deprecated; will not sort, group or de-duplicate -- `SQL0134N` on `ORDER BY`, `GROUP BY`, `DISTINCT` and `UNION` -- and has no bulk-insert path: ~7k rows/s whatever the batch size against ~430k for `VARCHAR(32672)` in a 20,000-row test, 30-56x on a warm database and over 200x through `adbc_ingest` on a cold one; an earlier run recorded ~700x)"
@@ -823,7 +821,7 @@
           "decimal128(28, 3)",
           "decimal128(28, 6)"
         ],
-        "ingest_types": "{DataType(date32[day]): TimestampType(timestamp[us]), DataType(bool): DataType(int8)}",
+        "ingest_types": "{pa.date32(): pa.timestamp('us'), pa.bool_(): pa.int8()}",
         "ts_us": [
           "123000"
         ]
@@ -902,7 +900,7 @@
       "quirks": {
         "ddl": "CREATE TABLE adbc_t (i bigint PRIMARY KEY, f double precision, s varchar(50), b bytea, d date, ts timestamptz, n numeric, bo bool)",
         "decimal_type": "decimal128(28, 3)",
-        "ingest_types": "{DataType(int32): DataType(int64)}"
+        "ingest_types": "{pa.int32(): pa.int64()}"
       },
       "notes": "two driver quirks, both keyed on a PGAdapter-only setting because `version()` just says PostgreSQL 14.1: psqlodbc inlines a parameter array's timestamps as `'...'::timestamp`, a type Spanner does not have, so a batch binding a timestamp goes row-at-a-time (`no_timestamp_param_arrays`); and every Spanner table needs a PRIMARY KEY, so generated ingest DDL adds a surrogate `GENERATED BY DEFAULT AS IDENTITY` column (`ingest_key_column`). Server side: no 32-bit integer, no `TIMESTAMP WITHOUT TIME ZONE` (so `ts` reads back zone-aware), no modifier on `NUMERIC`, no DDL inside a transaction; also ingests into and reads back an `INTERLEAVE IN PARENT` child table. A third quirk on the same key is Spanner's ceiling of **950 parameters per statement** (`max_statement_params`): PGAdapter prepares a multi-row INSERT that carries more without complaint and then closes the connection at `SQLExecute` (`08S01`), leaving the batching's halving search no connection to halve on -- measured exactly, 948 parameters go through and 952 drop the connection -- so it is declared rather than probed, and ingest runs at 237 four-column rows per INSERT. ingest 7.3k rows/s (7.4k with array binding), fetch 95.8k rows/s at `--rows 300 --fetch-rows 2000`, which is the size this entry is benchmarked at"
     },
@@ -927,7 +925,7 @@
       "quirks": {
         "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BLOB SUB_TYPE BINARY, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
         "decimal_type": "decimal128(18, 3)",
-        "ident": "<method 'upper' of 'str' objects>",
+        "ident": "str.upper",
         "ts_us": [
           "123400"
         ]
@@ -978,7 +976,7 @@
       },
       "quirks": {
         "big_rows": 100000,
-        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        "ddl": "'CREATE TABLE adbc_t ' + FLIGHTSQL_COLS",
         "decimal_type": "string",
         "params": false,
         "read_only": true
@@ -1004,7 +1002,7 @@
         }
       },
       "quirks": {
-        "big_rows": 100000,
+        "big_rows": "ARCADEDB_BIG_ROWS",
         "ddl": "CREATE DOCUMENT TYPE adbc_t; CREATE PROPERTY adbc_t.i INTEGER; CREATE PROPERTY adbc_t.f DOUBLE; CREATE PROPERTY adbc_t.s STRING; CREATE PROPERTY adbc_t.b BINARY; CREATE PROPERTY adbc_t.d DATE; CREATE PROPERTY adbc_t.ts DATETIME_MICROS; CREATE PROPERTY adbc_t.n DECIMAL; CREATE PROPERTY adbc_t.bo BOOLEAN",
         "decimal_type": "decimal128(28, 3)",
         "not_null": [
@@ -1082,7 +1080,7 @@
       "quirks": {
         "big_rows": 100000,
         "ddl": "CREATE TABLE adbc_t (i INT PRIMARY KEY, f DOUBLE, s VARCHAR(50), b BINARY, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
-        "ident": "<method 'upper' of 'str' objects>",
+        "ident": "str.upper",
         "ingest_create": false,
         "quote": ""
       },
@@ -1277,7 +1275,7 @@
       },
       "quirks": {
         "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s NVARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
-        "ident": "<method 'upper' of 'str' objects>"
+        "ident": "str.upper"
       },
       "notes": "SAP's in-memory column store, first-party server (`saplabs/hanaexpress`, which pulled anonymously) driven by SAP's own first-party driver from the free HANA client download \u2014 the EULA that gates it is passed with the cookie its checkbox sets, and the ODBC member of the tarball needs no installer, no `LD_LIBRARY_PATH` and no `.ini` of its own. Every workload type is a native HANA type and round-trips exactly, emoji and microseconds included (`i` is int32; a bare `CREATE TABLE` is a **column** table, `default_table_type = column`, and a `CREATE ROW TABLE` passes the same workload). Two HANA spellings to know: `TIMESTAMP` takes no precision argument (`TIMESTAMP(6)` is `42000`, `257 sql syntax error: incorrect syntax near \"(\"`) because it is always 7 fractional digits, and there is no multi-row `VALUES` at all (`INSERT INTO t VALUES (1,'a'),(2,'b')` is `42000`, `257 ... incorrect syntax near \",\"`, with literals as with parameters). Four driver quirks, all keyed on `libodbchdb`. The first is a correctness bug independent of this matrix: the driver decodes **narrow statement text as Latin-1**, not as the UTF-8 bytes unixODBC handed it, so the UTF-8 of `h\u00e9llo \ud83d\ude80` (`68 c3a9 6c6c6f 20 f09f9a80`) is stored as the eleven Latin-1 characters those bytes spell (`LENGTH(s)` 11, not 8) \u2014 the same corruption the Windows driver manager causes for every driver, here caused by one driver on every platform. It hides because it is self-consistent within narrow statements, and shows the moment a literal must match a value sent as a bound parameter (which travels `SQL_C_WCHAR` and arrives correct). No connection property (`CHAR_AS_UTF8`, `CHAR_SET`, `charset`) and no locale (`LC_ALL=C`, `en_US.UTF-8`, `C.UTF-8`) changes it; `SQLExecDirectW` stores it exactly, so `wide_sql` (new) routes caller statement text through the W entry points on every platform \u2014 the mirror of the existing `narrow_sql`, reusing the conversion the Windows build already had. Second, `SQLGetTypeInfo(SQL_TYPE_TIMESTAMP)` names **`SECONDDATE` first** \u2014 HANA's whole-second timestamp (`COLUMN_SIZE` 19, `MAXIMUM_SCALE` 0, no `CREATE_PARAMS`) \u2014 with the 7-digit `TIMESTAMP` only in rows two and three, so generated ingest DDL silently dropped every microsecond; `ddl_timestamp_type_name` (new) gives the name outright, since `SECONDDATE` has no `CREATE_PARAMS` for `fractional_time_type_format` to ask for a scale and `TIMESTAMP` takes no precision argument either. Third, `SQLGetTypeInfo(SQL_LONGVARCHAR)` names `CLOB`, which HANA bars from `ORDER BY` (`HY000`, `264 invalid datatype: \"V\" LOB type in ORDER BY clause`) and `SELECT DISTINCT` (`HY000`, `264 ... LOB type in distinct select clause`) \u2014 the SQL Server `TEXT` trap \u2014 so `ddl_string_as_max_varchar`, the flag Db2 already sets, asks for `VARCHAR(5000)` instead, fully Unicode since HANA 2.0 merged `VARCHAR` into `NVARCHAR`. Fourth, `prefer_param_arrays` (the third driver to set it, after maodbc and Vertica, and here the server's doing rather than the driver's): with no multi-row `VALUES`, `MultiRowSetup`'s probe is refused and ingest falls back to one execute per row, 7,675 rows/s against **1,142,092** with a bound array. Server side, startup is 158 s on a cold volume (system database, then the `HXE` tenant) and settles at ~5 GB under a 12 GB cap; 39013 (system DB) and 39017 (the `HXE` tenant) must be published **unmapped**, because the client resolves a tenant by asking for its port and reconnecting to exactly that number; `--agree-to-sap-license` and a world-writable mount holding `passwords.json` (the image's `hxeadm` is uid 12000) are required, and of SAP's four sysctls only `kernel.shmmax` is IPC-namespaced and settable per container \u2014 the entry was verified with the other three left at a stock Ubuntu's values. Ingest 1,142,092 rows/s (array binding), fetch 6,768,257 rows/s"
     },
@@ -1301,7 +1299,7 @@
       },
       "quirks": {
         "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARCHAR(50), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
-        "ident": "<method 'upper' of 'str' objects>",
+        "ident": "str.upper",
         "text_sortable": true,
         "wide_text_rows": 3000
       },
@@ -1328,7 +1326,7 @@
       "quirks": {
         "bool_type": "int16",
         "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b BLOB, d DATE, ts DATE, n DECIMAL(10,3), bo SMALLINT)",
-        "ident": "<method 'upper' of 'str' objects>",
+        "ident": "str.upper",
         "quote": ""
       },
       "notes": "first-party driver on 20300, linked against nothing but libc, lifted out of the server image with `docker cp` (`-ul64` is the 8-byte-`SQLLEN` build unixODBC wants; the `-ul32` sibling sits beside it). Server side, `altibase/altibase` is licence-gated \u2014 it ships a 1-byte `conf/license` and the boot stops at `Check License` with `No valid license present!` (ERR-42000), a 90-day trial key being a registration away \u2014 so the entry runs the same vendor's free `altibase/a_plus_edition`, which needs none; it wants `MODE=foreground` (the image default `MODE=init` starts a shell and exits) and `DB_CHARSET=UTF8` (the default is KO16KSC5601). Driver quirks handled: the wide and narrow paths disagree above the BMP \u2014 a `SQL_C_WCHAR` parameter is stored as CESU-8 (`h\u00e9llo \ud83d\ude80` is 13 bytes, `LENGTH()` 8) and reading that back narrow yields bytes no UTF-8 decoder accepts, while `SQL_C_CHAR` in and out round-trips it byte for byte, so both ends stay narrow (`wchar_as_utf8` + `narrow_params`, as Informix); its byte types carry vendor `SQL_DATA_TYPE` codes outside the ODBC range (BYTE 20001, NIBBLE 20002, VARBYTE 20003, BLOB 30, CLOB 40, VARBIT -100) and, unrecognised, BYTE/VARBYTE/BLOB fall through to the text path and come back hex-encoded, so those three are read as `SQL_C_BINARY` (as Db2's own `SQL_BLOB` -98 already is); `SQLGetTypeInfo` has no `SQL_LONGVARCHAR` at all and reports CREATE_PARAMS `precision` \u2014 not `length` \u2014 for `VARCHAR`, so generated ingest DDL got a bare `VARCHAR`, which in Altibase means `VARCHAR(1)` and fails the first insert with 22026 `Invalid data type length`, fixed by naming `VARCHAR(32000)` (`ddl_string_type_name`, as Firebird); `SQL_IDENTIFIER_QUOTE_CHAR` is a blank, so ingest quotes nothing and the server upper-cases what it emits (the entry leaves its own SQL unquoted too, as Ignite's does). Types: no `BOOLEAN` (HY004 `Unable to create a column with the specified data type`, so `bo` is `SMALLINT` \u2192 int16), no `DOUBLE PRECISION` (`DOUBLE`), no `VARBINARY`, and `DATE` *is* the timestamp \u2014 microseconds and all, described `SQL_TYPE_TIMESTAMP` \u2014 so it carries both `d` and `ts`; BYTE, VARBYTE, NIBBLE, BIT and VARBIT accept no bound `SQL_C_BINARY` parameter at all (22018 `Conversion not applicable`, 135180), which is why `b` is a `BLOB`. Its parameter arrays are one round trip and beat the multi-row `INSERT` 26\u00d7, so `prefer_param_arrays` \u2014 the third driver to need it, after `maodbc` and Vertica's; ingest 30k rows/s multi-row, 778\u2013816k as an array, fetch 2.0\u20132.3M rows/s"
@@ -1403,7 +1401,7 @@
       "quirks": {
         "big_rows": 3000,
         "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50) CCSID 1208, b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
-        "ident": "<method 'upper' of 'str' objects>",
+        "ident": "str.upper",
         "text_sortable": true
       },
       "notes": "a different engine and a different wire from the Db2 row above, not DRDA: IBM's own IBM i Access driver on the host-server ports, `SQL_DBMS_NAME` \"DB2/400 SQL\" 07.05.0015. **Hosted** \u2014 IBM i runs on Power hardware, there is no container and no emulator, and the entry points at [PUB400.COM](https://pub400.com), the free public IBM i (`PUB400_HOST`/`PUB400_USER`/`PUB400_PASSWORD`; `big_rows` 3,000, one connection at a time). Driver quirks: the `Driver=` value may be at most **35 characters** (`Key value in connection string too long. (30119)` at 36 \u2014 the driver's own installed path is 36, so a DSN-less connection needs the registered name or a short symlink); the libraries resolve their message catalogues and conversion tables under a compiled-in `/opt/ibm/iaccess`, and without that directory every diagnostic degrades to `CWBNL0202 - cwbodmsg.dll` and the real error is lost (root-free route: a `bwrap` mount namespace). Generated ingest DDL spells an Arrow string `VARCHAR(8000) CCSID 1208`, not the `CLOB` the driver's `SQLGetTypeInfo(SQL_LONGVARCHAR)` names (`ddl_string_type_name`, keyed on `SQL_DBMS_NAME` \"DB2/400\"): a CLOB column can be neither array-bound for writing nor bound at all for reading, so every row costs a round trip \u2014 3,000 rows went in at **8 rows/s** and came back at **8 rows/s** against 926-1,070 and 1,636-8,052 as `VARCHAR(8000)`. The width is measured, not chosen: the widest `VARCHAR` the server reports (32,739) is refused in a four-column table (`SQL0101`, Db2 for i's row is at most 32,766 bytes) and describes too wide to bind, which puts the read back on `SQLGetData` \u2014 120 rows/s at `VARCHAR(16000)`, 62 at `VARCHAR(32700)`. Server side: `CommitMode=0` (`*NONE`) is required, because a table created with plain `CREATE TABLE` in a user library is not journaled and cannot be changed under commitment control (`SQL7008 \u2026 not valid for operation`); `Naming=0` with `DefaultLibraries=<user>1`; `SSL=1` (host-server ports 9470-9479) verified as well as plain. The entry's `s` column is `VARCHAR(50) CCSID 1208` because a plain `VARCHAR` takes the job CCSID \u2014 273, single-byte EBCDIC, on this host \u2014 and loses `h\u00e9llo \ud83d\ude80` to substitution characters; `CCSID 1208` is UTF-8 and round-trips it. Unquoted identifiers fold to upper case, `SQL_MAX_IDENTIFIER_LEN` is 18, and `INTEGER`, `DOUBLE`, `VARBINARY(n)`, `DATE`, `TIMESTAMP(6)`, `DECIMAL(10,3)` and `BOOLEAN` are all native 7.5 types needing no tolerance flag. First connect needs a password change PUB400 only offers on a 5250 screen: `ssh -p 2222` refuses an expired profile outright and the client's own `cwbCO_ChangePassword()` is refused by this host (`CWBSY1008 \u2026 rc=400`); ingest 926 rows/s, fetch 8.1k rows/s, ~110 ms network round trip"
