@@ -44,6 +44,15 @@ jobs:
       # surface in the Release workflow's crate job, after the tag.
       - name: Bundled C sources match src/
         run: diff -rq src rust/csrc/src
+      # docs/compatibility.json is generated from docs/COMPATIBILITY.md and the harness's
+      # DBS dict.  Regenerating it here means the published data cannot drift from the
+      # table, and the generator's own count assertion (53 / 45 / 48) fails the build if a
+      # row changes without the figures quoted in README.md and docs/index.md changing too.
+      - name: Generated compatibility data is current
+        run: |
+          python3 scripts/gen_compatibility_json.py
+          git diff --exit-code -- docs/compatibility.json \
+            || { echo "docs/compatibility.json is stale: run scripts/gen_compatibility_json.py"; exit 1; }
 
   # PostgreSQL through psqlodbc, on a real server: pins the temporal precision and
   # zone mapping, the current-schema option, schema-level GetObjects and the array

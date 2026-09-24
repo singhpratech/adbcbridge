@@ -179,6 +179,11 @@ not gaps in the driver, and are recorded as such. `pending` and `not run` mean n
 Details and the machine descriptions: [`bench/BENCHMARKS-macos.md`](../bench/BENCHMARKS-macos.md),
 [`bench/BENCHMARKS-windows.md`](../bench/BENCHMARKS-windows.md).
 
+The same results, with the quirks each entry needs, are published as machine-readable
+data in [`compatibility.json`](compatibility.json) — generated from this table and from
+the harness in `tests/compat/test_matrix.py` by `scripts/gen_compatibility_json.py`, and
+checked in CI, so it cannot drift from what is written here.
+
 | entry | Linux | macOS arm64 | Windows x64 |
 |---|---|---|---|
 | sqlite | PASS | PASS (SQLite 3.51.0) | PASS (SQLite 3.43.2, SQLite3 ODBC Driver) |
