@@ -10391,6 +10391,10 @@ for that OS/arch&gt;</code>; <code>not runnable here: &lt;why&gt;</code> — the
 not gaps in the driver, and are recorded as such. <code>pending</code> and <code>not run</code> mean not yet run.
 Details and the machine descriptions: <a href="https://github.com/singhpratech/adbcbridge/blob/main/bench/BENCHMARKS-macos.md"><code>bench/BENCHMARKS-macos.md</code></a>,
 <a href="https://github.com/singhpratech/adbcbridge/blob/main/bench/BENCHMARKS-windows.md"><code>bench/BENCHMARKS-windows.md</code></a>.</p>
+<p>The same results, with the quirks each entry needs, are published as machine-readable
+data in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/compatibility.json"><code>compatibility.json</code></a> — generated from this table and from
+the harness in <code>tests/compat/test_matrix.py</code> by <code>scripts/gen_compatibility_json.py</code>, and
+checked in CI, so it cannot drift from what is written here.</p>
 <div class="tw" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>
 <thead>
 <tr>
