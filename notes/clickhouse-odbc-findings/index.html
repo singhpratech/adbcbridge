@@ -87,6 +87,19 @@ alone and never looked at the indicator; a small helper now checks both, and fou
 (two against the request the driver builds, two against a live server) fail on <code>master</code> and
 pass with the change. The parameter-array half is a different mechanism, <code>SQLMoreResults</code>
 reporting result sets rather than parameter sets, and stays open for its own pull request.</p>
+<div class="callout">
+<p><strong>Update, 2026-09-24: the NULL half is merged.</strong> slabko approved and merged
+<a href="https://github.com/ClickHouse/clickhouse-odbc/pull/586">#586</a> into <code>master</code> (<code>eb0fdb2654</code>),
+six days after it was opened, with no changes asked for.</p>
+<p>It is not in a release yet. The reproducer was re-run against the current release,
+1.5.5.20260810, on 2026-09-24 against ClickHouse 26.7.5.10, and still shows all five
+problems — the <code>String</code> column storing <code>''</code> and the numeric, date and decimal parameters
+failing server-side. So the advice below stands for anyone on a released driver, and this
+line becomes "fixed in &lt;release&gt;" when a tag carries it.</p>
+<p>Issue #582 stays open, because it reported two defects and this fixes one. The
+parameter-array half needs its own change, and the offer to prepare it is on the pull
+request.</p>
+</div>
 <p>Until both are fixed, treat parameter arrays as unusable here: the compatibility matrix
 turns them off for this driver and batches rows into a multi-row <code>INSERT</code> instead.</p>
 <h2>No affected-row count, since 2021</h2>
