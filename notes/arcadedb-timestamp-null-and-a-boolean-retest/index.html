@@ -86,6 +86,41 @@ DATETIME_MICROS column as Arrow:
 has a way to notice.</p>
 <p>Until it is fixed, the way through is to write timestamps as ISO text with the <code>T</code>, which is
 what the compatibility entry for ArcadeDB says and what its parameter settings do.</p>
+<div class="callout">
+<p><strong>Update, 2026-09-22: fixed upstream the day after it was filed.</strong> Luca Garulli opened
+<a href="https://github.com/ArcadeData/arcadedb/pull/8096">PR #8096</a> the same evening the issue was
+filed and merged it into <code>main</code> at 04:07 UTC on 2026-09-22, closing #8090 with "Fixed in
+26.10.1". Two faults had to line up for the silent loss, and both are addressed: no parser
+accepted the space-and-fraction spelling, so it is now accepted; and a parse failure was being
+swallowed and turned into <code>NULL</code>, so an unreadable value now fails the write with an error
+naming the value. Reads stay deliberately lenient — <code>date()</code> and <code>.asDatetime()</code> still return
+<code>NULL</code> for something they cannot read — which keeps queries from throwing on stored data.</p>
+<p>Retested here on the <code>26.10.1-SNAPSHOT</code> image the day it was pushed (build <code>382ae09d</code>, sixty
+commits past the merge, so the fix is genuinely in it), on the same machine and harness that
+produced the measurements above:</p>
+<pre><code>DATETIME_MICROS literals, psqlodbc 16 -&gt; ArcadeDB 26.10.1-SNAPSHOT
+   '2024-02-29T13:45:10.123456'    stores  2024-02-29 13:45:10.123456
+   '2024-02-29 13:45:10.123456'    stores  2024-02-29 13:45:10.123456   &lt;- was NULL
+   '2024-02-29 13:45:10'           stores  2024-02-29 13:45:10
+   'not-a-timestamp'               refuses (SQLSTATE 22023)             &lt;- was NULL
+
+INSERT INTO RetestT SET lbl = ?, ts = ?   with datetime(2024, 2, 29, 13, 45, 10, 123456)
+   bound-param                     stores  2024-02-29 13:45:10.123456   &lt;- was NULL
+</code></pre>
+<p>Through adbcBridge the column now arrives as Arrow <code>timestamp[us]</code>; on 26.9.1 the same column
+came back as a string. A second machine ran an independent route the same day — psycopg over
+libpq 18 in both the text and the binary parameter format, and psqlodbc 18 — and agreed on
+every case, including that over ODBC the refusal reaches the caller as a failed
+<code>SQLExecDirect</code> with SQLSTATE 22023: an exception an application can see, which is the whole
+point of the change.</p>
+<p>One narrower shape is still refused after a space separator: a trailing offset given to the
+second, <code>'2024-02-29 13:45:10.123456+05:30:00'</code>. It is accepted after a <code>T</code>, and <code>+05</code>,
+<code>+05:30</code> and <code>Z</code> are accepted after either separator. That is a small gap rather than the
+defect this note is about, and it loses nothing silently.</p>
+<p>The advice above still holds for anyone on a released build: 26.9.1 is the current release, and
+ISO text with the <code>T</code> works on every version. This line becomes "fixed in 26.10.1" when that
+release ships.</p>
+</div>
 <h2>The boolean: a note that aged badly</h2>
 <p>The second note said a NULL <code>BOOLEAN</code> had no NULL state over the wire: row 2's <code>bo</code> went in as
 <code>NULL</code> and read back as <code>False</code>, so the compatibility entry marks that column <code>not_null</code>.</p>
@@ -121,7 +156,9 @@ because the matrix row still records 26.9; it moves when the row is re-measured 
 <h2>Where these are tracked</h2>
 <ul>
 <li>Timestamp: <a href="https://github.com/ArcadeData/arcadedb/issues/8090">ArcadeData/arcadedb#8090</a>,
-  open, <code>severity:critical</code>, filed by the project on 2026-09-21.</li>
+  <code>severity:critical</code>, filed by the project on 2026-09-21 and closed 2026-09-22 by
+  <a href="https://github.com/ArcadeData/arcadedb/pull/8096">PR #8096</a>; verified here on the
+  <code>26.10.1-SNAPSHOT</code> build the same day.</li>
 <li>Boolean: <a href="https://github.com/ArcadeData/arcadedb/issues/6674">ArcadeData/arcadedb#6674</a>,
   closed 2026-08-24 by a project contributor, shipped in 26.9.1, retested here on 2026-09-21.</li>
 </ul>
