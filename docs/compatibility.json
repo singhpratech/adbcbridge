@@ -1,0 +1,1412 @@
+{
+  "$schema": "https://adbcbridge.org/compatibility.schema.json",
+  "about": "Which databases adbcBridge is verified against, per operating system, with the driver quirks each entry needs. Generated from docs/COMPATIBILITY.md and the harness in tests/compat/test_matrix.py; do not edit by hand.",
+  "generated": "2026-09-24",
+  "source_commit": "9cb7101",
+  "counts": {
+    "linux": 53,
+    "macos_arm64": 45,
+    "windows_x64": 48,
+    "databases": 53
+  },
+  "status_values": [
+    "pass",
+    "fail",
+    "driver-unavailable",
+    "server-unavailable",
+    "not-run",
+    "other"
+  ],
+  "databases": [
+    {
+      "entry": "sqlite",
+      "name": "SQLite 3.45",
+      "driver": "sqliteodbc 0.99991",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "SQLite 3.51.0"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "SQLite 3.43.2, SQLite3 ODBC Driver"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f REAL, s TEXT, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        "decimal_type": "string",
+        "text_sortable": true,
+        "ts_us": [
+          "123000"
+        ]
+      },
+      "notes": "[native delegation](how-it-works/delegation.md) to `adbc_driver_sqlite` when installed"
+    },
+    {
+      "entry": "duckdb",
+      "name": "DuckDB (latest)",
+      "driver": "duckdb-odbc",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "DuckDB ODBC 1.5.5.0, universal binary"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "duckdb_odbc 1.5.5.0, `DuckDB Driver` registered by the zip's odbc_install.exe"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        "text_sortable": true
+      },
+      "notes": "driver quirks handled: 2048-row vectors (the driver writes a full vector into bound buffers whatever the rowset size), no `SQL_BIT` params (booleans go as integers), no usable parameter arrays on 1.5.5 (fixed on main by [duckdb-odbc#524](https://github.com/duckdb/duckdb-odbc/pull/524), in the first release after v1.5.5.0)"
+    },
+    {
+      "entry": "postgres",
+      "name": "PostgreSQL 16",
+      "driver": "psqlodbc 16",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "PostgreSQL 15.15"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "PostgreSQL 16.15, psqlodbc 18.00.0002 `PostgreSQL Unicode(x64)`; postgres:16 container"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"
+      },
+      "notes": "[native delegation](how-it-works/delegation.md) to `adbc_driver_postgresql` when installed; bulk ingest sends one array parameter per column (`INSERT \u2026 SELECT * FROM unnest(?::t[], \u2026)`) rather than K row-groups of cells \u2014 a server quirk keyed on `version()`, so no other PG-wire server here gets it; partitioned reads split on `ctid` (1.21x native at 1 M rows, 1.55x at 10 M), and a **declaratively partitioned parent** \u2014 which has no heap of its own and used to get one partition \u2014 now takes the key-range split, 1.36x native"
+    },
+    {
+      "entry": "mariadb",
+      "name": "MariaDB 11",
+      "driver": "MariaDB Connector/ODBC 3.1",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "MariaDB 11.8 arm64, Connector/ODBC 3.2.9) \u2014 after the maodbc \u2265 3.2 quirk (`34b5863`): at 688229f Connector/C 3.4.9 segfaulted on a NULL DATE in a parameter array"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "MariaDB 11.8.9, mariadb:11 container; MySQL Connector/ODBC 26.7.1 with `NO_SSPS=1` from `{no_ssps}`"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "the driver's parameter arrays go as one `COM_STMT_BULK_EXECUTE` and beat the multi-row `INSERT`, so it opts into `prefer_param_arrays` (3.1.15 on Linux; from Connector/ODBC 3.2 arrays are off \u2014 see the macOS cell)"
+    },
+    {
+      "entry": "columnstore",
+      "name": "MariaDB ColumnStore 23.02",
+      "driver": "MariaDB Connector/ODBC 3.1 (MariaDB wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "MariaDB ColumnStore 11.1.1) \u2014 provisioning and the user created by hand; `columnstore.cnf` mounted from `/private/tmp`"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "`MySQL (via ODBC) 11.1.1-MariaDB-log`; MySQL Connector/ODBC 26.7.1 + `NO_SSPS=1`; provisioned per the README, with the `zz-adbc.cnf` copied into `/mnt/skysql/columnstore-container-configuration/` because the bind-mounted copy is world-writable under Docker Desktop and ignored"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b BLOB, d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN) ENGINE=Columnstore"
+      },
+      "notes": "columnar engine inside MariaDB 11.1: standard-SQL ingest DDL (ColumnStore rejects `maodbc`'s own `LONG VARCHAR`/`BIT` type names), no `VARBINARY` column type; needs `columnstore_cache_inserts=ON` (bound-parameter inserts are ~2 rows/s without it) and `provision` to start the backend processes; ingest 14.9k rows/s (54.6k with array binding), fetch 1.41M rows/s"
+    },
+    {
+      "entry": "oracle",
+      "name": "Oracle 23ai Free",
+      "driver": "Instant Client ODBC 23",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "Oracle 23.26.0200, Instant Client 23.3 arm64) \u2014 `NLS_LANG=.AL32UTF8` must be in the environment before the process opens its first Oracle connection (on Linux setting it in-process before `SQLDriverConnect` is enough; on macOS the harness's in-process setting was too late, so export it before the process starts \u2014 and with it unset the corruption is *written*, the server stores U+FFFD"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Oracle 23.26.0200, gvenzl/oracle-free:slim; Instant Client 23 `Oracle in instantclient_23_0`, `NLS_LANG=.AL32UTF8` exported before the process starts; the 3,000-row wide-text/CLOB check included"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i NUMBER(10), f BINARY_DOUBLE, s VARCHAR2(50), b RAW(10), d DATE, ts TIMESTAMP(6), n NUMBER(10,3), bo BOOLEAN)",
+        "ident": "<method 'upper' of 'str' objects>",
+        "unicode_env": "NLS_LANG=.AL32UTF8",
+        "wide_text_rows": 3000
+      },
+      "notes": "set `NLS_LANG=.AL32UTF8` for non-ASCII; no `SQL_C_SBIGINT`, so 64-bit ints are sent as numeric text. SQORA's rowset is fixed for the life of a cursor: changing `SQL_ATTR_ROW_ARRAY_SIZE` on an open cursor is accepted (`SQLSetStmtAttr` succeeds, `SQLGetStmtAttr` reads it back) and then goes wrong in one of three unannounced ways. Raising it segfaults inside `libsqora` on a later `SQLFetch` (`bcoReturnColData` through `bcoCacheFetch`, a per-rowset slot sized at execute time) -- on a `(NUMBER, CLOB)` cursor and equally on cursors with no LOB at all; whether a given raise dies depends on how deep the cursor already is, so the same raise survives after one rowset and crashes after twelve. Where it does not crash it can rewind, re-delivering rows already returned and dropping others while still ending on the right total. Lowering it never crashes and is no better: the driver keeps stepping by the original size and returns only the first N rows of each block, so 100,000 rows read at 1,024 and dropped to 128 come back as 13,440-14,336 depending on where the change falls, `SQL_NO_DATA` and no diagnostic. Reproduced with plain `SQLBindCol`/`SQLFetch`, nothing of ours on the stack. The reader therefore settles the rowset before the first fetch and never moves it (`fixed_rowset`), and a value that outgrew its bound buffer cannot be repaired once the rowset holds more than one row -- `SQLGetData` answers HY109 there, `SQLSetPos` HY109 and `SQLFetchScroll` HY106 at any size, although `SQL_GETDATA_EXTENSIONS` advertises `SQL_GD_BLOCK|SQL_GD_BOUND`; at a one-row rowset `SQLGetData` does re-read the whole value -- so a column with no real declared width -- CLOB, NCLOB, BLOB, LONG, all reported as 2,147,483,647 wide -- stays unbound and is read a row at a time with `SQLGetData`. Result sets without a LOB column keep the full block cursor, at the one size chosen before their first row. Also seen: Oracle 23.26 takes the standard multi-row `VALUES (\u2026),(\u2026)` form, prepared or direct, so the `INSERT ALL` fallback is never reached there; `SQL_C_SBIGINT` is refused on the read side too (07006), and `SQLGetTypeInfo(SQL_BIGINT)` returns nothing; an unconstrained `NUMBER` column is described `SQL_FLOAT` and read through a double (9223372036854775807 comes back 9223372036854780000, exact in `NUMBER(19)`); the empty string is NULL on both the literal and the bound path. This matters because ingest DDL spells an Arrow string as CLOB here, so ingest-then-read-back used to crash on the default path; the compat entry now writes 3,000 mixed-width strings (one in 250 is 9 KB) and reads them all back whole"
+    },
+    {
+      "entry": "clickhouse",
+      "name": "ClickHouse 26",
+      "driver": "clickhouse-odbc 1.5",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "ClickHouse 26.7.5.10, clickhouse-odbc 1.5.5 macOS zip, arm64"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "ClickHouse 26.7.5.10; clickhouse-odbc 1.5.5 Unicode from the GitHub MSI"
+        }
+      },
+      "quirks": {
+        "big_rows": 300,
+        "ddl": "CREATE TABLE adbc_t (i Nullable(Int32), f Nullable(Float64), s Nullable(String), b Nullable(String), d Nullable(Date), ts Nullable(DateTime64(6)), n Nullable(Decimal(10,3)), bo Nullable(Bool)) ENGINE = Memory",
+        "rowcount": false
+      },
+      "notes": "a NULL parameter must be bound with a NULL value pointer \u2014 with a value buffer bound the driver ignores `SQL_NULL_DATA` and sends the parameter empty, which the server rejects for `Int32`/`Float64`/`Date`/`Decimal`/`Bool` and silently stores as `''` in `String` and as the epoch in `DateTime64` (`SQL_DESCRIBE_PARAMETER` is `N`; `SQLDescribeParam` answers `SQL_UNKNOWN_TYPE`); no affected-row counts on 1.5.5 (`SQLRowCount` answers 0 for every write; fixed on master by clickhouse-odbc#585, merged 2026-09-15, which answers \u22121 \u2014 the ODBC \"unknown\" \u2014 from the next release); `Nullable()` DDL wrapper on ingest; parameter arrays are the driver's own protocol \u2014 `SQLExecute` sends set 0 and each `SQLMoreResults` the next set (clickhouse-odbc#324) \u2014 and on 1.5.5 the first `SQLMoreResults` sends set 1 but answers `SQL_NO_DATA`, after which nothing advances: a 5-set array lands 2 rows under `SQL_SUCCESS`/`SQL_NO_DATA` (clickhouse-odbc#582), and a spec-conforming single `SQLExecute` lands 1; one HTTP request per execute \u2014 ~16 rows/s one row at a time, ~1k rows/s through the K-row `INSERT` ingest uses, with K bounded by the server's 1,000-field HTTP form limit"
+    },
+    {
+      "entry": "mssql",
+      "name": "SQL Server 2022",
+      "driver": "msodbcsql 18",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "SQL Server 2022"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "SQL Server 2022 16.00.4265, mcr.microsoft.com/mssql/server:2022 container; msodbcsql 18.6.2.1"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INT, f FLOAT, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME2(6), n DECIMAL(10,3), bo BIT)",
+        "text_sortable": true
+      },
+      "notes": "incl. `NVARCHAR(MAX)` via chunked `SQLGetData` \u2014 the driver describes it as `SQL_WVARCHAR` with column size 0 and reports `SQL_GETDATA_EXTENSIONS` = `SQL_GD_BLOCK` only, so a value truncated in a *bound* column cannot be re-read (07009 on every route) and the wide column is left unbound; ingest DDL spells an Arrow string `NVARCHAR(MAX)`, not the deprecated `TEXT` the driver's `SQLGetTypeInfo(SQL_LONGVARCHAR)` names (SQL Server will not sort, group or even compare it, `IS NULL` and `LIKE` excepted). A rowset above 1 makes every `SELECT` return `01S02 Cursor type changed`, benign"
+    },
+    {
+      "entry": "azuresqledge",
+      "name": "Azure SQL Edge 16.0",
+      "driver": "msodbcsql 18",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "SQL Server 15.00.2000, arm64 image, msodbcsql 18.6.2.1 arm64"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Azure SQL Edge, SQL Server 16.00.5100; msodbcsql 18.6.2.1"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INT, f FLOAT, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME2(6), n DECIMAL(10,3), bo BIT)"
+      },
+      "notes": "the SQL Server 2022 engine, so it takes the same path as SQL Server 2022, `TEXT` ingest-DDL quirk included \u2014 it even reports `SQL_DBMS_NAME` \"Microsoft SQL Server\""
+    },
+    {
+      "entry": "mysql",
+      "name": "MySQL 8.4",
+      "driver": "MySQL Connector/ODBC 9.4 (and MariaDB Connector/ODBC 3.1)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "MySQL 8.4.11 arm64, MariaDB Connector/ODBC 3.2.9) \u2014 after the maodbc \u2265 3.2 quirk (`34b5863`): at 688229f the connector's array path misreported the row count"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "MySQL 8.4.11, mysql:8 container; MySQL Connector/ODBC 26.7.1"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "the driver executes parameter arrays row by row"
+    },
+    {
+      "entry": "tidb",
+      "name": "TiDB 7.5",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "TiDB, MySQL wire 8.0.11"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "TiDB v7.5.1, MySQL wire 8.0.11; MySQL Connector/ODBC 26.7.1 with `NO_SSPS=1` from `{no_ssps}` \u2014 the 8.4.0-era note that no newer connector is published for Windows is obsolete: dev.mysql.com offers 26.7.1 winx64"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "no quirks; run from the tarball the driver needs `PLUGIN_DIR=` for the `mysql_native_password` client plugin TiDB's root account uses"
+    },
+    {
+      "entry": "dolt",
+      "name": "Dolt 2.3.1 (MySQL 8.0.33 wire)",
+      "driver": "MySQL Connector/ODBC 9.4",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "Dolt, MySQL wire 8.0.33"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Dolt, MySQL wire 8.0.33; MySQL Connector/ODBC 26.7.1 + `NO_SSPS=1`"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "no driver quirks; Dolt offers only `mysql_native_password`, which Connector/ODBC 9.x loads as a plugin, so the entry points `PLUGIN_DIR` at the tarball's own `lib/plugin`"
+    },
+    {
+      "entry": "databend",
+      "name": "Databend 1.2",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "with MySQL Connector/ODBC 26.7.1 (Oracle's macOS arm64 binary, built for iODBC) through a bridge built against iODBC 3.52.16 \u2014 `MySQL (via ODBC) 8.0.90-v1.2.881`; **FAIL through MariaDB Connector/ODBC 3.2.9** at its connect-time probe `SELECT 1 FROM DUAL WHERE @@sql_mode LIKE '%ansi_quotes%'` (`Unknown table \"default\".\"default\".DUAL`), identical through pyodbc"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "`MySQL (via ODBC) 8.0.90-v1.2.881`; MySQL Connector/ODBC 26.7.1 + `NO_SSPS=1`, `ADBC_BENCH_AUTOCOMMIT=1` for the harness rows) \u2014 **with MySQL Connector/ODBC 26.7.1 the astral check passes**; through 8.4.0 (the earlier Windows measurement) the same entry FAILED at that check only: `h\u00e9llo \ud83d\ude80` stored byte-exact, read back as `h\u00e9llo ???` on every read path including pyodbc, because 8.4.0 substitutes `?` for a non-BMP character before either C type sees it (SQL_C_CHAR and SQL_C_WCHAR both return `3f 3f 3f`; `CHARSET=` makes no difference"
+        }
+      },
+      "quirks": {
+        "big_rows": 2000,
+        "bool_type": "int16",
+        "column_order": false,
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARCHAR(50), d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        "decimal_type": "string"
+      },
+      "notes": "the server has no prepared statements, so the connector runs with `NO_SSPS=1`; driver quirks handled: `_binary` literals for date/timestamp/binary params, MySQL type names in ingest DDL"
+    },
+    {
+      "entry": "percona",
+      "name": "Percona Server 8.4",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "Percona Server, MySQL wire 8.4.11"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Percona Server 8.4.11-11; MySQL Connector/ODBC 26.7.1, default connection string"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "drop-in MySQL fork: the `mysql` entry applies unchanged, no quirks; ingest 21.1k rows/s, fetch 1.18M rows/s"
+    },
+    {
+      "entry": "matrixone",
+      "name": "MatrixOne 4.2 (MySQL 8.0.30 wire)",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "MatrixOne, MySQL wire 8.0.30"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "MatrixOne v4.2.0, MySQL wire 8.0.30; MySQL Connector/ODBC 26.7.1 + `NO_SSPS=1`) \u2014 **with MySQL Connector/ODBC 26.7.1 the astral check passes**; through 8.4.0 (the earlier Windows measurement) the same entry FAILED at that check only: `h\u00e9llo \ud83d\ude80` stored byte-exact, read back as `h\u00e9llo ???` on every read path including pyodbc, because 8.4.0 substitutes `?` for a non-BMP character before either C type sees it (SQL_C_CHAR and SQL_C_WCHAR both return `3f 3f 3f`; `CHARSET=` makes no difference"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT PRIMARY KEY, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)",
+        "ingest_types": "{DataType(bool): DataType(int8)}"
+      },
+      "notes": "`mysql_native_password` only, so run from the tarball the connector needs `PLUGIN_DIR=`; server side: a table without a PRIMARY KEY gets a hidden `__mo_fake_pk_col` that `SQLColumns` reports in `GetObjects`; a parameter array bound into a `BIT` column aborts the server once it holds NULLs (`malloc(): unaligned fastbin chunk detected`; single parameters and NULL-free arrays are fine), so ingest sends booleans as `TINYINT` \u2014 fixed on MatrixOne `main` by [matrixorigin/matrixone#27645](https://github.com/matrixorigin/matrixone/pull/27645) (2026-08-26): on the 2026-08-28 nightly a bound NULL stores as NULL and the same 999-set array runs clean, so the mapping is for the released 4.2.0; driver quirk handled: MatrixOne describes a TEXT column as `SQL_WLONGVARCHAR` one third of its widest value's byte length wide (5 characters for the benchmark's 16-byte strings, 0 for an empty result set), so binding at that width truncates every row; a no-declared-length column is bound at `long_bind_bytes` instead of re-reading every row (2.05M rows/s in the fix's own measurement). `SHOW VARIABLES` and `SHOW COLLATION` kill the client with `SIGFPE` inside Connector/ODBC 9.4's `get_column_size` (a zero charset width in the result metadata); the bridge issues neither; ingest 97.5k rows/s (86.5k with array binding), fetch 1.97M rows/s"
+    },
+    {
+      "entry": "doris",
+      "name": "Apache Doris 2.1.0 (MySQL 5.7.99 wire)",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "with MySQL Connector/ODBC 26.7.1 (Oracle's macOS arm64 binary, built for iODBC) through a bridge built against iODBC 3.52.16 \u2014 `MySQL (via ODBC) 5.7.99`, 300/2,000 rows as on Linux; **FAIL through MariaDB Connector/ODBC 3.2.9**: the server NPEs on its server-side prepared INSERT and rejects the `_binary '<raw bytes>'` literal its `PREPONCLIENT=1` path inlines"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Apache Doris, MySQL wire 5.7.99, FE + BE in one container, ~6 min to `Alive`; MySQL Connector/ODBC 26.7.1 + `NO_SSPS=1`) \u2014 **with MySQL Connector/ODBC 26.7.1 the astral check passes**; through 8.4.0 (the earlier Windows measurement) the same entry FAILED at that check only: `h\u00e9llo \ud83d\ude80` stored byte-exact, read back as `h\u00e9llo ???` on every read path including pyodbc, because 8.4.0 substitutes `?` for a non-BMP character before either C type sees it (SQL_C_CHAR and SQL_C_WCHAR both return `3f 3f 3f`; `CHARSET=` makes no difference) \u2014 restarting a stopped Doris container fails (`boot failed!` there; on Linux the FE loops `wait catalog to be ready` instead, because it recorded its old container IP), recreate it"
+        }
+      },
+      "quirks": {
+        "big_rows": 2000,
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARCHAR(50), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN) DISTRIBUTED BY RANDOM BUCKETS AUTO",
+        "ingest_types": "{DataType(double): Decimal128Type(decimal128(12, 3))}",
+        "quote": "`"
+      },
+      "notes": "MPP analytic warehouse; reports no transaction support (`SQL_TC_NONE`), so the Databend quirk (`_binary` parameter literals rewritten as text, portable ingest type names) applies unchanged and `NO_SSPS=1` is required (the FE prepares only a point `SELECT` on a `store_row_column` unique-key table -- any other `SELECT` is refused with `Only support prepare SelectStmt point query now` -- or an `INSERT`, and a server-side prepared `INSERT` executes only for parameters bound from `SQL_C_CHAR` or to a matching non-character SQL type: a parameter bound to a character SQL type from any other C type -- `SQL_C_WCHAR` included, which is how this connector binds a string -- gets a bare `NullPointerException` from the FE); every OLAP table has to declare how its rows are distributed, so generated ingest DDL appends `DISTRIBUTED BY RANDOM BUCKETS AUTO` plus `enable_duplicate_without_keys_by_default` (`ddl_table_options`) \u2014 a duplicate table with no key columns, without which Doris refuses any table whose first column is `TEXT`/`STRING` -- what a generated string column is here -- `FLOAT` or `DOUBLE` (`The olap table first column could not be float, double, string ...`; a leading `VARCHAR(n)`, `CHAR(n)` or `DECIMAL(p,s)` is accepted) \u2014 keyed on `@@version_comment` since `version()` is a bare MySQL number; no binary column type and no `DOUBLE PRECISION` spelling; `ANSI_QUOTES` is accepted but ignored, so identifiers are backtick-quoted; ingest 2.2k rows/s (2.3k with array binding) -- like StarRocks an `INSERT` is a load transaction whatever it carries, so multi-row batching is worth ~300x (7 rows/s without it); fetch 1.36M rows/s \u2014 pyodbc's ingest column is empty: its row-at-a-time binding sends `date`, `datetime` and `bytes` parameters as `_binary'...'` literals, which Doris' parser rejects (the same values passed as `str` insert fine), and its `fast_executemany` stages first set `autocommit=False`, which Doris refuses (`Transactions are not enabled`)"
+    },
+    {
+      "entry": "oceanbase",
+      "name": "OceanBase CE 4.4.2 (MySQL 5.7.25 wire)",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "OceanBase CE, MySQL wire 5.7.25) \u2014 `MODE=SLIM`, boots in 40 s, 4.3 GiB peak"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "OceanBase CE, MySQL wire 5.7.25, `MODE=SLIM`, boots in ~60 s under a 6 GB cap; MySQL Connector/ODBC 26.7.1, user `root@test`) \u2014 **needs `NO_SSPS=1` on Windows**: the entry's connection string carries no `{no_ssps}`, and without it every bound parameter fails `No data supplied for parameters in prepared statement` (pyodbc identical); run with an `OCEANBASE_CONN` override that adds it \u2014 a one-token patch to the entry"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "no driver quirks and no tolerance flag the `mysql` entry does not already have (`TINYINT(1)` booleans, `ANSI_QUOTES`) \u2014 a distributed HTAP engine whose MySQL mode takes that entry's types unchanged; multi-tenant, so the login name carries the tenant (`User=root@test`), and `mysql_native_password` only, so run from the tarball the connector needs `PLUGIN_DIR=`; the container must boot with `MODE=SLIM`, which starts a prebuilt cluster \u2014 the default `MODE=MINI` builds its tenant from scratch and times out loading the timezone tables (117,043 rows in `mysql.time_zone_transition`), and is also the only path on which `obd`'s open-files precheck (`OBD-1007`, `nofile` below 20000) fires; the SLIM path boots under Docker's default 1024, and the compose file raises `nofile` to 20000 anyway because at 1024 the observer quietly stops accepting connections once ~780 are open; ingest 105k rows/s at 20,000 rows (12.2k with `adbc.odbc.rows_per_insert=1`; `adbc.odbc.array_binding` changes nothing here -- Connector/ODBC walks a parameter array row by row, so the multi-row `INSERT` stays ahead and ingest takes it either way); fetch 1.32M rows/s. One thing to know when writing NULLs here: on a server-side prepared INSERT the connector sends a NULL as `MYSQL_TYPE_NULL` until a non-NULL execute has fixed that parameter's type, and OceanBase refuses that execute with `Object type error` (4001) -- the NULL-carrying execute itself, not the ones after it; once a value has gone through on that statement, later NULLs are accepted, and a fresh statement starts over. `NO_SSPS=1` avoids it entirely; MySQL itself is happy with the same sequence. Bulk ingest is where it shows: a multi-row `INSERT` whose first execute carries a NULL is refused, the ingest falls back to a parameter array, and Connector/ODBC answers `SQL_PARAM_ERROR` for the sets the server rejected -- adbcBridge re-runs those rows one at a time after the batch, by which point the types are fixed, so every row lands (0.1.0 dropped them silently and under-reported the count; a column that is NULL in every row raises the server's error)"
+    },
+    {
+      "entry": "greptimedb",
+      "name": "GreptimeDB 1.1.4 (MySQL 8.4.2 wire)",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "with MySQL Connector/ODBC 26.7.1 (Oracle's macOS arm64 binary, built for iODBC) through a bridge built against iODBC 3.52.16 \u2014 `MySQL (via ODBC) 8.4.2`; **FAIL through MariaDB Connector/ODBC 3.2.9** at the same `DUAL` probe (`Table not found: greptime.public.dual`), identical through pyodbc"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "GreptimeDB 1.1.4, MySQL wire 8.4.2; MySQL Connector/ODBC 26.7.1 + `NO_SSPS=1`) \u2014 **with MySQL Connector/ODBC 26.7.1 the astral check passes**; through 8.4.0 (the earlier Windows measurement) the same entry FAILED at that check only: `h\u00e9llo \ud83d\ude80` stored byte-exact, read back as `h\u00e9llo ???` on every read path including pyodbc, because 8.4.0 substitutes `?` for a non-BMP character before either C type sees it (SQL_C_CHAR and SQL_C_WCHAR both return `3f 3f 3f`; `CHARSET=` makes no difference"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6) TIME INDEX, n DECIMAL(10,3), bo BOOLEAN) WITH ('append_mode'='true')",
+        "ingest_types": "{DataType(double): Decimal128Type(decimal128(12, 3))}",
+        "not_null": [
+          "ts"
+        ],
+        "quote": "`",
+        "row2_fill": [
+          "ts"
+        ]
+      },
+      "notes": "time-series store, driven over its **MySQL** wire (4002); its PostgreSQL wire (4003) cannot be reached at all \u2014 psqlodbc's connect handshake asks for `show transaction_isolation`, which GreptimeDB does not implement (only `SHOW TRANSACTION ISOLATION LEVEL`), so `SQLDriverConnect` fails as it does for H2. Every table needs a `TIME INDEX` column, so generated ingest DDL appends one that defaults to the insert time (`ddl_extra_column`: `greptime_timestamp TIMESTAMP(3) TIME INDEX DEFAULT CURRENT_TIMESTAMP`) plus `append_mode` (`ddl_table_options`) \u2014 outside append mode rows sharing a timestamp are merged; prepared-statement metadata types every parameter as a string and then rejects it, so `NO_SSPS=1` plus the Databend `_binary` quirk; no `DOUBLE PRECISION` type name and no `ANSI_QUOTES` (backtick-quoted identifiers); ingest 181k rows/s (156k with array binding), fetch 989k rows/s"
+    },
+    {
+      "entry": "starrocks",
+      "name": "StarRocks 4.1.4 (MySQL 8.0.33 wire)",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "with MySQL Connector/ODBC 26.7.1 (Oracle's macOS arm64 binary, built for iODBC) through a bridge built against iODBC 3.52.16 \u2014 `MySQL (via ODBC) 8.0.33`, 300/2,000 rows; **FAIL through MariaDB Connector/ODBC 3.2.9**: syntax error at the connector's inlined `_binary ''` literal, with and without `PREPONCLIENT=1`"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "StarRocks, MySQL wire 8.0.33, allin1-ubuntu; MySQL Connector/ODBC 26.7.1 + `NO_SSPS=1`) \u2014 **with MySQL Connector/ODBC 26.7.1 the astral check passes**; through 8.4.0 (the earlier Windows measurement) the same entry FAILED at that check only: `h\u00e9llo \ud83d\ude80` stored byte-exact, read back as `h\u00e9llo ???` on every read path including pyodbc, because 8.4.0 substitutes `?` for a non-BMP character before either C type sees it (SQL_C_CHAR and SQL_C_WCHAR both return `3f 3f 3f`; `CHARSET=` makes no difference"
+        }
+      },
+      "quirks": {
+        "big_rows": 2000,
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME, n DECIMAL(10,3), bo BOOLEAN)",
+        "decimal_type": "decimal128(12, 3)",
+        "quote": "`"
+      },
+      "notes": "MPP columnar warehouse: it prepares nothing but `SELECT`, so the connector runs with `NO_SSPS=1`, and the `_binary` date/timestamp/binary literals it then emits are sent as ordinary quoted text instead (`temporal_binary_param_as_varchar`, restored -- it had been dead code since a bad merge); MySQL type names rejected in ingest DDL, so it uses standard SQL names, and the portable fallback for a double is now `DOUBLE`, not the ISO `DOUBLE PRECISION`, which StarRocks does not parse; no `ANSI_QUOTES` mode at all, so identifiers are quoted with backticks (the driver already asks for `SQL_IDENTIFIER_QUOTE_CHAR`); `DECIMAL(10,3)` described at MySQL's display width (12,3); ingest 4.8k rows/s -- every `INSERT` is a load transaction costing a flat ~100 ms of server-side work (10 rows/s for any client sending one row per statement), so the multi-row batching is worth 480x here (pyodbc, which has no such batching, cannot ingest here at all); fetch 1.80M rows/s"
+    },
+    {
+      "entry": "mongodbbi",
+      "name": "MongoDB 7 + BI Connector 2.14 (MySQL 5.7.12 wire)",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "BI Connector, MySQL wire 5.7.12; read-only) \u2014 no macOS build of mongosqld 2.14.x exists, the linux-arm64 build runs inside the `mongo:7` arm64 container"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "BI Connector mongosqld v2.14.22 over mongo:7, MySQL wire 5.7.12; read-only; MySQL Connector/ODBC 26.7.1 + `NO_SSPS=1`; libssl 1.1 staged per the README) \u2014 **with MySQL Connector/ODBC 26.7.1 the astral check passes**; through 8.4.0 (the earlier Windows measurement) the same entry FAILED at that check only: `h\u00e9llo \ud83d\ude80` stored byte-exact, read back as `h\u00e9llo ???` on every read path including pyodbc, because 8.4.0 substitutes `?` for a non-BMP character before either C type sees it (SQL_C_CHAR and SQL_C_WCHAR both return `3f 3f 3f`; `CHARSET=` makes no difference"
+        }
+      },
+      "quirks": {
+        "big_rows": 100000,
+        "bool_type": "int8",
+        "catalog_cols": [
+          "b",
+          "bo",
+          "d",
+          "f",
+          "i",
+          "n",
+          "s",
+          "ts"
+        ],
+        "ddl": "CREATE TABLE adbc_t (_id VARCHAR(24), i BIGINT, f DOUBLE, s VARCHAR(65535), b VARCHAR(65535), d DATETIME, ts DATETIME, n DECIMAL(65,20), bo BOOLEAN)",
+        "decimal_type": "string",
+        "pseudo_columns": [
+          "_id"
+        ],
+        "quote": "`",
+        "read_only": true
+      },
+      "notes": "`mongosqld` presents MongoDB collections as SQL tables over the MySQL wire; a query engine on a DRDL schema: `CREATE TABLE`, `INSERT` and `DROP TABLE` answer 1105 `\u2026 requires --writeMode`, `UPDATE`/`DELETE`/`TRUNCATE` are not in the grammar at all, and `--writeMode` is refused together with a `--schema` path \u2014 so the two collections are loaded with mongosh and the entry runs the read side unchanged. Driver quirk handled: `SQLColumns` segfaults inside Connector/ODBC on any table with a `DECIMAL` column -- mongosqld's `information_schema` reports NULL `NUMERIC_PRECISION` and the connector runs `strtol()` on it -- so `GetObjects` describes a zero-row SELECT instead (the existing `no_sql_columns` path the Flight SQL driver takes, keyed on `SQL_DBMS_VER`); server side: the handshake also segfaults without `PLUGIN_DIR=` (`mysql_native_password`), and `COM_STMT_PREPARE` is refused (`NO_SSPS=1`). No binary type; `d` is mapped `timestamp` by the entry's DRDL schema so it arrives as a midnight datetime (mongosqld does have a DATE SQL type: a `SqlType: date` column is described `SQL_TYPE_DATE`), decimals described as `DECIMAL(65,20)` so they read back as exact text, `_id` in every `SELECT *`; fetch 128k rows/s"
+    },
+    {
+      "entry": "db2",
+      "name": "IBM Db2 12.1",
+      "driver": "Db2 clidriver (`libdb2.so`)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "Db2 12.01.0500, IBM macarm64 clidriver; server amd64 emulated"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Db2 12.01.0500 in the ibmcom/db2 container; IBM clidriver 12.1.4 from the free \"ODBC and CLI\" zip, registered by hand as the short alias `IBM DB2 ODBC DRIVER` \u2192 `clidriver\\bin\\db2cli64.dll` \u2014 the 78-character name `db2cli install -setup` writes gets `IM002` from the Windows driver manager, and the `db2clio.dll` it points at is not in that package). **`Authentication=SERVER` must be in the connection string on Windows**: the default `SERVER_ENCRYPT` negotiation fails `SQL1042C` (sqlerrp `SQLEXSLC`, rc 205, the client-side security-plugin step) from every process but `db2cli.exe`, which carries its own gsk8/ICC manifests \u2014 python and PowerShell P/Invoke fail identically, whatever `DB2CODEPAGE`, cwd or environment. The whole workload passes with that one keyword; fetch 398,715 rows/s, array ingest 81,651"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
+        "ident": "<method 'upper' of 'str' objects>",
+        "text_sortable": true
+      },
+      "notes": "32-bit `SQLLEN` (see `adbc.odbc.sqllen_32bit`); ingest DDL spells an Arrow string as the widest `VARCHAR`, not the `LONG VARCHAR` the driver's `SQLGetTypeInfo(SQL_LONGVARCHAR)` names (deprecated; will not sort, group or de-duplicate -- `SQL0134N` on `ORDER BY`, `GROUP BY`, `DISTINCT` and `UNION` -- and has no bulk-insert path: ~7k rows/s whatever the batch size against ~430k for `VARCHAR(32672)` in a 20,000-row test, 30-56x on a warm database and over 200x through `adbc_ingest` on a cold one; an earlier run recorded ~700x)"
+    },
+    {
+      "entry": "informix",
+      "name": "IBM Informix 15.0.1 (developer edition)",
+      "driver": "Db2 clidriver (`libdb2.so`, DRDA)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "IDS 12.10, same arm64 clidriver; server amd64 emulated"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "IDS 12.10 developer edition over the DRDA listener, same clidriver 12.1.4 alias and `Authentication=SERVER` as db2; `adbc` database created with `dbaccess` per the README) \u2014 **after two Windows-only fixes**: the IDS quirk relied on `wchar_as_utf8`, which the Windows block resets, so the astral parameter still went SQL_C_WCHAR and the INSERT failed `-415 Data conversion error`; `narrow_params` (the Ignite mechanism) keeps it on SQL_C_CHAR, and **`DB2CODEPAGE=1208` in the environment** tells the CLI driver those bytes are UTF-8 (without it the driver reads them as cp1252 and the row stores double-encoded, `h\u00c3\u0192\u00c2\u00a9llo`). Verified first with pyodbc: SQL_C_CHAR + UTF-8 stores and reads `h\u00e9llo \ud83d\ude80` byte-exact, wide UTF-16 gets -415. Fetch 591,439 rows/s, array ingest 91,977"
+        }
+      },
+      "quirks": {
+        "bool_type": "int16",
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTE, d DATE, ts DATETIME YEAR TO FRACTION(5), n DECIMAL(10,3), bo BOOLEAN)",
+        "ts_us": [
+          "123450"
+        ]
+      },
+      "notes": "same `libdb2.so` as Db2, so keyed on `SQL_DBMS_NAME` \"IDS\", not the driver name: no usable `SQL_C_WCHAR` params (UTF-8 narrow path instead), `SQL_C_BIT` params break the DRDA stream so booleans go as integers; 32-bit `SQLLEN` as for Db2; `BYTE` described as IBM's own `SQL_BLOB` type code (-98); server side: `GL_USEGLU=1` for 4-byte UTF-8, `DELIMIDENT=y` for the quoted identifiers ingest emits, `DATETIME YEAR TO FRACTION(5)` timestamps; ingest 15.6k rows/s (130k array), fetch 751k rows/s"
+    },
+    {
+      "entry": "monetdb",
+      "name": "MonetDB 11.55 (Dec2025-SP3)",
+      "driver": "MonetDBODBClib 11.55",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "MonetDB 11.55.0007, libMonetODBC built from the 11.55 source; Homebrew's bottle has no ODBC driver"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "MonetDB 11.55.0007; MonetDB ODBC Installer x86_64-20260615, `MonetDB ODBC Driver`"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b BLOB, d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "driver quirk handled: no usable parameter arrays (executes only the first set); `SQLEndTran` unreliable under pyodbc"
+    },
+    {
+      "entry": "vertica",
+      "name": "Vertica 25.3 (OpenText Analytics Database)",
+      "driver": "Vertica ODBC 25.1 (`libverticaodbc.so`, native wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "driver-unavailable",
+          "detail": "vertica.com's macOS download is vsql only, no ODBC"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "`Vertica Database (via ODBC) 25.03.0000`, opentext/vertica-k8s:25.3.0-8-minimal bootstrapped with `fixtures/setup_vertica.sh`; Vertica client 25.1.0 MSI, driver name `Vertica` \u2014 the 25.3 client URL 404s and 25.1 drives the 25.3 server). Windows note: run the `vcluster create_db` step from PowerShell, not Git Bash (path conversion mangles `/opt/vertica/bin/vcluster`), and `--password \"\"` must be passed as an empty argument \u2014 PowerShell 5.1 drops it, leaving dbadmin with a non-empty password to reset"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "first-party driver on 5433 \u2014 the port speaks the PostgreSQL v3 wire (libpq connects, `server_version 14.0`) but the PostgreSQL catalogs are absent, so psqlodbc fails at its connect-time `pg_type` lookup (`Relation \"pg_type\" does not exist`) and cannot drive it. Needs **no tolerance flags at all** (as Cloudberry does not): every workload type is a native Vertica type and the workload round-trips exactly, emoji and microseconds included (`i` is int64 \u2014 Vertica's integer types are all 64-bit aliases). `f` is exact because 1.5 is: the driver passes `DOUBLE PRECISION` through a 15-significant-digit decimal form in both directions (`%1.15e` in `libverticaodbc.so`, `SQLDescribeCol` size 15), so a bound `3.141592653589793` is stored as `3.14159265358979`. The entry points `VERTICAINI` at a `vertica.ini` of its own for the driver's message catalogue (`ErrorMessagesPath`; without it every driver diagnostic degrades to `[Vertica][DSI] ... Could not open error message files`, though the workload still passes) and pins `DriverManagerEncoding = UTF-16` \u2014 client 25.1 detects unixODBC's 2-byte `SQLWCHAR` by itself, but `UTF-32` there corrupts every wide string in both directions with no error (six U+FFFD) and can abort the process. One quirk: its parameter arrays are a native bulk load (`COPY ... FROM LOCAL STDIN NATIVE`) and beat the one-row-per-execute path 7-8\u00d7 (17-20k rows/s \u2192 135-139k), so `prefer_param_arrays` \u2014 the flag `maodbc` already uses. Multi-row `VALUES` is refused on this fixture (`Function public.explode(\"array\") does not exist`: `vcluster create_db --skip-package-install` leaves the `ComplexTypes` package out); with the package installed it parses and runs at ~2.5k rows/s, a column store taking each multi-row `VALUES` as one row-store insert, so the array path stays ahead either way. Server side, `vertica/vertica-ce` no longer exists (the `vertica` Docker Hub namespace is empty and the `opentext` one publishes no CE image), so the entry runs `opentext/vertica-k8s` and builds the database with `vcluster` itself (`fixtures/setup_vertica.sh`); pinned to 25.3 because Vertica 26.1 dropped Community Edition and a 26.x server refuses the licence its own image ships; needs `nofile` 65536; ingest 151k rows/s (array binding), fetch 948k rows/s"
+    },
+    {
+      "entry": "cockroachdb",
+      "name": "CockroachDB 26",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "CockroachDB, PostgreSQL wire 18.0.0, arm64"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "CockroachDB, PostgreSQL wire 18.0.0; psqlodbc 18.00.0002"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER PRIMARY KEY, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "no quirks; declare a PRIMARY KEY or the synthesised hidden `rowid` shows up in `GetObjects`; `version()` is CockroachDB's own, so the PostgreSQL array-ingest form stays off and ingest uses the multi-row `INSERT` (verified); **no `ctid`** (`42703`), so partitioned reads use the key-range split \u2014 measured 5.1x at N=8 and 6.5x at N=16 over a single connection on 1 M rows. **`adbc_driver_postgresql` cannot read this server at all** (it needs binary `COPY TO`, which CockroachDB does not implement), so there is no native ADBC alternative to compare against"
+    },
+    {
+      "entry": "yugabyte",
+      "name": "YugabyteDB 2026.1 (YSQL)",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "YugabyteDB, PostgreSQL wire 15.12, arm64"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "YugabyteDB 2026.1.1.1, PostgreSQL wire 15.12; psqlodbc 18.00.0002"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"
+      },
+      "notes": "no quirks; YSQL is PostgreSQL 15, and its internal row id is a system column so `GetObjects` is unaffected; `version()` carries `-YB-`, so the PostgreSQL array-ingest form stays off (verified); **no `ctid`** (`0A000`), and its default `PRIMARY KEY (id)` is hash-partitioned, so partitioned reads split on `yb_hash_code()` \u2014 2.6x over a single connection, and 2.2x better than a key range, which YugabyteDB would run as a `Seq Scan` with a `Storage Filter`. Against the native driver it reaches 1.18\u20131.22x at 4 M rows, i.e. on the 1.2x bar rather than over it, and 0.94x at 1 M: the server is the bottleneck there, not psqlodbc"
+    },
+    {
+      "entry": "timescaledb",
+      "name": "TimescaleDB 2.29 (PostgreSQL 16)",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "TimescaleDB, PostgreSQL wire 16.15"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "TimescaleDB latest-pg16, PostgreSQL wire 16.15.0; hypertable steps included"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"
+      },
+      "notes": "no quirks; an extension on stock PostgreSQL, so the array-ingest form applies and is used (verified); also ingests into and reads back a `create_hypertable()` hypertable; a plain table with rows in it has a heap and takes the `ctid` split, while a hypertable is an inheritance parent (relkind `r`, chunks through `pg_inherits`, not a declarative `p` parent) whose own heap is empty \u2014 `pg_relation_size` 0, so the block-count probe declines the heap split \u2014 and takes the key-range split only when its primary key leads with an integer NOT NULL column (not timed; TimescaleDB requires the partitioning column in any unique index, so a `(d, a)` key leads with the DATE and gets no split). `SELECT ctid` itself succeeds on an uncompressed hypertable and hands back chunk-local ctids that repeat across chunks, so it is the zero block count and not an error that rules the heap split out"
+    },
+    {
+      "entry": "citus",
+      "name": "Citus 14.1 (PostgreSQL 18)",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "Citus, PostgreSQL wire 18.4; amd64 emulated"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "PostgreSQL 18.4 + Citus 14.1.0; distributed-table steps included"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"
+      },
+      "notes": "no quirks; an extension on stock PostgreSQL, so the array-ingest form applies and is used, distributed tables included (verified: the entry also ingests into and reads back a `create_distributed_table()` hash-distributed table); a fresh single node needs no registration -- `create_distributed_table()` registers the coordinator itself with `shouldhaveshards` on; if the coordinator was registered with `citus_set_coordinator_host()` alone, `shouldhaveshards` has to be set too or `create_distributed_table()` fails with `replication_factor (1) exceeds number of worker nodes (0)`; ingest 107k rows/s (array binding), fetch 1.86M rows/s"
+    },
+    {
+      "entry": "cloudberry",
+      "name": "Apache Cloudberry 2.1.0-incubating (Greenplum fork)",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "Apache Cloudberry, PostgreSQL wire 14.4; amd64 emulated"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Apache Cloudberry 2.1.0-incubating, PostgreSQL wire 14.4.0; compose service unchanged, 3 GB / shm 1 GB"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"
+      },
+      "notes": "no driver quirks and no tolerance flags: an MPP cluster of PostgreSQL 14 segments behind one coordinator, driven by the `postgres` entry's types unchanged (and, unlike CockroachDB, needing no `PRIMARY KEY`) \u2014 and since it reports `SQL_DBMS_NAME` \"PostgreSQL\" behind the same `psqlodbcw.so`, no driver-name quirk *could* be correct here without also firing on real PostgreSQL. Cloudberry is named once in the bridge and not as a workaround: `version()` carries `Apache Cloudberry`, a fork marker, so it is excluded from the `unnest` array-ingest form only PostgreSQL proper is claimed to owe (see the array-ingest note above) \u2014 conservative rather than necessary, since the form's own proof query passes and a 5,000-row `unnest` ingest lands on heap, append-optimized row and append-optimized column tables alike, about an order of magnitude faster server-side than the multi-row `INSERT` it keeps (~530k against ~33k rows/s, bare SQL on a shared host); no Apache-published *server* image exists -- `apache/incubator-cloudberry` holds only `cbdb-build-*`/`cbdb-test-*` CI toolchains and `apache/cloudberry-db` does not exist -- so the community `woblerr/cloudberry` image is used, and it needs `--shm-size=1g` or `gpinitsystem` fails; `extra` steps cover what the standard workload cannot tell apart from `postgres`: a `DISTRIBUTED BY` table whose bulk-ingested rows occupy more than one segment plus an aggregate merged on the coordinator, and append-optimized **column-oriented** storage (read from `pg_am` as `ao_column` -- Greenplum 6's `relstorage` is gone in the PostgreSQL 14-based 2.x); ingest 9.7k rows/s (9.8k with array binding), fetch 1.33M rows/s"
+    },
+    {
+      "entry": "materialize",
+      "name": "Materialize 26.38",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "Materialize, PostgreSQL wire 9.5.0"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Materialize v26.38.2, PostgreSQL wire 9.5.0; harness rows need `ADBC_BENCH_AUTOCOMMIT=1`, as everywhere"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        "decimal_type": "string"
+      },
+      "notes": "streaming warehouse; PostgreSQL SQL layer, so no driver quirks -- but no `SAVEPOINT`, so the entry sets psqlodbc's `Protocol=7.4-0` to stop the driver wrapping the second batch of a large ingest in one (with that setting, a prepared statement freed before a manual commit also lost the transaction's rows through a psqlodbc/Materialize pair of defects: fixed in psqlodbc 18.00.0003 and in Materialize [#38606](https://github.com/MaterializeInc/materialize/pull/38606), merged 2026-09-14, verified on its main image, not yet in a Materialize release); its single 39-digit `NUMERIC` is wider than an Arrow decimal128, so decimals read back as exact strings; also ingests into and reads back an incrementally maintained `MATERIALIZED VIEW`; ingest 23.6k rows/s (23.7k with array binding), fetch 322k rows/s"
+    },
+    {
+      "entry": "opengauss",
+      "name": "openGauss 6.0",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "server-unavailable",
+          "detail": "enmotech/opengauss arm64's MOT engine panics at start in the Docker Desktop VM (libnuma / `numa_node_of_cpu(0) => -1` / thread identifiers exhausted \u2192 `Failed to Initialize core services`), with `--cap-add=SYS_NICE --shm-size=1g` and with `--cpuset-cpus=0-7`"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "openGauss 6.0.0, PostgreSQL wire 9.2.4; role and database created inside the container as `omm`, as the README says"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)"
+      },
+      "notes": "no quirks: a PostgreSQL 9.2 fork, driven by the `postgres` entry's types unchanged; server-side setup only (`CAP_SYS_NICE` for the MOT engine's `mbind()`, `max_process_memory` >= 2 GB, and a role created after start-up because the initial user cannot log in remotely); ingest 220k rows/s (258k with array binding), fetch 1.35M rows/s"
+    },
+    {
+      "entry": "cratedb",
+      "name": "CrateDB 6.4",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "CrateDB 6.4.3, PostgreSQL wire 14.0.0) \u2014 at 1f35a5c, after the entry accepted psqlodbc 18's decimal128(28, 3"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "CrateDB 6.4.3, PostgreSQL wire 14.0.0; `tzdata` PyPI package required on Windows"
+        }
+      },
+      "quirks": {
+        "binary_text": "\\x0102",
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b TEXT, d TIMESTAMP, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        "decimal_type": [
+          "decimal128(28, 3)",
+          "decimal128(28, 6)"
+        ],
+        "ingest_types": "{DataType(date32[day]): TimestampType(timestamp[us]), DataType(bool): DataType(int8)}",
+        "ts_us": [
+          "123000"
+        ]
+      },
+      "notes": "driver quirk handled: with autocommit off psqlodbc sends `BEGIN;<statement>` as one query string, and CrateDB tags every result of a multi-statement query with the leading text of the whole string (`BEGIN;INSERT 1`, where PostgreSQL sends `BEGIN` then `INSERT 0 1`), so `SQLRowCount` succeeds without writing its out-parameter for any write or DDL inside a transaction \u2014 the same driver and query string against stock PostgreSQL write the count (fixed generically in `OdbcRowCount()`, which now pre-fills *unknown* rather than *none*; reported upstream and fixed in CrateDB 6.4.4 by [crate/crate#20088](https://github.com/crate/crate/pull/20088), the bridge handling stays for earlier versions); `version()` is CrateDB's own, so the PostgreSQL array-ingest form stays off (verified); server side: eventually consistent, so reads follow `REFRESH TABLE`; no binary or `DATE` column type; ingest 50.0k rows/s (45.6k with array binding; one multi-row `INSERT` per batch \u2014 row-at-a-time is ~0.9k rows/s because CrateDB fsyncs its translog once per statement, and psqlodbc sends a parameter array as separate single-row statements), fetch 726k rows/s"
+    },
+    {
+      "entry": "questdb",
+      "name": "QuestDB 10",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "QuestDB, PostgreSQL wire 11.3"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "QuestDB, PostgreSQL wire 11.3.0; psqlodbc 18.00.0002; `ADBC_BENCH_AUTOCOMMIT=1` for the harness rows; shares host port 19000 with the clickhouse service, so the two are never up together"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s STRING, b BINARY, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        "decimal_type": "decimal128(28, 3)",
+        "not_null": [
+          "bo"
+        ]
+      },
+      "notes": "own type system behind the PG wire: standard-SQL ingest DDL, `true`/`false` boolean params, parameter arrays off (psqlodbc inlines their values as string literals, which QuestDB will not convert to `BINARY` or `BOOLEAN`); psqlodbc's `SQLColumns` fails here, so `GetObjects` falls back to `SQLDescribeCol` of a zero-row SELECT instead; a `BINARY` value holding a `0x00` byte comes back truncated at the first NUL through psqlodbc (the server keeps the whole value); on a manual-commit connection free a prepared statement only after the commit \u2014 psqlodbc's free sends `SAVEPOINT \u2026; DEALLOCATE \u2026; RELEASE` whatever `Protocol` says, QuestDB has no `SAVEPOINT`, the transaction aborts unreported and `COMMIT` still returns `SQL_SUCCESS` (the psqlodbc path already recorded for Materialize)"
+    },
+    {
+      "entry": "risingwave",
+      "name": "RisingWave 3.0",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "RisingWave, PostgreSQL wire 13.14) \u2014 compose bind-mount of risingwave.toml refused by Docker Desktop for this account; run with the README's `docker run` and the toml under /private/tmp"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "RisingWave 3.0.3, PostgreSQL wire 13.14; the compose bind-mount of risingwave.toml works as-is from PowerShell"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR, b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC, bo BOOLEAN)",
+        "decimal_type": "decimal128(28, 3)"
+      },
+      "notes": "no `adbc.odbc.*` quirks, but the entry sets psqlodbc's `UseServerSidePrepare=0`: psqlodbc names every server-side statement `_PLAN0x<statement-handle address>` and RisingWave keeps the name after the handle is freed, so the next `SQLPrepare` under a reused name fails `XX000 ... Duplicated statement name` -- which the ordinary allocate/prepare/execute/free loop hits on its second query, with or without parameters (concurrently open handles get distinct names and all succeed, re-executing a prepared handle is fine, `SQLExecDirect` never collides); `version()` names RisingWave, so the PostgreSQL array-ingest form stays off (verified); server side: RisingWave's parser takes no length, precision or scale on a column type -- `VARCHAR(50)`/`TIMESTAMP(6)` are parser errors and `NUMERIC(10,3)` an unsupported type, so `VARCHAR` and `NUMERIC` are declared unqualified; `FLOAT(p)` is the one modifier it does take, and honours (1-24 gives `real`, 25-53 `double precision`) -- and a write reaches a scan only at the next barrier (the default 1 s interval here; a COMMIT does not bring it forward), so reads follow `FLUSH`, which forces a barrier straight away (tens of ms), or `SET RW_IMPLICIT_FLUSH = true`, which does that on every write; ingest 31.9k rows/s (35.3k with array binding), fetch 1.00M rows/s"
+    },
+    {
+      "entry": "spanner",
+      "name": "Google Cloud Spanner (emulator + PGAdapter 0.55)",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "Spanner emulator + PGAdapter, PostgreSQL wire 14.1; 300/2,000 rows as on Linux"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Spanner emulator + PGAdapter 0.55.2, PostgreSQL wire 14.1.0; compat only \u2014 the Python bench is not run against the emulator, see the Windows benchmark file"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i bigint PRIMARY KEY, f double precision, s varchar(50), b bytea, d date, ts timestamptz, n numeric, bo bool)",
+        "decimal_type": "decimal128(28, 3)",
+        "ingest_types": "{DataType(int32): DataType(int64)}"
+      },
+      "notes": "two driver quirks, both keyed on a PGAdapter-only setting because `version()` just says PostgreSQL 14.1: psqlodbc inlines a parameter array's timestamps as `'...'::timestamp`, a type Spanner does not have, so a batch binding a timestamp goes row-at-a-time (`no_timestamp_param_arrays`); and every Spanner table needs a PRIMARY KEY, so generated ingest DDL adds a surrogate `GENERATED BY DEFAULT AS IDENTITY` column (`ingest_key_column`). Server side: no 32-bit integer, no `TIMESTAMP WITHOUT TIME ZONE` (so `ts` reads back zone-aware), no modifier on `NUMERIC`, no DDL inside a transaction; also ingests into and reads back an `INTERLEAVE IN PARENT` child table. A third quirk on the same key is Spanner's ceiling of **950 parameters per statement** (`max_statement_params`): PGAdapter prepares a multi-row INSERT that carries more without complaint and then closes the connection at `SQLExecute` (`08S01`), leaving the batching's halving search no connection to halve on -- measured exactly, 948 parameters go through and 952 drop the connection -- so it is declared rather than probed, and ingest runs at 237 four-column rows per INSERT. ingest 7.3k rows/s (7.4k with array binding), fetch 95.8k rows/s at `--rows 300 --fetch-rows 2000`, which is the size this entry is benchmarked at"
+    },
+    {
+      "entry": "firebird",
+      "name": "Firebird 5",
+      "driver": "Firebird ODBC 3.5.0-rc1",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "driver-unavailable",
+          "detail": "firebird-odbc-driver v3-0-1 ships Linux and Windows assets only"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Firebird 5.0.4 container; Firebird ODBC 3.0.1.18 `Firebird ODBC Driver` with fbclient.dll from the Firebird 5 zip on PATH) \u2014 **one bridge fix needed**: the driver answers SQL_DRIVER_NAME `FirebirdODBC` on Windows where Linux sees `OdbcFb`, so the quirk block that turns parameter arrays off (the driver accepts SQL_ATTR_PARAMSET_SIZE and executes one set) never fired and the first run stopped with `ODBC driver accepted a parameter array of 2 sets but reported neither SQL_ATTR_PARAMS_PROCESSED_PTR nor SQL_ATTR_PARAM_STATUS_PTR`; matching both names (`src/odbc_driver.c`) makes the whole workload pass, UNION-ALL bulk form included"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s VARCHAR(50), b BLOB SUB_TYPE BINARY, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        "decimal_type": "decimal128(18, 3)",
+        "ident": "<method 'upper' of 'str' objects>",
+        "ts_us": [
+          "123400"
+        ]
+      },
+      "notes": "`SQL_C_WCHAR` sized in 4-byte `wchar_t`; parameter arrays are off (`no_param_arrays`): with column-wise binding OdbcFb steps fixed-length C types at the `BufferLength` stride, so every row receives row 1's values with `SQL_SUCCESS` throughout ([firebird-odbc-driver#299](https://github.com/FirebirdSQL/firebird-odbc-driver/issues/299), reproduced in plain ODBC on 3.0.1 and 3.5.0-rc1; fixed upstream in [PR #308](https://github.com/FirebirdSQL/firebird-odbc-driver/pull/308), verified here on its CI build 2026-09-07, so `no_param_arrays` comes off once a release carries it). Firebird's dialect has neither multi-row `VALUES` (-104 `Token unknown` at the second row-group's comma) nor Oracle's `INSERT ALL`, so bulk ingest batches through the third form it does take: `INSERT INTO t (cols) SELECT CAST(? AS <type>), ... FROM RDB$DATABASE UNION ALL SELECT ...` (`multirow_union_from`, probed like every other form and only after the standard one is refused). The `CAST` is not a guess and cannot lose anything -- it names the type ingest itself would create for that Arrow type, so a value too wide for the target column raises `string right truncation` on the INSERT's own assignment exactly as a one-row INSERT would; a column with no such exact type gets no batching. Firebird's 256-context limit caps it at ~250 row-groups. Also handled here: once a NULL has been bound to a `SQL_BIGINT` parameter with `SQL_C_DEFAULT` (whose ODBC default C type is `SQL_C_CHAR`), OdbcFb writes NULL for every later `SQL_C_SBIGINT` rebind of that parameter ([#300](https://github.com/FirebirdSQL/firebird-odbc-driver/issues/300)) -- NULLs are bound `SQL_C_SBIGINT` (`NullParamCType`). `SQL_ATTR_ROWS_FETCHED_PTR` set before `SQLPrepare` is discarded ([#301](https://github.com/FirebirdSQL/firebird-odbc-driver/issues/301)); the bridge sets it after execute and was not affected. Both have upstream fixes from F.D. Castel, [PR #302](https://github.com/FirebirdSQL/firebird-odbc-driver/pull/302) and [PR #303](https://github.com/FirebirdSQL/firebird-odbc-driver/pull/303), verified here on their CI builds on 2026-09-07 (the workarounds stay until a release carries them). Generated ingest DDL used to spell an Arrow string as `BLOB SUB_TYPE TEXT` -- what `SQLGetTypeInfo(SQL_LONGVARCHAR)` names. One run read a 100,000-row table with such a column at 8,256 rows/s against 1,004,277 without it; that slowdown could not be reproduced afterwards (2026-08-28: BLOB and `VARCHAR` columns both read at 300k+ rows/s, plain ODBC and through the bridge, driver 3.0.1 and 3.5.0-rc1), so it is not recorded as a driver property. Strings go in as `VARCHAR(8191)`, legal in any character set (`ddl_string_type_name`), because the column can then be filtered and indexed and reads through ordinary bound columns; the same table ingested at 40,670 rows/s instead of 5,705 in that run. Values over 8,191 characters are refused on insert, as Db2's `VARCHAR(32672)` refuses its last 28 bytes. Ingest 7.9k rows/s (8.4k with array binding, 6.0k with `adbc.odbc.rows_per_insert=1`) on the compat table, fetch 294k rows/s"
+    },
+    {
+      "entry": "virtuoso",
+      "name": "OpenLink Virtuoso 7.2",
+      "driver": "Virtuoso ODBC (`virtodbc.so`, ANSI build)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "`OpenLink Virtuoso (via ODBC) 07.20.3243`) through a bridge built against iODBC 3.52.16, once the `virtodbc` quirk stopped forcing the narrow path on a four-byte-`SQLWCHAR` build \u2014 there the driver's narrow charset is single-byte (a `h\u00e9llo` statement literal never matches, and `CHARSET=UTF-8` reads back one byte per unit) while its wide path is correct end to end; Python fetch 252,282 rows/s, ingest 3,128. **Through unixODBC it aborts at the first failing statement**: the driver is iODBC-width and unixODBC's driver manager overflows its own `sqlstate` buffer reading the diagnostic ([lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239), [openlink/virtuoso-opensource#1469](https://github.com/openlink/virtuoso-opensource/issues/1469"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "OpenLink Virtuoso 07.20.3243 container; the Windows Virtuoso Open Source 7.2 installer's `Virtuoso (Open Source)` driver, virtodbc.dll"
+        }
+      },
+      "quirks": {
+        "bool_type": "int16",
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE PRECISION, s NVARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME, n DECIMAL(10,3), bo SMALLINT)"
+      },
+      "notes": "ODBC-native server; driver quirks handled: `SQL_C_WCHAR` is a 4-byte `wchar_t` on both the parameter and the fetch side, not unixODBC's 2-byte `SQLWCHAR` (UTF-8 narrow path instead), `SQL_C_SBIGINT` is stored as 0 and read back as 0 without a diagnostic (64-bit ints sent as text declared `SQL_NUMERIC`, the one declaration that converts exactly), and datetime parameter arrays are strided by `ColumnSize` rather than by the C struct \u2014 a `DATE32` bound with `ColumnSize` 0 repeats row 0 (so no parameter arrays); no `BOOLEAN` type. Two more to know: an `SQL_C_SLONG` parameter is read as 8 bytes whatever `BufferLength` says, so two `int32` parameters bound from adjacent slots fail with `SR346: Integer out of range`; and any `Charset=` value but the exact literal `UTF-8` aborts the process inside `SQLDriverConnect` (`GPF: Dkbox.c:638 Double free`). The Unicode build `virtodbcu.so` is built to a 4-byte `SQLWCHAR`, so unixODBC's driver manager aborts reading its first error diagnostic \u2014 [lurcher/unixODBC#239](https://github.com/lurcher/unixODBC/issues/239), see [`UPSTREAM.md`](UPSTREAM.md); ingest 11.9k rows/s, fetch 1.04M rows/s"
+    },
+    {
+      "entry": "flightsql",
+      "name": "Arrow Flight SQL (sqlflite 1.5.5 / DuckDB 1.1.1)",
+      "driver": "Flight SQL ODBC 0.9.7 (Dremio, open source)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "`sqlflite (via ODBC) 00.00.0000`, DuckDB 1.1.1; read-only) through a bridge built against iODBC 3.52.16 \u2014 Python fetch 8,260,509 rows/s. **Through unixODBC it aborts at the first failing statement**: the driver is built to iODBC's 4-byte `SQLWCHAR`, and unixODBC 2.3.12's driver manager overflows its own stack buffer (`SQLWCHAR sqlstate[6]` in `extract_diag_error_w`) reading the wide diagnostic on the first `SQL_ERROR` \u2192 `__stack_chk_fail` \u2192 SIGABRT with no message. Not the driver crashing, not the bridge: unixODBC's `isql` dies the same way, and through iODBC the same programs get the proper diagnostic"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "sqlflite 1.5.5 / DuckDB 1.1.1; arrow-flight-sql-odbc LATEST-win64, 00.09.0007) \u2014 **with the `text_as_binary` fix in this tree**: the driver's Windows build returns U+1F680 as **U+F680** (the low 16 bits) through SQL_C_WCHAR and `?` through SQL_C_CHAR (the ANSI code page), pyodbc identical, so the first run failed the astral check; its SQL_C_BINARY conversion of a text column hands the server's UTF-8 through byte-exact (probed with pyodbc), and the reader now takes that route for this driver on Windows. It is also the faster route \u2014 5,211,319 rows/s against 2,956,638 wide, the fastest fetch of the Windows column"
+        }
+      },
+      "quirks": {
+        "big_rows": 100000,
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR, b BLOB, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        "decimal_type": "string",
+        "params": false,
+        "read_only": true
+      },
+      "notes": "driver has no `SQLBindParameter` at all, so nothing can be written through it; driver quirks handled: `SQLColumns` segfaults on the first `SQLFetch`, so `GetObjects` describes a zero-row SELECT instead (`no_sql_columns`); every `DECIMAL` described as (19,0), so decimals are read as exact text; fetch 1.32M rows/s"
+    },
+    {
+      "entry": "arcadedb",
+      "name": "ArcadeDB 26.9 (PostgreSQL wire)",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "ArcadeDB, PostgreSQL wire 12.0.0; read-only fixture"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "ArcadeDB, PostgreSQL wire 12.0.0; psqlodbc 18.00.0002; read-only fixture"
+        }
+      },
+      "quirks": {
+        "big_rows": 100000,
+        "ddl": "CREATE DOCUMENT TYPE adbc_t; CREATE PROPERTY adbc_t.i INTEGER; CREATE PROPERTY adbc_t.f DOUBLE; CREATE PROPERTY adbc_t.s STRING; CREATE PROPERTY adbc_t.b BINARY; CREATE PROPERTY adbc_t.d DATE; CREATE PROPERTY adbc_t.ts DATETIME_MICROS; CREATE PROPERTY adbc_t.n DECIMAL; CREATE PROPERTY adbc_t.bo BOOLEAN",
+        "decimal_type": "decimal128(28, 3)",
+        "not_null": [
+          "bo"
+        ],
+        "pseudo_columns": [
+          "@cat",
+          "@rid",
+          "@type"
+        ],
+        "read_only": true
+      },
+      "notes": "multi-model engine behind the PG wire: no `CREATE TABLE` at all (a table is a document type plus one `CREATE PROPERTY` per column), so `adbc_ingest`'s generated DDL has nowhere to go and the entry runs the read side \u2014 queries, parameters and the catalog all work; driver quirks handled: psqlodbc's `SQLColumns` and `SQLTables(SQL_ALL_TABLE_TYPES)` are queries its parser will not run -- `SQLColumns` answers `SQL_SUCCESS` with zero rows, `SQLTables(SQL_ALL_TABLE_TYPES)` answers `SQL_ERROR` -- so `GetObjects` describes a zero-row SELECT and `GetTableTypes` falls back to the types the server's own tables have; `BoolsAsChar=0`, ISO-8601 `T` timestamp literals, `@rid`/`@type`/`@cat` in every `SELECT *`; also traverses a small graph (vertices, edges, `expand(out())`); fetch 332k rows/s. ArcadeDB published an account of this integration and the four protocol findings behind it on 2026-09-21: <https://arcadedb.com/blog/arcadedb-apache-arrow-adbc-postgresql-wire/>. The `T`-literal requirement is a 26.9.1 trait only: the silent `NULL` behind it, [#8090](https://github.com/ArcadeData/arcadedb/issues/8090), is fixed in [#8096](https://github.com/ArcadeData/arcadedb/pull/8096) (merged 2026-09-22, ships in 26.10.1), and on `26.10.1-SNAPSHOT` the space-and-fraction literal and a bound timestamp parameter both round-trip, verified here 2026-09-22. Native-driver status, for comparison: the Apache Arrow PostgreSQL ADBC driver (1.12.0) could not connect at all until ArcadeDB fixed its `pg_type` bootstrap ([#7178](https://github.com/ArcadeData/arcadedb/issues/7178), opened and merged by the maintainer within a day of the [probe note](https://adbcbridge.org/notes/native-adbc-drivers-on-wire-compatible-databases/), 2026-09-06; ships in 26.10.1, in `26.10.1-SNAPSHOT` now); on the merged build it connects and lists types, stops at `COPY \u2026 TO STDOUT (FORMAT binary)` with its defaults, and with `adbc.postgresql.use_copy=false` reads the fixture end to end; `GetTableSchema`'s `::regclass` lookup, the last catalog gap, is fixed in [#7187](https://github.com/ArcadeData/arcadedb/pull/7187) (merged 2026-09-06, also in 26.10.1); binary `COPY` itself, [#7188](https://github.com/ArcadeData/arcadedb/issues/7188), was implemented in [#7398](https://github.com/ArcadeData/arcadedb/pull/7398) and its framing matched to PostgreSQL's in [#7607](https://github.com/ArcadeData/arcadedb/pull/7607) (2026-09-15), so on `26.10.1-SNAPSHOT` the native driver passes the whole probe with its defaults; on the released 26.9.1 the ODBC route above is the one that works"
+    },
+    {
+      "entry": "influxdb3",
+      "name": "InfluxDB 3 Core (InfluxDB IOx 2.0, Arrow Flight SQL)",
+      "driver": "Flight SQL ODBC 0.9.7 (Dremio, open source)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "`InfluxDB IOx (via ODBC) 02.00.0000`; read-only) through a bridge built against iODBC \u2014 Python fetch 8,741,131 rows/s. Through unixODBC: the same driver-manager abort as Flight SQL (one driver binary behind all three"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "`influxdb:3-core`, 100,002 points loaded with `fixtures/load_influxdb3.py`) \u2014 with the same `text_as_binary` fix as flightsql (the same driver binary; it failed the astral check the same way before it); 6,137,567 rows/s"
+        }
+      },
+      "quirks": {
+        "big_rows": 100000,
+        "binary_text": "\\x0102",
+        "catalog_cols": [
+          "b",
+          "bo",
+          "d",
+          "f",
+          "i",
+          "n",
+          "s",
+          "time"
+        ],
+        "ddl": "CREATE TABLE adbc_t (i BIGINT, f DOUBLE, s VARCHAR, b VARCHAR, d VARCHAR, time TIMESTAMP, n VARCHAR, bo BOOLEAN)",
+        "decimal_type": "string",
+        "not_null": [
+          "ts"
+        ],
+        "params": false,
+        "read_only": true,
+        "select": "SELECT i, f, s, b, CAST(d AS DATE) AS d, time AS ts, n, bo FROM {t} ORDER BY i"
+      },
+      "notes": "a second Flight SQL server behind the same driver, and it needed no new driver quirk (the `SQLColumns` one is shared with sqlflite \u2014 here it crashes only for tables whose Flight SQL schema carries no per-field metadata, InfluxDB's `system` and `information_schema` tables, while the entry's own `iox` tables fetch cleanly); the entry is read-only twice over (InfluxDB 3's SQL is query-only \u2014 DDL answers `DDL not supported: <op>`, DML `DML not supported: <op>`, and tables come into existence when line protocol is written to them over the HTTP API \u2014 and the driver has no `SQLBindParameter`); server side: a table is tags, fields and a nanosecond `time` column that is always spelled `time`, with no `DATE`, `DECIMAL` or binary type, so the entry reads `time` as `ts` and casts the date back in its own `SELECT`; fetch 1.03M rows/s"
+    },
+    {
+      "entry": "ignite",
+      "name": "Apache Ignite 2.17",
+      "driver": "Ignite ODBC (built from the sources in the image)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "driver-unavailable",
+          "detail": "platforms/cpp has only linux/ and win/ OS layers; the Darwin build stops at `sys/sysinfo.h`"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Apache Ignite 2.17 container, ignite.odbc.dll 2.18.0 \u2014 an ANSI-only driver, no `W` entry points) \u2014 **with the narrow-text route in this tree**: the Windows driver manager maps every W call onto such a driver through the ANSI code page, so wide fetches came back `h\u00c3\u00a9llo \u00f0\u0178\u0161\u20ac` and a statement literal `'h\u00e9llo'` matched nothing (pyodbc identical for both), while its narrow path is untouched UTF-8 in both directions (probed: SQL_C_CHAR reads byte-exact, a narrow `SQLExecDirect` literal matches). The fix keeps the existing `wchar_as_utf8` fetch quirk alive on Windows for this driver and adds `narrow_sql`, which sends caller statement text through the narrow entry points; parameters were already narrow. Fetch 775,660 rows/s (316,230 through the wide path"
+        }
+      },
+      "quirks": {
+        "big_rows": 100000,
+        "ddl": "CREATE TABLE adbc_t (i INT PRIMARY KEY, f DOUBLE, s VARCHAR(50), b BINARY, d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        "ident": "<method 'upper' of 'str' objects>",
+        "ingest_create": false,
+        "quote": ""
+      },
+      "notes": "in-memory key-value grid with a SQL engine: no prebuilt Linux driver exists, so `platforms/cpp` is built root-free (`-DWITH_ODBC=ON -DWITH_CORE=OFF`, no JVM); driver quirks handled: no wide SQL type at all (`SQL_WVARCHAR` refused outright by `SQLBindParameter`, `SQL_C_WCHAR` sized in `wchar_t`) so the UTF-8 narrow path, as for Firebird, and column-wise parameter arrays that test the NULL indicator of row 0 for every row \u2014 a NULL below the first row is dropped rather than sent: a character column stores an empty string, and a `BINARY` column segfaults the client inside `SQLExecute` (`WriteInt8Array` is handed the -1 indicator as its length), so arrays are off (row-wise binding is refused outright). `SQL_DRIVER_VER` and `SQL_DBMS_VER` are both the hardcoded `02.04.0000`, neither the server's 2.17.0 nor the negotiated protocol 2.13.0. Server side: every table is a cache and must declare a `PRIMARY KEY`, which generated ingest DDL cannot, so `mode=\"create\"` is impossible (`ingest_create=False`) and the entry ingests by appending into a keyed table; identifiers fold to upper case and the driver reports no quote character. Fetch 930k rows/s; append into a keyed table ~95k rows/s"
+    },
+    {
+      "entry": "opensearch",
+      "name": "OpenSearch 3.8 (SQL plugin)",
+      "driver": "OpenSearch SQL ODBC (built from source)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "driver-unavailable",
+          "detail": "the project's macOS pkg is x86_64-only (Intel Macs not targeted)"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "OpenSearch 3.8.0, `DISABLE_SECURITY_PLUGIN=true`; OpenSearch SQL ODBC Driver 1.5.0.0 \u2014 the release's `opensearch-sql-odbc-artifacts.tar.gz` holds a 64-bit Windows MSI; read-only entry, fixtures from `load_opensearch.py`"
+        }
+      },
+      "quirks": {
+        "big_rows": 100000,
+        "binary_text": "\\x0102",
+        "column_order": false,
+        "ddl": "CREATE TABLE adbc_t (i BIGINT, f DOUBLE, s VARCHAR, b VARCHAR, d DATE, ts TIMESTAMP, n VARCHAR, bo BOOLEAN)",
+        "decimal_type": "string",
+        "params": false,
+        "quote": "`",
+        "read_only": true,
+        "ts_text": true
+      },
+      "notes": "search engine reached through its bundled SQL plugin (`/_plugins/_sql`); the project publishes the driver for Windows and macOS only, so it is built for Linux \u2014 its never-compiled POSIX branch needed three source fixes: two compile fixes plus a `sem_init()` given `capacity` where WIN32/APPLE use `initial` (the pop semaphore starts full, so `pop()` corrupts an empty queue and `clear()` segfaults on close). Driver quirk handled: its **ANSI `SQLDriverConnect` cannot connect at all** \u2014 `CC_connect()` asks for the `SQL_ASCII` client encoding, which it does not support, unless `SQLDriverConnectW` set the unicode-driver flag first \u2014 and returns `SQL_ERROR` with an empty diagnostic queue, so adbcBridge retries a connect that failed without saying why through `SQLDriverConnectW`; one that reported a real error, bad credentials say, is left alone \u2014 though through unixODBC no other failed connect ever returns: the driver exports `SQLErrorW` and hands back the same record on every call, and the driver manager, which prefers `SQLError` for collecting a failed connect's diagnostics, loops on it forever ([opensearch-project/sql-odbc#102](https://github.com/opensearch-project/sql-odbc/issues/102)). Read-only twice over \u2014 the SQL plugin is a query interface (no `CREATE TABLE`, no `INSERT`) and the driver answers `SQLBindParameter` with \"OpenSearch does not support parameters\" \u2014 so the indices are written over the REST `_bulk` API; backtick identifiers, no `DECIMAL` or binary type, and the driver's result-set type map has no `timestamp` entry so `ts` is described `SQL_WVARCHAR` and arrives as text (its `SQLColumns` and `SQLGetTypeInfo` tables do map `timestamp`, so the two metadata paths disagree about the same column); also runs `MATCH`/`MATCH_QUERY` full-text predicates; fetch ~120k rows/s"
+    },
+    {
+      "entry": "ydb",
+      "name": "YDB 23.4 (PostgreSQL wire)",
+      "driver": "psqlodbc 16 (PG wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "with psqlodbc 16.00.0005 built from `REL-16_00_0005` (YDB, PostgreSQL wire 14.0.5); **FAIL with psqlodbc 18.00.0002**: psqlodbc 18.00.0002 sends `SHOW DateStyle;` at connect (connection.c:1109) and YDB's PostgreSQL layer answers `unrecognized configuration parameter \"datestyle\"` \u2014 a driver-version incompatibility; psqlodbc 16 (Linux) does not issue it"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "ydbplatform/local-ydb, PostgreSQL wire 14.0.5; psqlodbc 16.00.0007 `PostgreSQL Unicode 16(x64)` as on Linux, admin-extracted from psqlodbc16_x64.msi since 18 and 16 cannot coexist through the installer; `adbcuser` + `GRANT ALL` provisioned per the README after every container recreate) \u2014 the first run hung for 7 min inside the workload while the container's own health check sat at `OVERLOADED` (`.sys_health/test` \"path exists but creating right now\"); recreated fresh, it passes in 4 s"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER PRIMARY KEY, f DOUBLE PRECISION, s VARCHAR(50), b BYTEA, d DATE, ts TIMESTAMP, n NUMERIC(10,3), bo BOOLEAN)",
+        "decimal_type": "decimal128(28, 3)"
+      },
+      "notes": "distributed HTAP store behind a PostgreSQL-compatible wire; `version()` names it PostgreSQL 16, so the two quirks are keyed on the one thing that gives YDB away over ODBC \u2014 it answers `SHOW server_version` with that whole banner rather than a version number: every table needs a PRIMARY KEY, and no ingested column can be one (a YDB key is implicitly NOT NULL), so generated ingest DDL appends `adbc_pk SERIAL PRIMARY KEY` (`ddl_extra_column`), and `pg_catalog.pg_attribute` is empty, so psqlodbc's `SQLColumns` answers success with zero rows and `GetObjects` describes a zero-row SELECT instead (`no_sql_columns`). Server side: its PG wire has no NULL bind parameter at all \u2014 a `-1` parameter length is read as a zero-length value, silently storing `''` in a text column \u2014 so the entry sets psqlodbc's `UseServerSidePrepare=0` and every NULL goes as a literal; `NUMERIC` precision is not reported; the image ships no users and no environment variable for the PG feature flags, so a role is created after start-up and both are covered by the setup notes; ingest 1.8k rows/s (1.8k with array binding) -- `UseServerSidePrepare=0` means psqlodbc inlines every value into the statement text, and YDB parses and plans the result, which is what caps this; still 32x the 55 rows/s one INSERT per row manages; fetch 654k rows/s"
+    },
+    {
+      "entry": "dremio",
+      "name": "Dremio 26.0.5 (OSS, Arrow Flight SQL)",
+      "driver": "Flight SQL ODBC 0.9.7 (Dremio, open source)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "`Dremio Server (via ODBC) 26.00.0005`; read-only) through a bridge built against iODBC 3.52.16 \u2014 Python fetch 1,341,476 rows/s. Through unixODBC: the same driver-manager abort as Flight SQL (the macOS arm64 build is the iODBC-width one, [dremio/warpdrive#16](https://github.com/dremio/warpdrive/issues/16); the Linux x86_64 build is 2-byte `SQLWCHAR` and returns its diagnostics normally under unixODBC 2.3.12"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Dremio 26.0.0005 through the same Arrow Flight SQL ODBC Windows build) \u2014 with the same `text_as_binary` fix as flightsql (it failed the astral check the same way, U+1F680 \u2192 U+F680, before it); 1,002,050 rows/s. Admin user created over `PUT /apiv2/bootstrap/firstuser`; the first compat run right after boot hit a `$scratch` metadata race (`Object 'adbc_t' not found` immediately after CTAS) and passed on rerun"
+        }
+      },
+      "quirks": {
+        "big_rows": 100000,
+        "decimal_type": "decimal128(19, 3)",
+        "params": false,
+        "read_only": true
+      },
+      "notes": "the engine that publishes this driver, and it needed no new driver quirk \u2014 `no_sql_columns` is keyed on the driver name, so Dremio takes the path shared with sqlflite and InfluxDB, though against Dremio 26 `SQLColumns` does not in fact crash (it describes its 18 result columns and fetches every row), so here the quirk costs a describe rather than avoiding a segfault; read-only because of the driver alone -- Dremio writes fine (`$scratch`, the writable source a stock dremio-oss ships, takes CTAS, and a table created there with a column list is Iceberg and takes `INSERT`), but `SQLBindParameter` is `HYC00 Unsupported function` even after a `SQLPrepare` that succeeds, and `SQLNumParams` reports 0, so no parameter can reach the server and `setup` builds both tables with literal `CREATE TABLE IF NOT EXISTS ... AS SELECT`; unlike sqlflite the driver reports a `DECIMAL`'s declared scale \u2014 described as (19, *s*), precision still always 19 \u2014 so decimals arrive exact in a wider decimal128 rather than as text; a string literal holding any character outside ISO-8859-1 (a BMP `\u6f22` as much as an emoji) needs the `_UTF8'\u2026'` prefix or Dremio's parser encodes it as ISO-8859-1 and fails planning; server side, the first admin user has to be created over the REST API before any login works, and the query context comes from a `schema` connection property the driver forwards as a gRPC header; fetch 1.1M rows/s"
+    },
+    {
+      "entry": "tdengine",
+      "name": "TDengine 3.3.6",
+      "driver": "taos-odbc (TDengine's own connector, built from source)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "3.3.6.13, vendor arm64 client"
+        },
+        "windows_x64": {
+          "status": "fail",
+          "detail": ", driver-side, the NCHAR column only (TDengine 3.3.6.13 server; taos_odbc from the Windows client package 3.4.2.5, `TDengine` driver). Two things had to change to connect at all: the 3.4.2.5 client cannot speak the native protocol to a 3.3.6 server (TCP connects, the server drops it with `read invalid packet`; not IPv6), so the entry runs over websocket through taosadapter \u2014 `URL={ws://root:taosdata@127.0.0.1:16041}` with port 6041 published by a compose override \u2014 which reaches the server and passes every column but `s`. That column: taos_odbc takes the client character set from `GetACP()` (1252) and ignores `CHARSET_FOR_COL_BIND`/`CHARSET_ENCODER_FOR_COL_BIND` and a UCRT `setlocale(\".UTF-8\")` alike, so reading `h\u00e9llo \ud83d\ude80` fails `[iconv] Character set conversion for UTF-32LE to CP1252 failed` for SQL_C_CHAR and SQL_C_WCHAR (pyodbc identical), and a SQL_C_BINARY read shows the value was already stored double-encoded on the way in. Only a UTF-8 system code page changes that. Fetch of the ASCII fixture works: 298,618 rows/s"
+        }
+      },
+      "quirks": {
+        "big_rows": 20000,
+        "column_order": false,
+        "ddl": "CREATE TABLE adbc_t (ts TIMESTAMP, i INT, f DOUBLE, s NCHAR(50), b VARBINARY(20), d TIMESTAMP, n VARCHAR(20), bo BOOL)",
+        "not_null": [
+          "ts"
+        ],
+        "quote": "`",
+        "read_only": true
+      },
+      "notes": "time-series server whose every table must start with a TIMESTAMP primary key that is non-NULL, distinct and inside the retention window, so no generated ingest DDL and no positional workload INSERT fits one -- the entry reads tables its `setup` builds and bulk-ingests through `extra` into a timestamp-first table; driver quirks handled: no `SQL_C_TYPE_TIMESTAMP` conversion for bound columns or parameters (`SQLGetData` does convert; the bridge reads through bound block cursors, so timestamp columns are read as text and timestamp params sent as text), a boolean param is taken only as `SQL_C_SBIGINT` described as `SQL_TINYINT`, the driver implements no `DECIMAL` (a `DECIMAL` column fails the whole `SELECT` with `not supported yet`) so that column is exact text; backtick identifiers; fetch 403k rows/s"
+    },
+    {
+      "entry": "access",
+      "name": "Microsoft Access `.mdb`/`.accdb`",
+      "driver": "MDB Tools 1.0 (`odbc-mdbtools`)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "mdbtools 1.0.1 from source, one local patch: fakeglib `g_strsplit`"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "Microsoft Access Database Engine 2016 x64, `Microsoft Access Driver (*.mdb, *.accdb)` = ACEODBC.DLL, reports `ACCESS (via ODBC) 04.00.0000`; the checked-in `access.mdb` fixture, so the entry's MDB-Tools-shaped workload \u2014 read-only, no parameters, no astral check \u2014 is what ran; the first real Jet/ACE measurement of this entry"
+        }
+      },
+      "quirks": {
+        "astral": false,
+        "big_rows": 3000,
+        "ddl": "CREATE TABLE adbc_t (i LONG, f DOUBLE, s TEXT(100), b LONGBINARY, d DATETIME, ts DATETIME, n DECIMAL(10,3), bo YESNO)",
+        "error_text": false,
+        "not_null": [
+          "bo"
+        ],
+        "params": false,
+        "read_only": true,
+        "ts_us": [
+          "0"
+        ]
+      },
+      "notes": "the driver executes no DDL/DML and has no `SQLBindParameter`; 32-bit `SQLLEN`, as Db2"
+    },
+    {
+      "entry": "singlestore",
+      "name": "SingleStore 9.1.1 (MySQL 5.7.32 wire)",
+      "driver": "MySQL Connector/ODBC 9.4 (MySQL wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "`MySQL (via ODBC) 05.07.000032`, `@@memsql_version` 9.1.1; MariaDB Connector/ODBC 3.2.9 built from source against unixODBC 2.3.12 \u2014 MySQL's own connector is iODBC-only on macOS; server amd64-emulated, `singlestoredb-dev` has no arm64 manifest; fetch ~55k rows/s, ingest ~116k rows/s warm"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "`MySQL (via ODBC) 5.7.32`, `@@memsql_version` 9.1.1; MySQL Connector/ODBC 26.7.0 `myodbc26w.dll`, the entry verbatim with `NO_SSPS=1` from the placeholder; `singlestoredb-dev` runs native amd64 under Docker Desktop, healthy in ~15 s; fetch 720\u2013780k rows/s, ingest 61k rows/s on the first run and 107k warm \u2014 SingleStore compiles each query shape on first sight, as on Linux"
+        }
+      },
+      "quirks": {
+        "bool_type": "int8",
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARBINARY(10), d DATE, ts DATETIME(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "no driver quirks and no tolerance flag the `mysql` entry does not already have (`TINYINT(1)` booleans, `ANSI_QUOTES`) \u2014 a distributed HTAP engine whose tables are **columnstore by default** and whose MySQL mode takes that entry's types unchanged; columnstore and rowstore were probed side by side and behave identically on every point the workload checks. `mysql_native_password` only, so run from the tarball the connector needs `PLUGIN_DIR=`; the free `ghcr.io/singlestore-labs/singlestoredb-dev` image needs no licence key and no account (the older `cluster-in-a-box` wants a `LICENSE_KEY`), and its one-off `CheckCapacity` warning \u2014 used capacity 3 units against the licence's 1 \u2014 is the Developer Image licence describing itself, with nothing in the workload refused. One thing to know when writing timestamps here through MySQL Connector/ODBC, which costs precision in plain ODBC but not through adbcBridge, and which is the connector's doing rather than SingleStore's (a plain-ODBC probe on 2026-09-04 gave byte-identical results against a stock MySQL 8.4 server): the connector's `SQLGetTypeInfo` row for `datetime` reports `COLUMN_SIZE` 21 / `MAXIMUM_SCALE` 0 and a `DATETIME(6)` result column is described `COLUMN_SIZE` 19 / `DECIMAL_DIGITS` 0, so neither carries the column's real fractional precision \u2014 pyodbc derives its bind scale from that column size (21 \u2212 20 = 1 digit) and silently stores `13:45:10.123456` as `13:45:10.1`, on the `NO_SSPS=1` text path too; the same value as a SQL literal or bound as a string keeps all six digits, and adbcBridge binds its own scale rather than the driver's type table, so the microsecond assertion passes unchanged. SingleStore's own free ODBC driver (singlestore-odbc-connector 1.2.2, a MariaDB Connector/ODBC fork) passes the same entry and is the cross-check for that: it reports `SingleStore` / `09.01.0001` rather than the wire's `MySQL` / `5.7.32`, describes the column `COLUMN_SIZE` 26 / `DECIMAL_DIGITS` 6 (pyodbc is exact through it), and needs neither `PLUGIN_DIR=` nor the `LD_PRELOAD`, but its `SQLGetTypeInfo` fails under `ANSI_QUOTES` \u2014 `42S22 \u2026 Unknown column 'json' in 'field list' (1054)`, the name always being the first type the call would have returned, so the driver is building its type table from double-quoted string literals that `ANSI_QUOTES` turns into identifiers \u2014 the template `SELECT \"%s\" AS TYPE_NAME, \u2026` is visible in the driver binary (`SQLColumns`, `SQLTables` and ordinary queries are unaffected); separately, its `SQLColumns` with a NULL catalog name segfaults the process on `strdup(NULL)` in `MADB_StmtColumnsNoInfoSchema` whenever at least one column matches, in either `sql_mode`. adbcBridge absorbs that rather than failing \u2014 `TypeNameOne` treats a `SQLGetTypeInfo` that does not succeed as \"no such type\" and falls through to the portable ANSI name \u2014 so the only visible difference is the ingest DDL's spelling (`mediumtext`/`bit(1)` through Connector/ODBC, `text`/`tinyint(1)` through SingleStore's), both valid and both passing the read-back. The entry uses Connector/ODBC because the eleven other MySQL-wire entries already do. Ingest 164k rows/s (159k with array binding), the fastest of the MySQL-wire entries; fetch 1.26M rows/s. Measure twice: SingleStore compiles each query shape to machine code on first sight, and a cold-container run of the same benchmark gave 75k/109k \u2014 which reads as \"arrays are 45% faster\" and is really the compiler, since with plans cached the two forms land within 3% of each other, so `prefer_param_arrays` is not wanted. Verified on Linux and macOS"
+    },
+    {
+      "entry": "hana",
+      "name": "SAP HANA Express 2.00.088 (HANA 2.0 SPS08)",
+      "driver": "SAP HANA client ODBC 2.29.25 (`libodbcHDB.so`, native wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "`HDB (via ODBC) 02.00.0088`, SAP HANA client 2.29.25 arm64 `libodbcHDB.dylib`, against the Linux-hosted server over one LAN hop, connected straight to the tenant SQL port \u2014 with `DATABASENAME` set, HANA redirects the client to the container's internal address, which only the Docker host can reach \u2014 so the numbers are network-bound: fetch 43.5k rows/s, ingest 20\u201326k rows/s with parameter arrays and 62 rows/s one row per execute, one commit round trip each; pyodbc within 10% of the bridge on fetch"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "`HDB (via ODBC) 02.00.0088`, SAP HANA client 2.29.25 `libodbcHDB.dll` registered as `HDBODBC` \u2014 the name carries the `libodbchdb` key, so the HANA quirks apply on Windows unchanged; `saplabs/hanaexpress` under Docker Desktop, 12 GB, ~16 min to `Startup finished!`; connected straight to the tenant SQL port 39041 \u2014 published through a socat sidecar, since the compose service publishes 39013/39017 only, and with `DATABASENAME` set HANA redirects the client to the container's internal address, which a Windows host cannot reach; fetch 1.44\u20131.48M rows/s, ingest 364\u2013398k rows/s with parameter arrays and 1.7k rows/s one row per execute"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s NVARCHAR(50), b VARBINARY(10), d DATE, ts TIMESTAMP, n DECIMAL(10,3), bo BOOLEAN)",
+        "ident": "<method 'upper' of 'str' objects>"
+      },
+      "notes": "SAP's in-memory column store, first-party server (`saplabs/hanaexpress`, which pulled anonymously) driven by SAP's own first-party driver from the free HANA client download \u2014 the EULA that gates it is passed with the cookie its checkbox sets, and the ODBC member of the tarball needs no installer, no `LD_LIBRARY_PATH` and no `.ini` of its own. Every workload type is a native HANA type and round-trips exactly, emoji and microseconds included (`i` is int32; a bare `CREATE TABLE` is a **column** table, `default_table_type = column`, and a `CREATE ROW TABLE` passes the same workload). Two HANA spellings to know: `TIMESTAMP` takes no precision argument (`TIMESTAMP(6)` is `42000`, `257 sql syntax error: incorrect syntax near \"(\"`) because it is always 7 fractional digits, and there is no multi-row `VALUES` at all (`INSERT INTO t VALUES (1,'a'),(2,'b')` is `42000`, `257 ... incorrect syntax near \",\"`, with literals as with parameters). Four driver quirks, all keyed on `libodbchdb`. The first is a correctness bug independent of this matrix: the driver decodes **narrow statement text as Latin-1**, not as the UTF-8 bytes unixODBC handed it, so the UTF-8 of `h\u00e9llo \ud83d\ude80` (`68 c3a9 6c6c6f 20 f09f9a80`) is stored as the eleven Latin-1 characters those bytes spell (`LENGTH(s)` 11, not 8) \u2014 the same corruption the Windows driver manager causes for every driver, here caused by one driver on every platform. It hides because it is self-consistent within narrow statements, and shows the moment a literal must match a value sent as a bound parameter (which travels `SQL_C_WCHAR` and arrives correct). No connection property (`CHAR_AS_UTF8`, `CHAR_SET`, `charset`) and no locale (`LC_ALL=C`, `en_US.UTF-8`, `C.UTF-8`) changes it; `SQLExecDirectW` stores it exactly, so `wide_sql` (new) routes caller statement text through the W entry points on every platform \u2014 the mirror of the existing `narrow_sql`, reusing the conversion the Windows build already had. Second, `SQLGetTypeInfo(SQL_TYPE_TIMESTAMP)` names **`SECONDDATE` first** \u2014 HANA's whole-second timestamp (`COLUMN_SIZE` 19, `MAXIMUM_SCALE` 0, no `CREATE_PARAMS`) \u2014 with the 7-digit `TIMESTAMP` only in rows two and three, so generated ingest DDL silently dropped every microsecond; `ddl_timestamp_type_name` (new) gives the name outright, since `SECONDDATE` has no `CREATE_PARAMS` for `fractional_time_type_format` to ask for a scale and `TIMESTAMP` takes no precision argument either. Third, `SQLGetTypeInfo(SQL_LONGVARCHAR)` names `CLOB`, which HANA bars from `ORDER BY` (`HY000`, `264 invalid datatype: \"V\" LOB type in ORDER BY clause`) and `SELECT DISTINCT` (`HY000`, `264 ... LOB type in distinct select clause`) \u2014 the SQL Server `TEXT` trap \u2014 so `ddl_string_as_max_varchar`, the flag Db2 already sets, asks for `VARCHAR(5000)` instead, fully Unicode since HANA 2.0 merged `VARCHAR` into `NVARCHAR`. Fourth, `prefer_param_arrays` (the third driver to set it, after maodbc and Vertica, and here the server's doing rather than the driver's): with no multi-row `VALUES`, `MultiRowSetup`'s probe is refused and ingest falls back to one execute per row, 7,675 rows/s against **1,142,092** with a bound array. Server side, startup is 158 s on a cold volume (system database, then the `HXE` tenant) and settles at ~5 GB under a 12 GB cap; 39013 (system DB) and 39017 (the `HXE` tenant) must be published **unmapped**, because the client resolves a tenant by asking for its port and reconnecting to exactly that number; `--agree-to-sap-license` and a world-writable mount holding `passwords.json` (the image's `hxeadm` is uid 12000) are required, and of SAP's four sysctls only `kernel.shmmax` is IPC-namespaced and settable per container \u2014 the entry was verified with the other three left at a stock Ubuntu's values. Ingest 1,142,092 rows/s (array binding), fetch 6,768,257 rows/s"
+    },
+    {
+      "entry": "exasol",
+      "name": "Exasol 2025.1.14",
+      "driver": "Exasol ODBC 25.2.1 (`libexaodbc.so`, native wire on 8563)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "`EXASolution (via ODBC) 2025.01.0014`, Exasol ODBC 26.2.8 universal, the unixODBC variant, against the Linux-hosted server over one LAN hop, so the numbers are network-bound: fetch 229\u2013270k rows/s, ingest 6.6\u20137.3k rows/s, pyodbc within noise of the bridge on both; the entry ran verbatim with only EXAHOST changed"
+        },
+        "windows_x64": {
+          "status": "pass",
+          "detail": "`EXASolution (via ODBC) 2025.01.0014`, Exasol ODBC 26.2.8 `EXAODBC.dll` registered as `EXASolution Driver` \u2014 installed machine-wide, because Windows' driver manager reads drivers from HKLM only and answers a DLL path in `DRIVER=` with IM002; `exasol/docker-db` under Docker Desktop, privileged, 6 GB; the entry verbatim, the three Exasol quirks apply; fetch 730\u2013750k rows/s, ingest 40\u201342k rows/s with pyodbc at 105k on ingest, the same shape as Linux"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INT, f DOUBLE, s VARCHAR(50), b VARCHAR(50), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
+        "ident": "<method 'upper' of 'str' objects>",
+        "text_sortable": true,
+        "wide_text_rows": 3000
+      },
+      "notes": "in-memory columnar warehouse on its own first-party driver. Three driver quirks, all new and all keyed on `SQL_DRIVER_NAME` \"exaodbc\". (1) Exasol has **no binary column type at all** \u2014 `BLOB` is `0A000` \"Feature not supported: data type BLOB\" and `VARBINARY`/`BINARY`/`RAW` are not words its parser knows \u2014 and the driver refuses the matching C type outright: `SQLBindParameter` with `SQL_C_BINARY` answers `HY003` \"Invalid application buffer type: SQL_C_BINARY\" for any target column, so an Arrow binary column could not reach the server at all; it now goes as `SQL_C_CHAR` into a `VARCHAR` (`binary_param_as_varchar`), where the bytes store and read back byte for byte. (2) A **NULL parameter described as `SQL_DECIMAL` cannot be bound with `SQL_C_DEFAULT`**: `SQLExecute` answers `SI002` \"C-Type not supported\" and `HY010` \"Error creating prepared statement header\", failing the whole statement. That is not a corner case here \u2014 Exasol has no narrow integer type, `INT`/`INTEGER`/`BIGINT` are all aliases of `DECIMAL`, and `SQLDescribeParam` reports `SQL_DECIMAL` for every one of them, so a NULL in *any* numeric column hit it; `SQL_C_CHAR` with a NULL data pointer is accepted (`null_decimal_param_as_char`). (3) `SQL_GETDATA_EXTENSIONS` is `0xf` \u2014 `ANY_COLUMN"
+    },
+    {
+      "entry": "altibase",
+      "name": "Altibase 7.3.0.1.4 (A+ Edition)",
+      "driver": "Altibase ODBC (`libaltibase_odbc-64bit-ul64.so`, native wire)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "driver-unavailable",
+          "detail": "Altibase publishes no macOS client (its supported-platforms list is Linux, AIX, HP-UX and a Windows-only client)"
+        },
+        "windows_x64": {
+          "status": "driver-unavailable",
+          "detail": "Altibase's Windows ODBC client \"is provided only up to Altibase version 6.5.1, and not provided to Altibase version 7 or later\" (its Windows ODBC development guide), so nothing drives a 7.x server; the downloads sit behind the vendor portal in any case"
+        }
+      },
+      "quirks": {
+        "bool_type": "int16",
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50), b BLOB, d DATE, ts DATE, n DECIMAL(10,3), bo SMALLINT)",
+        "ident": "<method 'upper' of 'str' objects>",
+        "quote": ""
+      },
+      "notes": "first-party driver on 20300, linked against nothing but libc, lifted out of the server image with `docker cp` (`-ul64` is the 8-byte-`SQLLEN` build unixODBC wants; the `-ul32` sibling sits beside it). Server side, `altibase/altibase` is licence-gated \u2014 it ships a 1-byte `conf/license` and the boot stops at `Check License` with `No valid license present!` (ERR-42000), a 90-day trial key being a registration away \u2014 so the entry runs the same vendor's free `altibase/a_plus_edition`, which needs none; it wants `MODE=foreground` (the image default `MODE=init` starts a shell and exits) and `DB_CHARSET=UTF8` (the default is KO16KSC5601). Driver quirks handled: the wide and narrow paths disagree above the BMP \u2014 a `SQL_C_WCHAR` parameter is stored as CESU-8 (`h\u00e9llo \ud83d\ude80` is 13 bytes, `LENGTH()` 8) and reading that back narrow yields bytes no UTF-8 decoder accepts, while `SQL_C_CHAR` in and out round-trips it byte for byte, so both ends stay narrow (`wchar_as_utf8` + `narrow_params`, as Informix); its byte types carry vendor `SQL_DATA_TYPE` codes outside the ODBC range (BYTE 20001, NIBBLE 20002, VARBYTE 20003, BLOB 30, CLOB 40, VARBIT -100) and, unrecognised, BYTE/VARBYTE/BLOB fall through to the text path and come back hex-encoded, so those three are read as `SQL_C_BINARY` (as Db2's own `SQL_BLOB` -98 already is); `SQLGetTypeInfo` has no `SQL_LONGVARCHAR` at all and reports CREATE_PARAMS `precision` \u2014 not `length` \u2014 for `VARCHAR`, so generated ingest DDL got a bare `VARCHAR`, which in Altibase means `VARCHAR(1)` and fails the first insert with 22026 `Invalid data type length`, fixed by naming `VARCHAR(32000)` (`ddl_string_type_name`, as Firebird); `SQL_IDENTIFIER_QUOTE_CHAR` is a blank, so ingest quotes nothing and the server upper-cases what it emits (the entry leaves its own SQL unquoted too, as Ignite's does). Types: no `BOOLEAN` (HY004 `Unable to create a column with the specified data type`, so `bo` is `SMALLINT` \u2192 int16), no `DOUBLE PRECISION` (`DOUBLE`), no `VARBINARY`, and `DATE` *is* the timestamp \u2014 microseconds and all, described `SQL_TYPE_TIMESTAMP` \u2014 so it carries both `d` and `ts`; BYTE, VARBYTE, NIBBLE, BIT and VARBIT accept no bound `SQL_C_BINARY` parameter at all (22018 `Conversion not applicable`, 135180), which is why `b` is a `BLOB`. Its parameter arrays are one round trip and beat the multi-row `INSERT` 26\u00d7, so `prefer_param_arrays` \u2014 the third driver to need it, after `maodbc` and Vertica's; ingest 30k rows/s multi-row, 778\u2013816k as an array, fetch 2.0\u20132.3M rows/s"
+    },
+    {
+      "entry": "kinetica",
+      "name": "Kinetica 7.1.9 (Developer Edition)",
+      "driver": "Kinetica ODBC 7.1.9.16 (`libKineticaODBC.so`, Simba Engine SDK 10.1.6, REST/SQL on 9191)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": "read"
+        },
+        "macos_arm64": {
+          "status": "driver-unavailable",
+          "detail": "the server image ships Linux and Windows ODBC clients only (`/opt/gpudb/downloads`)"
+        },
+        "windows_x64": {
+          "status": "fail",
+          "detail": "** on this tree \u2014 the Windows driver (`KineticaODBC.dll` 7.1.9.16, `windows-odbc-client.zip` from the server image, registered as `Kinetica ODBC 7.1`) exports the W entry points but transcodes W statement text through the ANSI code page inside itself: the literal `'h\u00e9llo \ud83d\ude80'` lands as cp1252 bytes and every later read of that row fails `HY000 (50311)` \"Error converting invalid input with source encoding UTF-8 using ICU\", identical through pyodbc; its narrow statement path hands UTF-8 through byte for byte and its wide fetch is correct (its narrow fetch is not, so the Ignite treatment does not fit). With `narrow_sql` set in the Kinetica quirk block on Windows the entry passes \u2014 `Kinetica (via ODBC) 7.1.9.33`, fetch 450\u2013480k rows/s \u2014 a proposed bridge fix, not yet in this tree. Any Windows host also needs `enable_worker_http_servers = false` in the server's `gpudb.conf`: the driver's multi-head inserter dials the container-internal worker URLs the server advertises"
+        }
+      },
+      "quirks": {
+        "big_rows": 100000,
+        "decimal_type": "decimal128(18, 4)",
+        "params": false,
+        "read_only": true
+      },
+      "notes": "a vectorized analytic database with a first-party driver \u2014 and the driver has the sharpest parameter bug in this matrix. It does not *refuse* `SQLBindParameter` the way the Flight SQL driver does; it accepts every bind and then executes parameter *N* with the value bound at *N+1*, sending the last parameter as NULL. A one-parameter `INSERT` therefore stores NULL under `SQL_SUCCESS` with an empty diagnostic queue, a three-parameter one writes the values shifted a column left, and an eight-parameter one fails `HY000 (1040) Driver Error: type: %d` \u2014 an unformatted format string. Reproduced with no pyodbc in the picture, binding `SQL_C_LONG`\u2192`SQL_INTEGER` and `SQL_C_CHAR`\u2192`SQL_VARCHAR` through unixODBC directly: `HY000 (1040) Driver Error: stod; Setting column 'i' with value: 'hello'`, the second parameter's text landing in the first column. `SQLDescribeParam` compounds it by reporting every parameter as `SQL_VARCHAR(1024)` whatever the target column is, and a string parameter on `SELECT ?` segfaults the process. Nothing a caller binds can be trusted to arrive, so the entry is read-only and `setup` builds both tables with literal SQL \u2014 Kinetica itself writes fine that way, `SQLExecDirect` is exact, and emoji, `BYTES`, `DATE` and `BOOLEAN` all round-trip. Two bridge quirks, both keyed on the driver/DBMS name `Kinetica`: **`decimal_fixed_precision`** \u2014 the server has exactly one decimal type, `DECIMAL(18,4)` (every `DECIMAL(p,s)` in DDL is stored as it, as `SHOW CREATE TABLE` confirms), and the driver misdescribes such a column three different ways: `SQLDescribeCol` says precision 38 scale 0, `SQLColumns` says (18,18), and `SQLGetTypeInfo` says 38; believing scale 0 read the `12.3450` the driver hands over as a `decimal128(38,0)` holding `12`, so the real pair is named instead. **`zero_row_suffix`** \u2014 Kinetica's planner constant-folds a provably false predicate and answers the query from its empty pseudo-table `SYSTEM.ITER`, which cannot project a `BYTES` column (`Invalid attribute: BYTES(null) for table: SYSTEM.ITER \u2026 Unknown function: BYTES`), so `GetTableSchema` and the `GetObjects` describe fallback failed outright on any table holding binary; they ask for no rows with `LIMIT 0`, which the planner does not fold. Also worth knowing: `SQL_TXN_CAPABLE` is 0, `SQLGetTypeInfo` names the temporal types `TYPE_DATE`/`TYPE_TIME`/`TYPE_TIMESTAMP` (ODBC C constants, not names any DDL accepts), `DATETIME` is millisecond precision, `SELECT VERSION()` answers with a hard-coded *PostgreSQL 9.5* banner, and `UID=admin;PWD=` (a non-empty user with an empty password) is refused `1010 Insufficient credentials` where omitting both connects. Server side: the Developer Edition image needs `GPUDB_START_ALL=1` or the database never starts, and it needs no GPU and no licence key; the Linux ODBC client tarball ships inside it. Fetch 579k rows/s (pyodbc 383k)"
+    },
+    {
+      "entry": "ingres",
+      "name": "Actian Ingres 10.1 (open-source edition)",
+      "driver": "Ingres ODBC (`libiiodbcdriver.1.so`, ships with the installation)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "driver-unavailable",
+          "detail": "Actian Client for macOS is x86_64 only, no arm64 build"
+        },
+        "windows_x64": {
+          "status": "fail",
+          "detail": "** (astral check): Actian Client 1.5.0 for Windows (`CAIIOD35.DLL` 3.50.1211, registered as `Ingres`, from esd.actian.com behind a login, `setup.exe` with a response file \u2014 a bare msi installs no driver) negotiates the server's `ISO88591` with Ingres 10.1 \u2014 declaring `UTF8` is refused, `E_GC2462` \u2014 and substitutes U+1F680 with `?` on every route, literal, wide or narrow parameter, pyodbc identical; the Linux driver passes the UTF-8 bytes through, this one honours the negotiated set. On this tree the failure surfaces earlier as a session abort on the two-row array INSERT (`08S01 \u2026 The connection to the server has been aborted`, server `E_CLFE07_BS_READ_ERR`), because the bridge's `iiodbcdriver` key does not match the Windows driver name and the Windows tail leaves the wide path on: extending the key to `caiiod35` and exempting it from that tail turns the abort into the honest `AssertionError: h\u00e9llo ?` \u2014 a proposed one-line fix, not in this tree. Client setup a Windows host needs before any of that: a vnode (`netutil`) with `encryption_mode off` (the 1.5 client defaults Net encryption on, the 10.1 server has no mechanism, `E_GC1004`), `character_set ISO88591`, and `II_TIMEZONE_NAME=GMT` in the environment (the installer writes `America-New_York`, which its own `config.dat` cannot map)"
+        }
+      },
+      "quirks": {
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f FLOAT8, s VARCHAR(50), b BYTE VARYING(10), d ANSIDATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)"
+      },
+      "notes": "Ingres' own driver over Ingres/Net on 21064. **It cannot be used through unixODBC as it stands**: its wide entry points take a four-byte `SQLWCHAR` (the platform `wchar_t`) while unixODBC's is two, and unixODBC picks a driver's Unicode path purely by finding `SQLConnectW` in it, so the connection string arrives as its first character and the connect fails `08004 / 786744 E_GC0138_GCN_NO_SERVER` \u2014 an empty vnode and database, leaving just the `/INGRES` server class. The same call with a UTF-32 string connects, which is the proof of the width. Its *narrow* entry points are correct and complete, so the entry loads it behind a generated ANSI-only forwarding library ([`fixtures/ingres_ansi_shim.c`](../tests/compat/fixtures/ingres_ansi_shim.c), 72 one-jump stubs) and unixODBC does the UCS-2 conversion itself. A second driver bug sets the shape of the connection string: `Driver=` is `strcpy`'d into a 32-byte buffer, so any real path aborts the process outright (`*** buffer overflow detected ***`, `__strcpy_chk` under `ConDriverInfo`) \u2014 the entry registers the shim in `odbcinst.ini` and names it `Driver=Ingres`. Two bridge quirks then carry it: 32-bit `SQLLEN` (as for the Db2 clidriver \u2014 a NULL column otherwise reads back as the row before it, a NULL `FLOAT8` as `1e-323`), and no usable `SQL_C_WCHAR` parameters (each 16-bit unit is treated as a code point, so a surrogate pair is rejected: `5000B`, *Unicode code point 0000D83D cannot be mapped to local character set* \u2014 UTF-8 narrow path instead, as for Firebird, Virtuoso and Informix). Server side: `createdb -n` (a Unicode-enabled database, without which a `VARCHAR` cannot hold the emoji and `NVARCHAR` cannot be created at all), `date_alias = ansidate` before the DBMS starts (on the default, `ANSIDATE` is created as Ingres' own date-*and-time* `INGRESDATE`, whose NULL comes back as the year-0 empty date), and an Ingres user for the local account the client runs as \u2014 the vnode login authenticates the connection while the session still runs as the caller's OS user (`E_US18FF`). Ingres SQL has no multi-row `VALUES` at all (`Syntax error on ','`), so bulk ingest falls back to parameter arrays on its own. Actian's own `actian/ingres:ii12.1.0` image refuses to start without a commercial `license.xml`, so the server is the GPL `ingres-10.1.0-00-NPTL` build baked into the community image `iidbdb/ingres`; ingest 1.1k rows/s (1.3k array), fetch 393k rows/s"
+    },
+    {
+      "entry": "ibmi",
+      "name": "Db2 for i 7.5 (IBM i, PUB400.COM public server)",
+      "driver": "IBM i Access ODBC 1.1.0.29 (`libcwbodbc.so` 07.01.029, IBM i host servers)",
+      "results": {
+        "linux": {
+          "status": "pass",
+          "detail": null
+        },
+        "macos_arm64": {
+          "status": "pass",
+          "detail": "`DB2/400 SQL (via ODBC) 07.05.0015`; IBM i Access ODBC for macOS 1.1.0.29, `libcwbodbc.dylib` 07.01.029, arm64 slice, installed to `/Library/IBMiAccess` by an administrator \u2014 the package has no unprivileged install and the driver aborts on sign-on without its message catalogues; PUB400.COM over the plain host-server ports, `SSL=0`, because this driver's TLS path segfaults inside `SQLDriverConnect` whenever pyarrow's libraries are loaded in the same process, bisected to that combination alone, see `UPSTREAM.md`; the `Driver=` value must stay within 35 characters here too"
+        },
+        "windows_x64": {
+          "status": "driver-unavailable",
+          "detail": "the IBM i Access Client Solutions Windows Application Package \u2014 the only carrier of `cwbodbc.dll` \u2014 is behind an IBM export-control review of the downloading IBM ID, still pending; the entry itself needs nothing else and runs the moment the package lands"
+        }
+      },
+      "quirks": {
+        "big_rows": 3000,
+        "ddl": "CREATE TABLE adbc_t (i INTEGER, f DOUBLE, s VARCHAR(50) CCSID 1208, b VARBINARY(10), d DATE, ts TIMESTAMP(6), n DECIMAL(10,3), bo BOOLEAN)",
+        "ident": "<method 'upper' of 'str' objects>",
+        "text_sortable": true
+      },
+      "notes": "a different engine and a different wire from the Db2 row above, not DRDA: IBM's own IBM i Access driver on the host-server ports, `SQL_DBMS_NAME` \"DB2/400 SQL\" 07.05.0015. **Hosted** \u2014 IBM i runs on Power hardware, there is no container and no emulator, and the entry points at [PUB400.COM](https://pub400.com), the free public IBM i (`PUB400_HOST`/`PUB400_USER`/`PUB400_PASSWORD`; `big_rows` 3,000, one connection at a time). Driver quirks: the `Driver=` value may be at most **35 characters** (`Key value in connection string too long. (30119)` at 36 \u2014 the driver's own installed path is 36, so a DSN-less connection needs the registered name or a short symlink); the libraries resolve their message catalogues and conversion tables under a compiled-in `/opt/ibm/iaccess`, and without that directory every diagnostic degrades to `CWBNL0202 - cwbodmsg.dll` and the real error is lost (root-free route: a `bwrap` mount namespace). Generated ingest DDL spells an Arrow string `VARCHAR(8000) CCSID 1208`, not the `CLOB` the driver's `SQLGetTypeInfo(SQL_LONGVARCHAR)` names (`ddl_string_type_name`, keyed on `SQL_DBMS_NAME` \"DB2/400\"): a CLOB column can be neither array-bound for writing nor bound at all for reading, so every row costs a round trip \u2014 3,000 rows went in at **8 rows/s** and came back at **8 rows/s** against 926-1,070 and 1,636-8,052 as `VARCHAR(8000)`. The width is measured, not chosen: the widest `VARCHAR` the server reports (32,739) is refused in a four-column table (`SQL0101`, Db2 for i's row is at most 32,766 bytes) and describes too wide to bind, which puts the read back on `SQLGetData` \u2014 120 rows/s at `VARCHAR(16000)`, 62 at `VARCHAR(32700)`. Server side: `CommitMode=0` (`*NONE`) is required, because a table created with plain `CREATE TABLE` in a user library is not journaled and cannot be changed under commitment control (`SQL7008 \u2026 not valid for operation`); `Naming=0` with `DefaultLibraries=<user>1`; `SSL=1` (host-server ports 9470-9479) verified as well as plain. The entry's `s` column is `VARCHAR(50) CCSID 1208` because a plain `VARCHAR` takes the job CCSID \u2014 273, single-byte EBCDIC, on this host \u2014 and loses `h\u00e9llo \ud83d\ude80` to substitution characters; `CCSID 1208` is UTF-8 and round-trips it. Unquoted identifiers fold to upper case, `SQL_MAX_IDENTIFIER_LEN` is 18, and `INTEGER`, `DOUBLE`, `VARBINARY(n)`, `DATE`, `TIMESTAMP(6)`, `DECIMAL(10,3)` and `BOOLEAN` are all native 7.5 types needing no tolerance flag. First connect needs a password change PUB400 only offers on a 5250 screen: `ssh -p 2222` refuses an expired profile outright and the client's own `cwbCO_ChangePassword()` is refused by this host (`CWBSY1008 \u2026 rc=400`); ingest 926 rows/s, fetch 8.1k rows/s, ~110 ms network round trip"
+    }
+  ]
+}

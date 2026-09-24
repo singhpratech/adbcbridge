@@ -225,7 +225,7 @@ Everything below except the benchmark index lives under [`docs/`](docs/index.md)
 [Building from source and testing](docs/reference/building.md) ·
 [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-**Project** — [Compatibility, 53 databases × 3 operating systems](docs/COMPATIBILITY.md) ·
+**Project** — [Compatibility, 53 databases × 3 operating systems](docs/COMPATIBILITY.md) ([as JSON](docs/compatibility.json)) ·
 [Benchmarks, by OS](bench/README.md) · [Upstream](docs/UPSTREAM.md) ·
 [Roadmap](docs/ROADMAP.md) · [FAQ](docs/community/faq.md) ·
 [Contributing](docs/community/contributing.md) ·
