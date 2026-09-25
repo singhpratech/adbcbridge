@@ -23,6 +23,15 @@ same day, and carried by every release since. It is a declared extra of the publ
 (`adbcbridge>=0.1.3,<0.2`), and of omniload's own `full` and `test` extras. [How it was built and tested](https://adbcbridge.org/notes/omniload-adbcbridge-backend/) ·
 [omniload's handbook page](https://omniload.readthedocs.io/getting-started/sql-backends.html).
 
+**Written up by ArcadeDB:** *[ArcadeDB in the Apache Arrow Ecosystem, Through Its PostgreSQL Wire
+Protocol](https://arcadedb.com/blog/arcadedb-apache-arrow-adbc-postgresql-wire/)* (2026-09-21) is
+their own account of the integration, and of the four protocol gaps this driver found in their
+PostgreSQL wire. All four are now fixed: one by a pull request from here
+([#7815](https://github.com/ArcadeData/arcadedb/pull/7815)), and the last of them,
+[#8090](https://github.com/ArcadeData/arcadedb/issues/8090) — a timestamp stored as `NULL` under a
+successful `INSERT` — within a day of being filed, verified here on the 26.10.1 snapshot.
+[What the retest measured](https://adbcbridge.org/notes/arcadedb-timestamp-null-and-a-boolean-retest/).
+
 Site and docs: <https://adbcbridge.org> · Launch write-up with the numbers:
 <https://theaivibe.org/blog/adbcbridge-apache-arrow-adbc-driver-for-any-odbc-database> ·
 Write-up on the ADBC docs listing:
