@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-25T21:38:31Z",
+ "as_of": "2026-09-26T11:30:58Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 26,
@@ -135,7 +135,7 @@
    "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-09-17T22:16:12Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "DuckDB ODBC",
