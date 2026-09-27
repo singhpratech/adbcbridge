@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-27T12:09:05Z",
+ "as_of": "2026-09-27T21:24:36Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 26,
@@ -121,7 +121,7 @@
      "actor": "staticlibs",
      "title": "Parameter arrays: read each set's own value (1.5)",
      "url": "https://github.com/duckdb/duckdb-odbc/pull/526",
-     "state": "open"
+     "state": "merged"
     },
     {
      "type": "comment",
@@ -130,12 +130,18 @@
      "association": "member",
      "text": "Thanks for your contributions! Both fixes are planned to be included into 1.5.6 update that is coming on Sep 28.",
      "url": "https://github.com/duckdb/duckdb-odbc/pull/524#issuecomment-5721962663"
+    },
+    {
+     "type": "commit",
+     "at": "2026-09-27T19:12:33Z",
+     "actor": "staticlibs",
+     "url": "https://github.com/duckdb/duckdb-odbc/commit/634de5d31b0b5234bb6e71274fc7344a15da7698"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-17T22:16:12Z",
-   "pulse": false
+   "last_activity": "2026-09-27T19:12:33Z",
+   "pulse": true
   },
   {
    "project": "DuckDB ODBC",
@@ -165,13 +171,19 @@
      "actor": "staticlibs",
      "title": "SQL_DBMS_VER: return the version directly (1.5)",
      "url": "https://github.com/duckdb/duckdb-odbc/pull/525",
-     "state": "open"
+     "state": "merged"
+    },
+    {
+     "type": "commit",
+     "at": "2026-09-27T19:14:41Z",
+     "actor": "staticlibs",
+     "url": "https://github.com/duckdb/duckdb-odbc/commit/8fd6056852f82a6b20d9ab5e4f893cd0d6fbd517"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-09-17T21:08:21Z",
-   "pulse": false
+   "last_activity": "2026-09-27T19:14:41Z",
+   "pulse": true
   },
   {
    "project": "pandas",
