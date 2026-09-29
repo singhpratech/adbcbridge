@@ -1,5 +1,5 @@
 {
- "as_of": "2026-09-27T21:24:36Z",
+ "as_of": "2026-09-29T13:00:14Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 26,
@@ -1139,15 +1139,23 @@
      "type": "pull_request",
      "at": "2026-08-30T03:13:48Z",
      "actor": "spssspss0712",
-     "title": "fix(pgwire): avoid NullPointerException when releasing null entry to …",
+     "title": "fix(pgwire): fix DEALLOCATE ALL failing with an internal error",
      "url": "https://github.com/questdb/questdb/pull/7568",
+     "state": "open"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-09-29T10:29:45Z",
+     "actor": "bluestreak01",
+     "title": "fix(pgwire): fix PostgreSQL wire protocol, SQL cast and CSV import bugs",
+     "url": "https://github.com/questdb/questdb/pull/7680",
      "state": "open"
     }
    ],
    "reporter_comments": 0,
    "community_comments": 1,
-   "last_activity": "2026-08-30T03:13:48Z",
-   "pulse": false
+   "last_activity": "2026-09-29T10:29:45Z",
+   "pulse": true
   },
   {
    "project": "CrateDB",
