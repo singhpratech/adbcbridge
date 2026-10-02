@@ -100,7 +100,24 @@ line becomes "fixed in &lt;release&gt;" when a tag carries it.</p>
 parameter-array half needs its own change, and the offer to prepare it is on the pull
 request.</p>
 </div>
-<p>Until both are fixed, treat parameter arrays as unusable here: the compatibility matrix
+<div class="callout">
+<p><strong>Update, 2026-09-29: the parameter-array half is merged too.</strong> slabko approved and merged
+<a href="https://github.com/ClickHouse/clickhouse-odbc/pull/588">#588</a> into <code>master</code> (<code>74027bcf6e</code>),
+five days after it was opened. <code>SQLExecute</code> now sends every parameter set of a statement that
+returns no result set, and stops at the first set that does, so a <code>SELECT</code> keeps handing its
+result sets back one per <code>SQLMoreResults</code>. The review asked for the ODBC error-path contract,
+and the merged change carries it: <code>SQL_ATTR_PARAMS_PROCESSED_PTR</code> counts the failing set and
+<code>SQL_ATTR_PARAM_STATUS_PTR</code> reads <code>{SUCCESS, SUCCESS, ERROR, UNUSED, UNUSED}</code> on a five-set
+insert whose third value overflows an <code>Int16</code>. Both cases are tests in the driver's suite.</p>
+<p>Verified against ClickHouse 26.7.5.10 on a driver built from the merged change: a five-set
+insert lands five rows, a three-set <code>SELECT</code> returns three result sets, and 391 of the
+project's 392 tests pass (the one failure needs <code>CREATE USER</code> and fails the same way on the
+release). With #586 and #588 together, every problem in this note's two reproducers is fixed
+on <code>master</code>. Neither is in a release yet — the latest tag is still 1.5.5.20260810 — so the
+advice below holds for the shipped driver, and both lines become "fixed in &lt;release&gt;"
+when a tag carries them.</p>
+</div>
+<p>On the released driver, treat parameter arrays as unusable here: the compatibility matrix
 turns them off for this driver and batches rows into a multi-row <code>INSERT</code> instead.</p>
 <h2>No affected-row count, since 2021</h2>
 <p><code>SQLRowCount</code> answers 0 for every write. Not −1, which ODBC defines as "not available" — 0,
