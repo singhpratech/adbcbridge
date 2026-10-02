@@ -53,7 +53,7 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-09-03</div><h1>The Ingres ODBC client kills any Java process that loads it</h1><p class="meta">Three defects in the Actian Ingres 10.1 ODBC client, each with its exact error text - the signal-handler takeover that aborts a JVM, the four-byte SQLWCHAR that truncates the connection string under unixODBC, and the 32-byte Driver= buffer.</p><p>While adding Actian Ingres 10.1 to a compatibility matrix that runs one workload through 53
 databases' ODBC drivers, three defects in the Ingres client stack turned up that are worth writing
 down, because the error messages they produce do not lead anywhere on the web today.</p>
-<h3>1. A Java process dies within a second of loading the driver</h3>
+<h2>1. A Java process dies within a second of loading the driver</h2>
 <p>Load <code>libiiodbcdriver.1.so</code> into a JVM, from any ODBC layer, and the process aborts before the
 first ODBC call:</p>
 <pre><code># A fatal error has been detected by the Java Runtime Environment:
@@ -73,7 +73,7 @@ driver from Python, Rust and Go runs the whole workload fine; none of those runt
 as a control-flow mechanism.</p>
 <p>Workaround: none inside the JVM. Run Ingres access out of process, or through a client that does
 not load the Ingres libraries.</p>
-<h3>2. Under unixODBC the driver reads only the first character of your connection string</h3>
+<h2>2. Under unixODBC the driver reads only the first character of your connection string</h2>
 <pre><code>[08004] [Ingres][Ingres ODBC Driver][Ingres]E_GC0138_GCN_NO_SERVER (786744)
 </code></pre>
 <p>with a vnode and database that look empty. The driver exports <code>SQLConnectW</code>, and unixODBC
@@ -86,14 +86,14 @@ proof.</p>
 72-function ANSI-only forwarding library, so unixODBC does the UCS-2 conversion itself and
 the driver only ever sees the narrow calls. That library is 60 lines of generated C; the
 pattern applies to any driver built with <code>SQL_WCHART_CONVERT</code>.</p>
-<h3>3. A real <code>Driver=</code> path aborts the process</h3>
+<h2>3. A real <code>Driver=</code> path aborts the process</h2>
 <pre><code>*** buffer overflow detected ***: terminated
 </code></pre>
 <p><code>ConDriverInfo</code> copies the <code>Driver=</code> value into a 32-byte stack buffer with <code>strcpy</code>. Any
 absolute path to the library is longer than that, and glibc's fortified <code>strcpy</code> aborts.
 Register the driver in <code>odbcinst.ini</code> under a short name and use <code>Driver=Ingres</code>; a DSN-less
 connection string with the full path cannot work.</p>
-<h3>What the driver gets right</h3>
+<h2>What the driver gets right</h2>
 <p>Everything else on the workload, once the string reaches it: the array-bound INSERT (Ingres
 has no multi-row <code>VALUES</code>), Unicode round trips through the narrow path, <code>DATE</code> semantics
 with <code>date_alias = ansidate</code>, catalog metadata. It needs a 32-bit <code>SQLLEN</code> (the client was built
@@ -101,7 +101,7 @@ that way, like IBM's Db2 driver) and it rejects UTF-16 surrogate pairs in wide p
 (<code>5000B</code>, <em>Unicode code point 0000D83D cannot be mapped to local character set</em>), so text goes
 through the UTF-8 narrow path. The C# route has its own problem: <code>SQLTables</code> segfaults inside
 the driver when called from a .NET process, with or without autocommit, at any workload size.</p>
-<h3>Where this comes from</h3>
+<h2>Where this comes from</h2>
 <p>The numbers and reproductions are in the adbcBridge compatibility matrix, which runs the same
 workload through every database's ODBC driver on Linux, macOS and Windows and records every
 failure with its first error: <a href="https://adbcbridge.org/matrix/#ingres">https://adbcbridge.org/matrix/#ingres</a>. The upstream record,
