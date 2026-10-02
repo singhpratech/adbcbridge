@@ -82,6 +82,23 @@ parameter, which forces the extended protocol, returns all three bytes.</p>
 <p>even on a fresh autocommit connection with nothing prepared, while a named <code>DEALLOCATE</code>
 works — <a href="https://github.com/questdb/questdb/issues/7567">questdb/questdb#7567</a>, fix PR
 <a href="https://github.com/questdb/questdb/pull/7568">questdb/questdb#7568</a> open.</p>
+<div class="callout">
+<p><strong>Update, 2026-09-27: the fix is reviewed, and it exposes a second problem.</strong> QuestDB's founder
+reviewed #7568 — approve with comments, two changes asked of its author first. From instrumented
+runs he also found that with the fix <code>DEALLOCATE ALL</code> <strong>succeeds but releases nothing</strong>: it is
+parsed as <code>DEALLOCATE "ALL"</code>, a lookup for a statement literally named <code>ALL</code>, so prepared
+statements survive it and preparing the same name again fails with <code>duplicate statement</code>. He
+traced psycopg 3's habit of sending <code>DEALLOCATE ALL</code> after a rollback or DDL and then preparing
+under new names, and concluded statements would accumulate per connection toward the server's
+named-statement limit.</p>
+<p>That is the case this note should have tested. The report above covered the error, and said
+<code>DEALLOCATE ALL</code> should succeed as a no-op <em>when nothing is prepared</em> — it never tried it with
+statements present, which is exactly what a pooled connection's session reset relies on. So the
+fix as it stands turns a loud error into a silent non-reset. He has drafted that as its own issue
+and offered to file it; when it appears, the reproduction with statements present goes on it.
+Until it is fixed: do not rely on <code>DEALLOCATE ALL</code> to reset a pooled QuestDB connection —
+deallocate by name, or drop the connection.</p>
+</div>
 <h2>Materialize: <code>DEALLOCATE "Name"</code> does not unquote</h2>
 <p>psqlodbc names every server-side statement <code>_PLAN0x&lt;statement-handle address&gt;</code> — mixed case,
 so it must be quoted. Materialize does not unquote the identifier before looking it up, so
