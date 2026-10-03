@@ -1,5 +1,5 @@
 {
- "as_of": "2026-10-01T22:44:39Z",
+ "as_of": "2026-10-03T11:44:57Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 26,
@@ -1147,7 +1147,7 @@
      "type": "pull_request",
      "at": "2026-09-29T10:29:45Z",
      "actor": "bluestreak01",
-     "title": "fix(pgwire): fix PostgreSQL wire protocol, SQL cast and CSV import bugs",
+     "title": "fix(pgwire): breaking change 💥 - fix PostgreSQL wire protocol, SQL cast and CSV import bugs",
      "url": "https://github.com/questdb/questdb/pull/7680",
      "state": "open"
     }
