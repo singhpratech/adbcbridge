@@ -735,6 +735,12 @@ struct OdbcConnection {
   // The first of those options that the ODBC path itself did not understand: it
   // is only an error once the connection is known to be served by ODBC.
   char* held_option;
+  // Reader options set on this connection before AdbcConnectionInit.  Init starts
+  // from the database's options, so these are re-applied over that copy; without
+  // the flags a pre-init batch_size or prefetch would be lost to the defaults
+  // (sqllen_32bit carries its own flag, sqllen_32bit_forced).
+  bool pre_batch_size;
+  bool pre_prefetch;
   SQLHDBC hdbc;
   bool connected;
   bool autocommit;

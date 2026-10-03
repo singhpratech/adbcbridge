@@ -441,9 +441,12 @@ static AdbcStatusCode OdbcConnectionSetOptionOdbc(struct AdbcConnection* connect
     long v = strtol(value, NULL, 10);
     if (v <= 0) return ADBC_STATUS_INVALID_ARGUMENT;
     conn->reader_opts.batch_size = v;
+    conn->pre_batch_size = !conn->connected;
     return ADBC_STATUS_OK;
   } else if (strcmp(key, ADBC_ODBC_OPTION_PREFETCH) == 0) {
-    return OdbcParsePrefetchOption(key, value, &conn->reader_opts.prefetch, error);
+    AdbcStatusCode status = OdbcParsePrefetchOption(key, value, &conn->reader_opts.prefetch, error);
+    if (status == ADBC_STATUS_OK) conn->pre_prefetch = !conn->connected;
+    return status;
   } else if (strcmp(key, ADBC_ODBC_OPTION_SQLLEN_32BIT) == 0) {
     return OdbcParseBoolOption(key, value, &conn->reader_opts.sqllen_32bit,
                                &conn->reader_opts.sqllen_32bit_forced, error);
@@ -1683,7 +1686,17 @@ static AdbcStatusCode OdbcConnectionInit(struct AdbcConnection* connection,
     return ADBC_STATUS_INVALID_STATE;
   }
   conn->db = db;
+  // Start from the database's options, then put back what was set on this
+  // connection before init -- those were written into reader_opts while it still
+  // held zeros, and would otherwise be overwritten by the database's values.
+  struct OdbcReaderOptions before = conn->reader_opts;
   conn->reader_opts = db->reader_opts;
+  if (conn->pre_batch_size) conn->reader_opts.batch_size = before.batch_size;
+  if (conn->pre_prefetch) conn->reader_opts.prefetch = before.prefetch;
+  if (before.sqllen_32bit_forced) {
+    conn->reader_opts.sqllen_32bit = before.sqllen_32bit;
+    conn->reader_opts.sqllen_32bit_forced = true;
+  }
 
   RAISE_ADBC(OdbcOpenHdbc(db, &conn->hdbc, error));
   conn->connected = true;

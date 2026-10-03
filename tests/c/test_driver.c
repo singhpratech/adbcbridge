@@ -780,6 +780,52 @@ static void TestDriverInitVersions(void* handle) {
 
 // ---------------------------------------------------------------------------
 
+// Reader options set on a connection before ConnectionInit must survive it.
+// Init starts from the database's options, so a pre-init batch_size, prefetch or
+// sqllen_32bit set on the connection used to be overwritten by the defaults.
+static void TestPreInitConnectionOptions(struct Fixture* fx) {
+  Section("connection options set before init");
+  struct AdbcError error = {0};
+  struct AdbcConnection connection = {0};
+  ADBC_MUST(fx->driver.ConnectionNew(&connection, &error), &error);
+  ADBC_OK(fx->driver.ConnectionSetOptionInt(&connection, "adbc.odbc.batch_size", 777, &error),
+          &error);
+  ADBC_OK(fx->driver.ConnectionSetOptionInt(&connection, "adbc.odbc.prefetch", 7, &error),
+          &error);
+  ADBC_OK(fx->driver.ConnectionSetOption(&connection, "adbc.odbc.sqllen_32bit", "true", &error),
+          &error);
+  ADBC_MUST(fx->driver.ConnectionInit(&connection, &fx->database, &error), &error);
+  int64_t value = 0;
+  if (ADBC_OK(fx->driver.ConnectionGetOptionInt(&connection, "adbc.odbc.batch_size", &value, &error),
+              &error)) {
+    CHECK_EQ_INT(value, 777);
+  }
+  if (ADBC_OK(fx->driver.ConnectionGetOptionInt(&connection, "adbc.odbc.prefetch", &value, &error),
+              &error)) {
+    CHECK_EQ_INT(value, 7);
+  }
+  if (ADBC_OK(fx->driver.ConnectionGetOptionInt(&connection, "adbc.odbc.sqllen_32bit", &value, &error),
+              &error)) {
+    CHECK_EQ_INT(value, 1);
+  }
+  ADBC_MUST(fx->driver.ConnectionRelease(&connection, &error), &error);
+
+  // Set after init, the same options still take effect and are not reverted.
+  struct AdbcConnection plain = {0};
+  ADBC_MUST(fx->driver.ConnectionNew(&plain, &error), &error);
+  ADBC_MUST(fx->driver.ConnectionInit(&plain, &fx->database, &error), &error);
+  if (ADBC_OK(fx->driver.ConnectionGetOptionInt(&plain, "adbc.odbc.batch_size", &value, &error),
+              &error)) {
+    CHECK_EQ_INT(value, 1024);  // the database default, untouched by the other connection
+  }
+  ADBC_OK(fx->driver.ConnectionSetOptionInt(&plain, "adbc.odbc.batch_size", 333, &error), &error);
+  if (ADBC_OK(fx->driver.ConnectionGetOptionInt(&plain, "adbc.odbc.batch_size", &value, &error),
+              &error)) {
+    CHECK_EQ_INT(value, 333);
+  }
+  ADBC_MUST(fx->driver.ConnectionRelease(&plain, &error), &error);
+}
+
 int main(int argc, char** argv) {
   const char* lib = NULL;
   if (argc > 1) {
@@ -920,6 +966,7 @@ int main(int argc, char** argv) {
   TestLargeStrings(&fx);
   TestRepairedLargeStrings(&fx);
   TestBatching(&fx);
+  TestPreInitConnectionOptions(&fx);
   TestExecuteSchema(&fx);
   TestErrorPropagation(&fx);
   TestReleaseOrdering(&fx);
