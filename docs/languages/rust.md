@@ -254,7 +254,7 @@ driver-specific tuning goes under `adbc.odbc.*`.
 | `adbc.odbc.rowset_bytes` | ceiling on a reader's bound rowset buffers, in bytes (default 8388608) |
 | `adbc.odbc.decimal_as_string` | `true` to return DECIMAL/NUMERIC as strings |
 | `adbc.odbc.partitions` | how many partitions `ExecutePartitions` splits a query into — `0` (default) chooses from the table's size, `1` never splits. Set on the **statement** |
-| `adbc.odbc.prefetch` | rowsets kept in flight on a background fetch thread — `0` (default) off, `1` double-buffering, up to `8`. Settable on the database, connection or statement. *(Compiled out on Windows; see [Known limitations](#known-limitations).)* |
+| `adbc.odbc.prefetch` | rowsets kept in flight on a background fetch thread — `0` (default) off, `1` double-buffering, up to `8`. Settable on the database, connection or statement. |
 | `adbc.odbc.delegate` | `auto` (default) / `never` / `always` — native delegation (see below) |
 | `adbc.odbc.delegate.driver` | force a specific native driver: a bare name (`postgresql`) or manifest name; a path only with `allow_paths` |
 | `adbc.odbc.delegate.search_path` | extra directories to search for native drivers (`:`-separated); needs `allow_paths` |
@@ -462,10 +462,6 @@ bounded identically.
   `tests/validation/` (latest results in `tests/validation/RESULTS.md`; driver
   defects it found are still being worked through); prebuilt driver tarballs
   ship on GitHub Releases and the crate is on crates.io.
-- **Windows: no prefetch, no parallel ingest.** The prefetch pipeline
-  (`adbc.odbc.prefetch`) and the ingest fan-out (`adbc.odbc.ingest_connections`)
-  both use POSIX threads and are compiled out on Windows. On Windows those
-  options have no effect; queries and single-connection ingest work normally.
 - **Windows: a driver that throws a C++ exception across the FFI boundary
   aborts the process.** This is a measured finding
   ([`bench/LANGUAGE_BENCHMARKS-windows.md`](../../bench/LANGUAGE_BENCHMARKS-windows.md)):

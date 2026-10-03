@@ -622,7 +622,7 @@ connections are `N` transactions, so a failure can leave some batches committed 
 others not. Use `N > 1` only where a partially populated table on failure is
 acceptable, or where the caller drops and retries. It also quietly stays on one
 connection when the caller is inside its own transaction (the `CREATE TABLE` would
-be invisible to the workers), and is forced to `1` on Windows.
+be invisible to the workers).
 
 Commits are batched: when the connection is in autocommit and more than one row is
 bound, adbcBridge turns autocommit off for the ingest and commits once at the end

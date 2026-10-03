@@ -23,10 +23,10 @@
 
 #if !defined(_WIN32)
 #include <dlfcn.h>
-#include <pthread.h>
 #include <unistd.h>
-#define ADBC_ODBC_HAVE_PREFETCH 1
 #endif
+
+#include "odbc_threads.h"
 
 #if defined(_WIN32)
 // strndup is POSIX and absent from the MSVC CRT.  Without a declaration the call
@@ -1221,7 +1221,7 @@ static ArrowErrorCode AppendDecimalString(struct ArrowArray* arr, const char* s,
 //  1. The statement handle is touched by *exactly one* thread at a time.  The fetch
 //     thread owns it from the moment it starts until it is joined; the calling thread
 //     touches it only before starting the thread and after joining it, and both
-//     transfers are through pthread_create/pthread_join, which are full barriers.  No
+//     transfers are through thread create/join, which are full barriers.  No
 //     ODBC call is ever concurrent with another on the same handle.
 //  2. It engages only when every column is bound at a width that cannot truncate (see
 //     OdbcColumn::clipped).  The repair paths -- SQLGetData and SQLFetchScroll on an
@@ -1301,10 +1301,9 @@ struct OdbcReader {
   struct OdbcRowsetSlot* slots;
   int nslots;          // 1 = no prefetch; otherwise prefetch depth + 1
   int cur_slot;        // the slot whose buffers cols[] currently point at
-#ifdef ADBC_ODBC_HAVE_PREFETCH
-  pthread_t fetch_thread;
-  pthread_mutex_t mu;
-  pthread_cond_t cv;
+  OdbcThread fetch_thread;
+  OdbcMutex mu;
+  OdbcCond cv;
   bool thread_started;
   bool prefetching;    // the fetch thread is the owner of the handle
   int ring_head;       // next slot the caller will pop
@@ -1315,16 +1314,11 @@ struct OdbcReader {
   bool fetch_stop;     // caller asked the producer to stop (release, or an error)
   AdbcStatusCode fetch_status;
   struct AdbcError fetch_error;
-#endif
 };
 
 // Why this reader cannot prefetch, or NULL if it can.  See the prefetch commentary
 // above OdbcRowsetSlot for what each condition protects.
 static const char* PrefetchRefusalReason(const struct OdbcReader* r) {
-#ifndef ADBC_ODBC_HAVE_PREFETCH
-  (void)r;
-  return "this platform has no thread support compiled in";
-#else
   if (!r->all_bound) return "the result set has a column this driver cannot bind";
   if (r->rows_per_fetch <= 1) return "this driver fetches one row at a time";
   if (r->no_rows_fetched_ptr) return "this driver does not report how many rows it fetched";
@@ -1334,7 +1328,6 @@ static const char* PrefetchRefusalReason(const struct OdbcReader* r) {
     if (r->cols[i].clipped) return "a column is bound narrower than its declared width";
   }
   return NULL;
-#endif
 }
 
 // Point the columns at slot `sl`'s buffers.  Pure pointer assignment: every conversion
@@ -1368,12 +1361,10 @@ static AdbcStatusCode ReaderBindSlot(struct OdbcReader* r, int sl, struct AdbcEr
   return ADBC_STATUS_OK;
 }
 
-#ifdef ADBC_ODBC_HAVE_PREFETCH
 static AdbcStatusCode PrefetchStart(struct OdbcReader* r, struct AdbcError* error);
 static AdbcStatusCode PrefetchNextRowset(struct OdbcReader* r, struct ArrowArray* batch,
                                          int64_t* total, struct AdbcError* error);
 static void PrefetchJoin(struct OdbcReader* r);
-#endif
 static SQLULEN ResolveFetched(const struct OdbcReader* r, const struct OdbcRowsetSlot* slot);
 static bool RowsetIsBulk(const struct OdbcReader* r, SQLULEN fetched);
 static AdbcStatusCode ConvertRowset(struct OdbcReader* r, SQLULEN fetched, bool bulk,
@@ -1511,9 +1502,7 @@ static AdbcStatusCode ReaderBind(struct OdbcReader* r, struct AdbcError* error) 
   ReaderUseSlot(r, 0);
   RAISE_ADBC(ReaderBindSlot(r, 0, error));
   r->bound = true;
-#ifdef ADBC_ODBC_HAVE_PREFETCH
   if (r->nslots > 1) RAISE_ADBC(PrefetchStart(r, error));
-#endif
   return ADBC_STATUS_OK;
 }
 
@@ -2145,7 +2134,6 @@ static AdbcStatusCode ConvertRowset(struct OdbcReader* r, SQLULEN fetched, bool 
   return status;
 }
 
-#ifdef ADBC_ODBC_HAVE_PREFETCH
 // --- The fetch thread ----------------------------------------------------------------
 //
 // Owns r->ref->hstmt outright for as long as it runs.  Everything it shares with the
@@ -2158,14 +2146,14 @@ static void* PrefetchMain(void* arg) {
   struct AdbcError err = {0};
 
   for (;;) {
-    pthread_mutex_lock(&r->mu);
-    while (r->ring_filled >= r->nslots && !r->fetch_stop) pthread_cond_wait(&r->cv, &r->mu);
+    OdbcMutexLock(&r->mu);
+    while (r->ring_filled >= r->nslots && !r->fetch_stop) OdbcCondWait(&r->cv, &r->mu);
     if (r->fetch_stop) {
-      pthread_mutex_unlock(&r->mu);
+      OdbcMutexUnlock(&r->mu);
       break;
     }
     const int sl = r->ring_tail;
-    pthread_mutex_unlock(&r->mu);
+    OdbcMutexUnlock(&r->mu);
 
     struct OdbcRowsetSlot* slot = &r->slots[sl];
     slot->eos = false;
@@ -2199,22 +2187,22 @@ static void* PrefetchMain(void* arg) {
       }
     }
 
-    pthread_mutex_lock(&r->mu);
+    OdbcMutexLock(&r->mu);
     if (status != ADBC_STATUS_OK) {
       r->fetch_status = status;
       r->fetch_error = err;  // ownership moves to the reader
       memset(&err, 0, sizeof(err));
       r->fetch_failed = true;
-      pthread_cond_broadcast(&r->cv);
-      pthread_mutex_unlock(&r->mu);
+      OdbcCondBroadcast(&r->cv);
+      OdbcMutexUnlock(&r->mu);
       break;
     }
     r->ring_tail = (r->ring_tail + 1) % r->nslots;
     r->ring_filled++;
     if (slot->eos) r->fetch_done = true;
-    pthread_cond_broadcast(&r->cv);
+    OdbcCondBroadcast(&r->cv);
     const bool leave = slot->eos || stop_after;
-    pthread_mutex_unlock(&r->mu);
+    OdbcMutexUnlock(&r->mu);
     if (leave) break;
   }
   if (err.release) err.release(&err);
@@ -2222,18 +2210,18 @@ static void* PrefetchMain(void* arg) {
 }
 
 static AdbcStatusCode PrefetchStart(struct OdbcReader* r, struct AdbcError* error) {
-  if (pthread_mutex_init(&r->mu, NULL) != 0) {
+  if (OdbcMutexInit(&r->mu) != 0) {
     InternalAdbcSetError(error, "failed to create the prefetch mutex");
     return ADBC_STATUS_INTERNAL;
   }
-  if (pthread_cond_init(&r->cv, NULL) != 0) {
-    pthread_mutex_destroy(&r->mu);
+  if (OdbcCondInit(&r->cv) != 0) {
+    OdbcMutexDestroy(&r->mu);
     InternalAdbcSetError(error, "failed to create the prefetch condition variable");
     return ADBC_STATUS_INTERNAL;
   }
-  if (pthread_create(&r->fetch_thread, NULL, PrefetchMain, r) != 0) {
-    pthread_cond_destroy(&r->cv);
-    pthread_mutex_destroy(&r->mu);
+  if (OdbcThreadCreate(&r->fetch_thread, PrefetchMain, r) != 0) {
+    OdbcCondDestroy(&r->cv);
+    OdbcMutexDestroy(&r->mu);
     // Not fatal: a reader that cannot start a thread reads the ordinary way out of slot
     // 0, which ReaderBind has already bound.  `nslots` deliberately keeps its value --
     // the other slots are allocated and ReaderRelease frees exactly that many.
@@ -2245,34 +2233,34 @@ static AdbcStatusCode PrefetchStart(struct OdbcReader* r, struct AdbcError* erro
 }
 
 // Stop the fetch thread and take the handle back.  Idempotent, and the only way the
-// caller is ever allowed to touch the handle again -- pthread_join is the barrier that
+// caller is ever allowed to touch the handle again -- the join is the barrier that
 // makes the transfer of ownership real.
 static void PrefetchJoin(struct OdbcReader* r) {
   if (!r->thread_started) return;
-  pthread_mutex_lock(&r->mu);
+  OdbcMutexLock(&r->mu);
   r->fetch_stop = true;
-  pthread_cond_broadcast(&r->cv);
-  pthread_mutex_unlock(&r->mu);
-  pthread_join(r->fetch_thread, NULL);
+  OdbcCondBroadcast(&r->cv);
+  OdbcMutexUnlock(&r->mu);
+  OdbcThreadJoin(r->fetch_thread);
   r->thread_started = false;
   r->prefetching = false;
-  pthread_cond_destroy(&r->cv);
-  pthread_mutex_destroy(&r->mu);
+  OdbcCondDestroy(&r->cv);
+  OdbcMutexDestroy(&r->mu);
 }
 
 // Take the next rowset from the ring and append it to `batch`.  Sets r->done at the end
 // of the stream, and clears r->prefetching if the fetch thread handed the cursor back.
 static AdbcStatusCode PrefetchNextRowset(struct OdbcReader* r, struct ArrowArray* batch,
                                          int64_t* total, struct AdbcError* error) {
-  pthread_mutex_lock(&r->mu);
+  OdbcMutexLock(&r->mu);
   while (r->ring_filled == 0 && !r->fetch_failed && !r->fetch_done) {
-    pthread_cond_wait(&r->cv, &r->mu);
+    OdbcCondWait(&r->cv, &r->mu);
   }
   if (r->ring_filled == 0) {
     // The ring is drained; whatever the thread stopped for is now the answer.
     const bool failed = r->fetch_failed;
     const AdbcStatusCode status = r->fetch_status;
-    pthread_mutex_unlock(&r->mu);
+    OdbcMutexUnlock(&r->mu);
     PrefetchJoin(r);
     r->done = true;
     if (failed) {
@@ -2285,7 +2273,7 @@ static AdbcStatusCode PrefetchNextRowset(struct OdbcReader* r, struct ArrowArray
     return ADBC_STATUS_OK;
   }
   const int sl = r->ring_head;
-  pthread_mutex_unlock(&r->mu);
+  OdbcMutexUnlock(&r->mu);
 
   struct OdbcRowsetSlot* slot = &r->slots[sl];
   if (slot->eos) {
@@ -2313,14 +2301,13 @@ static AdbcStatusCode PrefetchNextRowset(struct OdbcReader* r, struct ArrowArray
   r->rowsets_read++;
   AdbcStatusCode status = ConvertRowset(r, slot->fetched, bulk, batch, total, error);
 
-  pthread_mutex_lock(&r->mu);
+  OdbcMutexLock(&r->mu);
   r->ring_head = (r->ring_head + 1) % r->nslots;
   r->ring_filled--;
-  pthread_cond_broadcast(&r->cv);
-  pthread_mutex_unlock(&r->mu);
+  OdbcCondBroadcast(&r->cv);
+  OdbcMutexUnlock(&r->mu);
   return status;
 }
-#endif  // ADBC_ODBC_HAVE_PREFETCH
 
 static ArrowErrorCode ReserveBatch(struct OdbcReader* r, struct ArrowArray* batch) {
   for (SQLSMALLINT i = 0; i < r->ncols; i++) {
@@ -2481,7 +2468,6 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
   // Stop before a rowset would take the batch past batch_size -- unless it is the first
   // one, since a batch always holds at least one rowset however wide the rowset is.
   while ((total == 0 || total + (int64_t)r->rows_per_fetch <= r->opts.batch_size) && !r->done) {
-#ifdef ADBC_ODBC_HAVE_PREFETCH
     if (r->prefetching) {
       status = PrefetchNextRowset(r, &batch, &total, error);
       // A hand-back clears r->prefetching, and the next turn of this loop picks the
@@ -2489,7 +2475,6 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
       if (status != ADBC_STATUS_OK) break;
       continue;
     }
-#endif
     r->slots[r->cur_slot].rows_fetched_raw = 0;
     SQLRETURN ret = SQLFetch(hstmt);
     if (ret == SQL_NO_DATA) {
@@ -2561,14 +2546,12 @@ static AdbcStatusCode ReaderNextBatch(struct OdbcReader* r, struct ArrowArray* o
 static void ReaderRelease(struct ArrowArrayStream* stream) {
   struct OdbcReader* r = (struct OdbcReader*)stream->private_data;
   if (r) {
-#ifdef ADBC_ODBC_HAVE_PREFETCH
     // The fetch thread owns the handle; nothing below may touch it until it is joined.
     // This is also the abort path: a caller that releases the stream part-way through
     // gets here with the thread mid-SQLFetch, and it is stopped at the next rowset
     // boundary rather than left running against a freed handle.
     PrefetchJoin(r);
     if (r->fetch_error.release) r->fetch_error.release(&r->fetch_error);
-#endif
     if (r->ref && r->ref->hstmt) {
       SQLCloseCursor(r->ref->hstmt);
       SQLFreeStmt(r->ref->hstmt, SQL_UNBIND);

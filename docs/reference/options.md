@@ -110,7 +110,7 @@ Set with `AdbcStatementSetOption`.
 | `adbc.odbc.array_binding` | `true`/`false` | `true` (unless a driver quirk disables it) | Bind Arrow batches as ODBC parameter arrays (one execute per batch) instead of one execute per row. |
 | `adbc.odbc.partitions` | integer `0`–`256` | `0` | Partitions `AdbcStatementExecutePartitions` aims for. `0` automatic, `1` never split. |
 | `adbc.odbc.rows_per_insert` | integer `0`–`2147483647` | `0` | Row-groups per `INSERT` during bulk ingest. `0` automatic, `1` disables the multi-row rewrite. |
-| `adbc.odbc.ingest_connections` | integer `1`–`64` | `1` | Connections a bulk ingest may spread over. `1` keeps it atomic on the caller's connection. Forced to `1` on Windows. |
+| `adbc.odbc.ingest_connections` | integer `1`–`64` | `1` | Connections a bulk ingest may spread over. `1` keeps it atomic on the caller's connection. |
 | `adbc.ingest.target_table` | string | — | Target table for bulk ingest. |
 | `adbc.ingest.target_catalog` | string | — | Target catalog for bulk ingest. |
 | `adbc.ingest.target_db_schema` | string | — | Target schema for bulk ingest. |

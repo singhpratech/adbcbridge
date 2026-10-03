@@ -17,9 +17,7 @@
 // Parameter binding (Arrow -> SQLBindParameter) and bulk ingest.
 
 #include <errno.h>
-#if !defined(_WIN32)
-#include <pthread.h>
-#endif
+#include "odbc_threads.h"
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
@@ -3373,33 +3371,30 @@ static AdbcStatusCode ExecSimple(struct OdbcConnection* conn, const char* sql, b
 // already reached the end of the queue has already committed, and those rows stay.  The
 // caller gets an error and a table holding an unspecified subset of the stream.
 
-// The parallel machinery is pthreads and is compiled out on Windows -- the same
-// choice ADBC_ODBC_HAVE_PREFETCH makes in odbc_reader.c -- so a Windows build ingests
-// on one connection (adbc.odbc.ingest_connections is clamped to 1 there).  A Win32
-// port of the queue and worker pool (SRWLOCK, CONDITION_VARIABLE, _beginthreadex)
-// is the roadmap item that lifts both limits at once.
-#if !defined(_WIN32)
+// The queue and the worker pool use the primitives in odbc_threads.h, so they build
+// the same way on POSIX (pthreads) and Windows (SRWLOCK, CONDITION_VARIABLE,
+// _beginthreadex).
 // A batch handed out in pieces: the slices share the original array's buffers, and the
 // last slice released frees the original.
 struct BatchOwner {
   struct ArrowArray base;
-  pthread_mutex_t mu;
+  OdbcMutex mu;
   int refs;
 };
 
 static void BatchOwnerRef(struct BatchOwner* o) {
-  pthread_mutex_lock(&o->mu);
+  OdbcMutexLock(&o->mu);
   o->refs++;
-  pthread_mutex_unlock(&o->mu);
+  OdbcMutexUnlock(&o->mu);
 }
 
 static void BatchOwnerUnref(struct BatchOwner* o) {
-  pthread_mutex_lock(&o->mu);
+  OdbcMutexLock(&o->mu);
   bool last = (--o->refs == 0);
-  pthread_mutex_unlock(&o->mu);
+  OdbcMutexUnlock(&o->mu);
   if (!last) return;
   if (o->base.release) o->base.release(&o->base);
-  pthread_mutex_destroy(&o->mu);
+  OdbcMutexDestroy(&o->mu);
   free(o);
 }
 
@@ -3490,9 +3485,9 @@ static struct ArrowArray* SliceMake(struct BatchOwner* o, int64_t off, int64_t l
 // The queue between the pump and the workers.  Bounded, so a fast producer cannot pull
 // the whole stream into memory ahead of the servers that have to swallow it.
 struct IngestQueue {
-  pthread_mutex_t mu;
-  pthread_cond_t not_empty;
-  pthread_cond_t not_full;
+  OdbcMutex mu;
+  OdbcCond not_empty;
+  OdbcCond not_full;
   struct ArrowArray** slots;
   int64_t cap;
   int64_t head;
@@ -3506,9 +3501,9 @@ static bool QueueInit(struct IngestQueue* q, int64_t cap) {
   q->slots = (struct ArrowArray**)calloc((size_t)cap, sizeof(*q->slots));
   if (!q->slots) return false;
   q->cap = cap;
-  pthread_mutex_init(&q->mu, NULL);
-  pthread_cond_init(&q->not_empty, NULL);
-  pthread_cond_init(&q->not_full, NULL);
+  OdbcMutexInit(&q->mu);
+  OdbcCondInit(&q->not_empty);
+  OdbcCondInit(&q->not_full);
   return true;
 }
 
@@ -3522,24 +3517,24 @@ static void QueueDestroy(struct IngestQueue* q) {
     }
   }
   free(q->slots);
-  pthread_mutex_destroy(&q->mu);
-  pthread_cond_destroy(&q->not_empty);
-  pthread_cond_destroy(&q->not_full);
+  OdbcMutexDestroy(&q->mu);
+  OdbcCondDestroy(&q->not_empty);
+  OdbcCondDestroy(&q->not_full);
 }
 
 // Hand one batch to whichever worker gets to it first.  False means the queue has
 // failed and the caller should stop pumping; the batch is still the caller's to drop.
 static bool QueuePush(struct IngestQueue* q, struct ArrowArray* a) {
-  pthread_mutex_lock(&q->mu);
-  while (q->count == q->cap && !q->failed) pthread_cond_wait(&q->not_full, &q->mu);
+  OdbcMutexLock(&q->mu);
+  while (q->count == q->cap && !q->failed) OdbcCondWait(&q->not_full, &q->mu);
   if (q->failed) {
-    pthread_mutex_unlock(&q->mu);
+    OdbcMutexUnlock(&q->mu);
     return false;
   }
   q->slots[(q->head + q->count) % q->cap] = a;
   q->count++;
-  pthread_cond_signal(&q->not_empty);
-  pthread_mutex_unlock(&q->mu);
+  OdbcCondSignal(&q->not_empty);
+  OdbcMutexUnlock(&q->mu);
   return true;
 }
 
@@ -3548,39 +3543,39 @@ static bool QueuePush(struct IngestQueue* q, struct ArrowArray* a) {
 #define INGEST_POP_FAILED 2
 
 static int QueuePop(struct IngestQueue* q, struct ArrowArray** out) {
-  pthread_mutex_lock(&q->mu);
-  while (q->count == 0 && !q->done && !q->failed) pthread_cond_wait(&q->not_empty, &q->mu);
+  OdbcMutexLock(&q->mu);
+  while (q->count == 0 && !q->done && !q->failed) OdbcCondWait(&q->not_empty, &q->mu);
   if (q->failed) {
-    pthread_mutex_unlock(&q->mu);
+    OdbcMutexUnlock(&q->mu);
     return INGEST_POP_FAILED;
   }
   if (q->count == 0) {
-    pthread_mutex_unlock(&q->mu);
+    OdbcMutexUnlock(&q->mu);
     return INGEST_POP_END;
   }
   *out = q->slots[q->head];
   q->slots[q->head] = NULL;
   q->head = (q->head + 1) % q->cap;
   q->count--;
-  pthread_cond_signal(&q->not_full);
-  pthread_mutex_unlock(&q->mu);
+  OdbcCondSignal(&q->not_full);
+  OdbcMutexUnlock(&q->mu);
   return INGEST_POP_OK;
 }
 
 static void QueueFinish(struct IngestQueue* q) {
-  pthread_mutex_lock(&q->mu);
+  OdbcMutexLock(&q->mu);
   q->done = true;
-  pthread_cond_broadcast(&q->not_empty);
-  pthread_cond_broadcast(&q->not_full);
-  pthread_mutex_unlock(&q->mu);
+  OdbcCondBroadcast(&q->not_empty);
+  OdbcCondBroadcast(&q->not_full);
+  OdbcMutexUnlock(&q->mu);
 }
 
 static void QueueFail(struct IngestQueue* q) {
-  pthread_mutex_lock(&q->mu);
+  OdbcMutexLock(&q->mu);
   q->failed = true;
-  pthread_cond_broadcast(&q->not_empty);
-  pthread_cond_broadcast(&q->not_full);
-  pthread_mutex_unlock(&q->mu);
+  OdbcCondBroadcast(&q->not_empty);
+  OdbcCondBroadcast(&q->not_full);
+  OdbcMutexUnlock(&q->mu);
 }
 
 // The stream one worker sees: the shared queue, dressed as an ArrowArrayStream so that
@@ -3632,7 +3627,7 @@ static void WorkerStreamRelease(struct ArrowArrayStream* s) {
 }
 
 struct IngestWorker {
-  pthread_t tid;
+  OdbcThread tid;
   bool started;
   struct IngestQueue* q;
   struct OdbcDatabase* db;
@@ -3688,7 +3683,7 @@ static bool PumpBatch(struct IngestQueue* q, struct ArrowArray* batch) {
   if (!o) return PumpWhole(q, batch);
   o->base = *batch;
   memset(batch, 0, sizeof(*batch));
-  pthread_mutex_init(&o->mu, NULL);
+  OdbcMutexInit(&o->mu);
   o->refs = 1;  // held by the pump while it slices
   bool ok = true;
   for (int64_t off = 0; off < o->base.length;) {
@@ -3794,7 +3789,7 @@ static AdbcStatusCode IngestParallel(struct OdbcStatement* stmt, int64_t nconn,
     w->stmt.bind_stream.release = WorkerStreamRelease;
     w->stmt.has_bind = true;
 
-    if (pthread_create(&w->tid, NULL, IngestWorkerMain, w) != 0) {
+    if (OdbcThreadCreate(&w->tid, IngestWorkerMain, w) != 0) {
       InternalAdbcSetError(error, "Could not start parallel ingest worker %lld", (long long)i);
       status = ADBC_STATUS_INTERNAL;
       break;
@@ -3835,7 +3830,7 @@ static AdbcStatusCode IngestParallel(struct OdbcStatement* stmt, int64_t nconn,
   QueueFinish(&q);
 
   for (int64_t i = 0; i < nconn; i++) {
-    if (workers[i].started) pthread_join(workers[i].tid, NULL);
+    if (workers[i].started) OdbcThreadJoin(workers[i].tid);
   }
 
   // Which worker's failure to report.  When one worker breaks a constraint it trips the
@@ -3889,7 +3884,6 @@ static AdbcStatusCode IngestParallel(struct OdbcStatement* stmt, int64_t nconn,
   if (rows_affected) *rows_affected = total;
   return ADBC_STATUS_OK;
 }
-#endif  // !_WIN32
 
 AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_affected,
                                    struct AdbcError* error) {
@@ -4031,16 +4025,10 @@ AdbcStatusCode OdbcStatementIngest(struct OdbcStatement* stmt, int64_t* rows_aff
   // actually visible to another connection.  Inside the caller's own transaction it is
   // not -- the CREATE TABLE is uncommitted -- so fall back to the one-connection path,
   // which is correct, atomic, and merely slower.
-#if defined(_WIN32)
-  const bool fan_out = false;  // no worker pool on Windows; see above
-  AdbcStatusCode ingest_status = OdbcStatementExecuteBound(stmt, NULL, rows_affected, error);
-  (void)fan_out;
-#else
   const bool fan_out = stmt->ingest_connections > 1 && conn->autocommit && conn->db;
   AdbcStatusCode ingest_status =
       fan_out ? IngestParallel(stmt, stmt->ingest_connections, rows_affected, error)
               : OdbcStatementExecuteBound(stmt, NULL, rows_affected, error);
-#endif
   // The multi-row rewrite is scoped to this one ingest: a later ExecuteQuery on the same
   // statement must never see it.
   free(stmt->ingest_into);

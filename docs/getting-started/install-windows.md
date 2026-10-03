@@ -133,21 +133,13 @@ means `driver="odbc"` will not find the library.
 
 ## Prefetch and parallel ingest on Windows
 
-Two features are compiled out on Windows because both are built on pthreads,
-which is a POSIX facility (the guard is `_WIN32`):
-
-- the **prefetch pipeline** (`adbc.odbc.prefetch`), which overlaps ODBC fetches
-  with Arrow conversion on a background thread; and
-- **parallel bulk ingest** (`adbc.odbc.ingest_connections`), which spreads one
-  ingest over several connections. On Windows `ingest_connections` is clamped to
-  1.
-
-Everything else — queries, types, parameters, single-connection bulk ingest,
-metadata, error mapping — works. Because these two are absent, a Windows read or
-ingest measures a materially different code path from the Linux one; keep that in
-mind when comparing performance across platforms. A Win32 port of both (using
-SRWLOCK, CONDITION_VARIABLE and `_beginthreadex`) is on the roadmap — see
-[ROADMAP.md](../ROADMAP.md).
+Both work on Windows from 0.1.4. The **prefetch pipeline** (`adbc.odbc.prefetch`),
+which overlaps ODBC fetches with Arrow conversion on a background thread, and
+**parallel bulk ingest** (`adbc.odbc.ingest_connections`), which spreads one ingest
+over several connections, run on Win32 threads (SRWLOCK, CONDITION_VARIABLE,
+`_beginthreadex`) with the same behaviour and the same options as on Linux and
+macOS. Releases before 0.1.4 compiled both out on Windows: there `adbc.odbc.prefetch`
+reads unpipelined and `ingest_connections` stays at 1.
 
 > **Tip: `NO_SSPS=1` for MySQL Connector/ODBC against non-MySQL servers.** The
 > Windows MySQL Connector/ODBC needs `NO_SSPS=1` (no server-side prepared

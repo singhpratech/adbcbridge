@@ -388,7 +388,7 @@ the [roadmap](../ROADMAP.md).
 
 For the ODBC bridge: a driver-bootstrap installer that fetches the open-licence
 drivers, Maven Central publication, the ADBC Driver Foundry validation
-suite, and Windows parity for prefetch and parallel ingest. Beyond ODBC: a
+suite. Beyond ODBC: a
 **JDBC bridge** (load a JVM in-process and drive any JDBC driver) and, later, an
 **OLE DB bridge** for Windows. Full detail and status in
 [`docs/ROADMAP.md`](../ROADMAP.md).
