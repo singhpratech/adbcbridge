@@ -13,10 +13,9 @@ conn = dbapi.connect(driver="libadbc_driver_odbc.so", db_kwargs={
 ```
 
 It is **off by default**, because whether it is safe is a property of the ODBC driver
-underneath and no driver can be asked. It is also absent from the Windows build: the
-pipeline is pthreads and is compiled out on `_WIN32` until the Win32 thread shim lands
-([roadmap](../ROADMAP.md)); `adbc.odbc.prefetch` is accepted there and reads run
-unpipelined. Two things make it safe where it does engage:
+underneath and no driver can be asked. (Before 0.1.4 the pipeline was also absent
+from the Windows build; it now runs on Win32 threads there, with the same rules.) Two
+things make it safe where it does engage:
 
 * The statement handle is owned by exactly one thread at a time. The fetch thread owns it
   from `pthread_create` to `pthread_join` and the calling thread touches it only outside

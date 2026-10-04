@@ -264,8 +264,6 @@ Everything below except the benchmark index lives under [`docs/`](docs/index.md)
   Flight SQL) is handed to that driver, when it is installed.
 - Every ODBC driver quirk that the 53 databases needed is detected from the driver's own
   name and handled — [driver quirks](docs/reference/quirks.md).
-- Windows: the prefetch pipeline and parallel ingest are compiled out until a Win32 thread
-  shim lands — [roadmap](docs/ROADMAP.md).
 
 ## Language packages
 

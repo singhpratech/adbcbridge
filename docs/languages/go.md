@@ -235,7 +235,7 @@ go through unchanged.
 | `adbc.odbc.rowset_bytes` | ceiling on a reader's bound rowset buffers, in bytes (default 8388608) |
 | `adbc.odbc.decimal_as_string` | `true` to return DECIMAL/NUMERIC as strings |
 | `adbc.odbc.partitions` | partitions `ExecutePartitions` splits a query into — `0` (default) auto, `1` never. Set on the **statement** |
-| `adbc.odbc.prefetch` | rowsets kept in flight on a background fetch thread — `0` (default) off, up to `8`. Settable on database/connection/statement. *(Compiled out on Windows; see [Known limitations](#known-limitations).)* |
+| `adbc.odbc.prefetch` | rowsets kept in flight on a background fetch thread — `0` (default) off, up to `8`. Settable on database/connection/statement. |
 | `adbc.odbc.delegate` | `auto` (default) / `never` / `always` — native delegation |
 | `adbc.odbc.delegate.driver` | force a specific native driver (bare or manifest name; a path only with `allow_paths`) |
 | `adbc.odbc.delegate.search_path` | extra directories to search for native drivers (`:`-separated); needs `allow_paths` |
@@ -245,7 +245,7 @@ go through unchanged.
 | `adbc.odbc.tune` | `true` (default) / `false` — may the driver add ODBC connection keywords of its own where it recognises the target? |
 | `adbc.odbc.sqllen_32bit` | force the 32-bit-`SQLLEN` driver quirk on/off (autodetected for IBM Db2). Also settable on connection/statement |
 | `adbc.odbc.rows_per_insert` | rows of parameters per `INSERT` for **bulk ingest** — `0` (default) auto, `1` off |
-| `adbc.odbc.ingest_connections` | connections a **bulk ingest** may spread over — `1` (default) single transaction; `N > 1` **trades atomicity for speed** *(compiled out on Windows)* |
+| `adbc.odbc.ingest_connections` | connections a **bulk ingest** may spread over — `1` (default) single transaction; `N > 1` **trades atomicity for speed** |
 | `adbc.odbc.array_binding` | `true` (default) binds each Arrow batch as a column-wise parameter array; `false` forces row-at-a-time |
 
 ### Native delegation
@@ -414,10 +414,6 @@ loading it does.
   (`adbc.Database` / `adbc.Connection` / `adbc.Statement`), not a
   `database/sql` driver. If you need `database/sql` against ODBC, that is a
   separate third-party driver, unrelated to adbcBridge.
-- **Windows: no prefetch, no parallel ingest.** The prefetch pipeline
-  (`adbc.odbc.prefetch`) and the ingest fan-out (`adbc.odbc.ingest_connections`)
-  use POSIX threads and are compiled out on Windows; those options have no
-  effect there. Queries and single-connection ingest work normally.
 - **A third-party `database/sql` ODBC driver was measured to crash on
   Windows.** The repository's Go benchmark compares adbcBridge against
   `github.com/alexbrainman/odbc` (a separate `database/sql` ODBC driver, *not*

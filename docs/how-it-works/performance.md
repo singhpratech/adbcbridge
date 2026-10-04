@@ -22,9 +22,8 @@ numbers with these in mind:
 What this means for the headline figures: the PostgreSQL-vs-native ratio (1.2–1.5× fetch)
 holds on the Linux host when it is quiet and drops to 0.97× with 46 containers idling and
 0.60× on the M4 Max; per-language rates agree within a band on each machine but are not
-comparable across machines; and Windows rows measure a materially different code path
-(no prefetch, no fan-out), and were taken with several runs and containers sharing the
-box. Each benchmark file opens with the
+comparable across machines; and the Windows rows were measured before 0.1.4, on a build
+without prefetch or ingest fan-out, with several runs and containers sharing the box. Each benchmark file opens with the
 exact host state of its runs (`bench/BENCHMARKS.md`, `bench/BENCHMARKS-macos.md`,
 `bench/BENCHMARKS-windows.md`).
 
