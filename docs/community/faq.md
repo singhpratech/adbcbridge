@@ -386,9 +386,8 @@ the [roadmap](../ROADMAP.md).
 
 ### What is on the roadmap?
 
-For the ODBC bridge: a driver-bootstrap installer that fetches the open-licence
-drivers, Maven Central publication, the ADBC Driver Foundry validation
-suite. Beyond ODBC: a
+For the ODBC bridge: the Windows counterpart of `install.sh --drivers`, and the
+items in the roadmap's "now" table. Beyond ODBC: a
 **JDBC bridge** (load a JVM in-process and drive any JDBC driver) and, later, an
 **OLE DB bridge** for Windows. Full detail and status in
 [`docs/ROADMAP.md`](../ROADMAP.md).

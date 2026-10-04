@@ -191,6 +191,37 @@ jobs:
           ADBC_ODBC_DRIVER: ${{ github.workspace }}/build/libadbc_driver_odbc.so
         run: python tests/test_sqlite.py
 
+      # install.sh --drivers: the bridge into ~/.local plus the four open-licence
+      # drivers (apt for three, ClickHouse's checksummed tarball for the fourth).
+      # Its own build tree, so the CI build above is left alone; the manifest it
+      # writes to ~/.config/adbc/drivers is what driver="odbc" resolves through.
+      - name: Driver bootstrap (install.sh --drivers, Linux)
+        if: runner.os == 'Linux'
+        env:
+          BUILD_DIR: ${{ github.workspace }}/build-install
+        run: |
+          set -o pipefail
+          ./install.sh --drivers | tee install.log
+          grep -E '^  (sqlite|postgres|mysql|clickhouse) +ok ' install.log | wc -l | grep -qx 4
+          python - <<'PY'
+          import os, glob, ctypes
+          import adbc_driver_manager.dbapi as dbapi
+          with dbapi.connect(driver="odbc", db_kwargs={"uri": "Driver=SQLite3;Database=:memory:;"}) as conn:
+              with conn.cursor() as cur:
+                  cur.execute("SELECT 1 AS one")
+                  assert cur.fetch_arrow_table().to_pydict() == {"one": [1]}
+          for name in ("PostgreSQL Unicode", "MariaDB Unicode"):
+              # No server in this job: a driver that loads and answers the handshake is enough.
+              try:
+                  dbapi.connect(driver="odbc", db_kwargs={"uri": f"Driver={name};Server=127.0.0.1;Port=1;Uid=x;Pwd=x;"})
+              except Exception as e:
+                  assert "SQLDriverConnect" in str(e), e  # reached the driver; refused by the (absent) server
+          ch = glob.glob(os.path.expanduser("~/.local/odbc-drivers/clickhouse-odbc-*/lib/libclickhouseodbcw.so"))
+          assert ch, "clickhouse-odbc not unpacked"
+          ctypes.CDLL(ch[0])
+          print("driver bootstrap OK")
+          PY
+
       # The Python package (python/) is a thin wrapper around the library built
       # above; ADBC_ODBC_DRIVER points its driver lookup at that build.
       - name: Test the Python package (Linux)

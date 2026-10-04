@@ -156,7 +156,8 @@ as shown in [the iODBC section](#when-you-need-a-bridge-built-against-iodbc-inst
 ### Via install.sh
 
 ```sh
-./install.sh
+./install.sh             # the bridge only
+./install.sh --drivers   # the bridge plus sqliteodbc, psqlodbc, MariaDB Connector/ODBC and clickhouse-odbc
 ```
 
 On macOS `install.sh` writes the library under `~/.local/lib` and the manifest
@@ -164,6 +165,14 @@ into the ADBC user config directory, which on macOS is
 `~/Library/Application Support/ADBC/Drivers/odbc.toml`. The `PREFIX`,
 `MANIFEST_DIR`, `BUILD_DIR`, `BUILD_TYPE` and `JOBS` overrides from the
 [Linux page](install-linux.md#via-installsh) apply unchanged.
+
+`--drivers` installs the three unixODBC drivers through Homebrew (`sqliteodbc`,
+`psqlodbc`, `mariadb-connector-odbc`, no root) and unpacks clickhouse-odbc's
+macOS release tarball (pinned version, SHA-256 checked) under
+`~/.local/odbc-drivers`. Homebrew formulae do not register driver names in
+`odbcinst.ini`, so the script prints each library's path, which is what goes
+after `Driver=`. The iODBC-only drivers in the table above are not part of this;
+they need the second bridge build described there.
 
 ## The ADBC driver manifest
 
