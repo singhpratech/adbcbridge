@@ -147,14 +147,39 @@ installs into your home directory, and writes the manifest into the ADBC user
 config directory so discovery just works.
 
 ```sh
-./install.sh
+./install.sh             # the bridge only
+./install.sh --drivers   # the bridge plus the four open-licence ODBC drivers below
 ```
 
 It puts the library in `~/.local/lib/libadbc_driver_odbc.so` (`lib64` on
 Fedora/RHEL-style 64-bit systems) and the manifest in
 `~/.config/adbc/drivers/odbc.toml`, then prints both paths. Re-running it is
-safe — it reconfigures the same build tree and overwrites the same two files. It
-honours these environment overrides:
+safe — it reconfigures the same build tree and overwrites the same two files.
+
+**`--drivers`** also installs the drivers a first run usually needs, so SQLite,
+PostgreSQL, MySQL/MariaDB and ClickHouse work with nothing else fetched by hand:
+
+| Database | Driver | How it is installed |
+|---|---|---|
+| SQLite | sqliteodbc | `apt install libsqliteodbc` / `dnf install sqliteodbc`, through `sudo` |
+| PostgreSQL | psqlodbc | `apt install odbc-postgresql` / `dnf install postgresql-odbc` |
+| MySQL / MariaDB | MariaDB Connector/ODBC | `apt install odbc-mariadb` / `dnf install mariadb-connector-odbc` |
+| ClickHouse | clickhouse-odbc | the project's release tarball (pinned version, SHA-256 checked), unpacked under `~/.local/odbc-drivers`, no root |
+
+The first three go through the system package manager on purpose: their
+runtime libraries (`libpq`, `libmariadb`) have to be on the loader path, which
+only the package manager arranges, and the package registers the driver's name
+(`SQLite3`, `PostgreSQL Unicode`, `MariaDB Unicode`) in `odbcinst.ini` so it
+works after `Driver=`. clickhouse-odbc has no distribution package and links its
+C++ runtime in, so it is unpacked for the current user and used by path. The
+script ends with a table of what landed where, whether each library loads, and
+a connection string for each. `--drivers=sqlite,postgres` limits it to some of
+the four; `--drivers-only` skips the build when the bridge is already installed.
+Vendor drivers whose licences do not allow redistribution (Oracle, Db2, SQL
+Server, Snowflake, …) stay a separate download — section 2 above and the
+[compatibility matrix](../COMPATIBILITY.md) name each one.
+
+`install.sh` honours these environment overrides:
 
 | Variable | Meaning | Default |
 |---|---|---|
@@ -163,6 +188,7 @@ honours these environment overrides:
 | `BUILD_DIR` | CMake build tree | `<repo>/build` |
 | `BUILD_TYPE` | CMake build type | `Release` |
 | `JOBS` | parallel build jobs | `nproc` |
+| `SUDO` | command that runs the package manager as root for `--drivers` | `sudo` (empty when already root) |
 
 > **Troubleshooting:** If `install.sh` stops with `cmake not found`, install the
 > build prerequisites first — on Debian/Ubuntu `sudo apt install cmake
