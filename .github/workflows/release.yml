@@ -305,7 +305,7 @@ jobs:
           gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 --armor --detach-sign SHA256SUMS 3<<<"$GPG_PASSPHRASE"
           gpg --verify SHA256SUMS.asc SHA256SUMS
       - name: SBOM of the source tree (SPDX JSON)
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@v0.24.3
         with:
           path: .
           format: spdx-json
