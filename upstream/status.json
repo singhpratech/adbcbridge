@@ -1,5 +1,5 @@
 {
- "as_of": "2026-10-11T12:58:55Z",
+ "as_of": "2026-10-12T15:36:45Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 26,
@@ -1748,7 +1748,7 @@
    "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-10-03T22:05:29Z",
-   "pulse": true
+   "pulse": false
   }
  ]
 }
