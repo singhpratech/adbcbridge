@@ -1,5 +1,5 @@
 {
- "as_of": "2026-10-12T15:36:45Z",
+ "as_of": "2026-10-13T14:18:51Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 26,
@@ -522,12 +522,28 @@
      "association": "owner",
      "text": "Ok, I have added a check for writing past 12 bytes in sqlstate, its in a2acae7 At least this stops the disaster as soon as we can see it.",
      "url": "https://github.com/lurcher/unixODBC/issues/239#issuecomment-5413271552"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-10-13T05:17:44Z",
+     "actor": "jan-cipa",
+     "title": "Harden driver diagnostic text copies in __info.c",
+     "url": "https://github.com/lurcher/unixODBC/pull/241",
+     "state": "merged"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-10-13T07:10:19Z",
+     "actor": "jan-cipa",
+     "title": "Harden driver diagnostic text in pass-through and connect-time capture",
+     "url": "https://github.com/lurcher/unixODBC/pull/242",
+     "state": "merged"
     }
    ],
    "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-08-25T16:10:30Z",
-   "pulse": false
+   "last_activity": "2026-10-13T07:10:19Z",
+   "pulse": true
   },
   {
    "project": "OpenLink Virtuoso",
