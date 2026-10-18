@@ -1,5 +1,5 @@
 {
- "as_of": "2026-10-17T20:40:26Z",
+ "as_of": "2026-10-18T11:16:14Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 27,
@@ -1567,11 +1567,27 @@
      "association": "contributor",
      "text": "The empty `SQLColumns` and the `SQLTables(SQL_ALL_TABLE_TYPES)` error still reproduce on 26.10.2 and on current main. I narrowed them to five catalog query shapes that psqlodbc and psql send (a parenthesised join in FROM, a join to `pg_am`, `OPERATOR(pg_catalog.=)`, a `UNION` over literals, and `count(*)` over a catalog relation) and filed them as #10228, with a reproduction against PostgreSQL 17 …",
      "url": "https://github.com/ArcadeData/arcadedb/discussions/6888#discussioncomment-19003101"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-10-17T20:04:01Z",
+     "actor": "lvca",
+     "title": "fix(postgresw): psql \\dt/\\d and psqlodbc SQLColumns/SQLTables answer the catalog (#10228)",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/10242",
+     "state": "merged"
+    },
+    {
+     "type": "comment",
+     "at": "2026-10-18T06:58:33Z",
+     "actor": "tae898",
+     "association": "contributor",
+     "text": "Fixed on main by #10242 (issue #10228), merged on 2026-10-18; it ships in 26.11.1. Verified on main `a2c54ef20f`: the 5 catalog query shapes that psqlodbc's `SQLColumns` and `SQLTables` and psql send now answer, and psql's `\\dt` lists the 3 types of the test database, where 26.10.2 finds no relations. Details and the script are on #10228.",
+     "url": "https://github.com/ArcadeData/arcadedb/discussions/6888#discussioncomment-19013433"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-10-17T19:11:27Z",
+   "last_activity": "2026-10-18T06:58:33Z",
    "pulse": true
   },
   {
