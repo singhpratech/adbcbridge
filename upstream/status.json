@@ -1,5 +1,5 @@
 {
- "as_of": "2026-10-21T11:58:13Z",
+ "as_of": "2026-10-24T11:10:56Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 27,
@@ -387,12 +387,20 @@
      "association": "member",
      "text": "Hi. Thank you for adding omniload to your README. We took the chance to submit it also to another list where we may have initially picked up ingestr. - https://github.com/igorbarinov/awesome-data-engineering/pull/370",
      "url": "https://github.com/panodata/omniload/pull/362#issuecomment-5719376236"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-10-24T09:24:27Z",
+     "actor": "hampsterx",
+     "title": "fix(sql): restore the table loader after query construction",
+     "url": "https://github.com/panodata/omniload/pull/427",
+     "state": "open"
     }
    ],
    "reporter_comments": 3,
    "community_comments": 0,
-   "last_activity": "2026-09-17T18:34:21Z",
-   "pulse": false
+   "last_activity": "2026-10-24T09:24:27Z",
+   "pulse": true
   },
   {
    "project": "omniload",
