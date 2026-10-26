@@ -1,5 +1,5 @@
 {
- "as_of": "2026-10-24T20:55:07Z",
+ "as_of": "2026-10-26T13:12:37Z",
  "window_days": 7,
  "count": 39,
  "with_project_activity": 27,
@@ -1596,7 +1596,7 @@
    "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-10-18T06:58:33Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "ArcadeDB",
