@@ -216,7 +216,8 @@ Everything below except the benchmark index lives under [`docs/`](docs/index.md)
 [Install on Linux](docs/getting-started/install-linux.md) ·
 [Install on macOS](docs/getting-started/install-macos.md) ·
 [Install on Windows](docs/getting-started/install-windows.md) ·
-[Your first query, in six languages](docs/getting-started/first-query.md)
+[Your first query, in six languages](docs/getting-started/first-query.md) ·
+[QuestDB over QWP, the native driver](docs/getting-started/questdb-qwp.md)
 
 **Use it from** — [Python](docs/languages/python.md) · [Rust](docs/languages/rust.md) ·
 [.NET (C#)](docs/languages/csharp.md) · [Java](docs/languages/java.md) ·
@@ -299,8 +300,10 @@ Early (0.1.3). Working: everything under *What it does*, on Linux, macOS (arm64)
 Windows (x64 and Win32 built and tested in CI on every push); 0.1.3 on PyPI, crates.io,
 nuget.org and Maven Central. The ADBC Driver
 Foundry validation suite passes on PostgreSQL apart from declared server limits
-([`tests/validation/RESULTS.md`](tests/validation/RESULTS.md)). Next: a JDBC bridge on the
-same model — [`docs/ROADMAP.md`](docs/ROADMAP.md).
+([`tests/validation/RESULTS.md`](tests/validation/RESULTS.md)). A second bridge,
+`adbc_driver_questdb`, speaks QuestDB 10's native wire protocol (QWP) through QuestDB's
+own C client: [docs/getting-started/questdb-qwp.md](docs/getting-started/questdb-qwp.md).
+Next: a JDBC bridge on the same model — [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Upstream: giving back
 

@@ -31,14 +31,30 @@ ODBC is the first bridge; the name leaves room for the others.
 | Language packages: Python wheel (`python/`), Rust crate (`rust/`), NuGet (`csharp/`), Maven (`java/`), Go module (`go/`) — built and attached to every release (the crate tested there, the others by their own suites under `tests/`); PyPI, crates.io, nuget.org and Maven Central (`org.adbcbridge:adbcbridge`, published 2026-09-04 through the Central Portal, `java/PUBLISHING.md`) carry 0.1.0 | done |
 | Databases that need vendor downloads behind a login: Teradata, Snowflake, Databricks/Spark (Simba), Hive | help wanted |
 
-## 2. JDBC bridge (`libadbc_driver_jdbc`) — next
+## 2. QuestDB bridge (`libadbc_driver_questdb`) — now
+
+QuestDB 10 moved its preferred wire to QWP, its own columnar protocol over WebSocket, and
+asked for ADBC to arrive that way rather than over the PostgreSQL wire
+([questdb/roadmap#126](https://github.com/questdb/roadmap/issues/126)). This driver is
+an ADBC 1.1.0 shell over QuestDB's official C client: results are the client's Arrow
+batches passed through, ingest is Arrow batches the other way
+([docs/getting-started/questdb-qwp.md](getting-started/questdb-qwp.md)).
+
+| Milestone | Status |
+|---|---|
+| Driver: connect (basic auth, token, TLS), queries with bind parameters, `ExecuteUpdate` row counts, bulk ingest in the four ADBC modes with `CREATE TABLE` from the Arrow schema, catalog (`GetObjects`, `GetTableSchema`, `GetTableTypes`), cancel, per-query timeout; `questdb/` ([#165](https://github.com/singhpratech/adbcbridge/issues/165)) | done 0.1.4 (Linux CI against QuestDB 10.1.0) |
+| macOS and Windows builds in CI | next |
+| Packaging: PyPI wheel bundling the library, driver manifest | next |
+| Measured against the ODBC route and the native PostgreSQL ADBC driver on the same workload, published as a note | next |
+
+## 3. JDBC bridge (`libadbc_driver_jdbc`) — next
 
 Same idea for the JDBC universe: load a JVM in-process (JNI), drive any JDBC driver, and
 return Arrow batches through the ADBC ABI — so Python, R, Go, Rust and C# can use JDBC-only
 drivers without a Java application. Apache Arrow already has a Java-side JDBC adapter; this
 is the C-side one.
 
-## 3. OLE DB bridge — later
+## 4. OLE DB bridge — later
 
 Windows-only; covers the few remaining sources that have OLE DB providers but no ODBC driver.
 

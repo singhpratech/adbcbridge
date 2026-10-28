@@ -346,3 +346,54 @@ jobs:
             ADBC_DRIVER_PATH="${{ github.workspace }}/$prefix/etc/adbc/drivers" \
               python check_manifest.py
           done
+
+  # The QuestDB driver (questdb/): ADBC over QWP through QuestDB's C client, which is
+  # written in Rust.  Built from the hash-pinned client tarball and exercised against a
+  # real QuestDB 10 server: the C smoke test and questdb/tests/test_qwp.py (every column
+  # type, bind parameters, bulk ingest in all four modes, catalog, errors).
+  questdb:
+    name: QuestDB over QWP (adbc_driver_questdb)
+    runs-on: ubuntu-latest
+    services:
+      questdb:
+        image: questdb/questdb:10.1.0
+        ports:
+          - 9000:9000
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache the client build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build-questdb/cargo
+          key: questdb-client-${{ runner.os }}-${{ hashFiles('questdb/CMakeLists.txt') }}
+      - name: Configure and build
+        run: |
+          cmake -S questdb -B build-questdb -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-questdb -j"$(nproc)"
+          ls -la build-questdb/libadbc_driver_questdb.so
+      - name: Wait for QuestDB
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf "http://127.0.0.1:9000/exec?query=select%201" >/dev/null && exit 0
+            sleep 1
+          done
+          echo "::error::QuestDB did not come up"; exit 1
+      - name: C smoke test
+        env:
+          QUESTDB_URI: ws://127.0.0.1:9000
+        run: ./build-questdb/adbc_questdb_test_driver build-questdb/libadbc_driver_questdb.so
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip "adbc-driver-manager>=1.7" pyarrow pytest
+      - name: Python suite
+        env:
+          QUESTDB_URI: ws://127.0.0.1:9000
+          ADBC_QUESTDB_DRIVER: ${{ github.workspace }}/build-questdb/libadbc_driver_questdb.so
+        run: python -m pytest questdb/tests/test_qwp.py -v -p no:cacheprovider
