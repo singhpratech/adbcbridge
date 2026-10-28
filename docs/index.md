@@ -115,6 +115,7 @@ planned.
 | Install on macOS | [getting-started/install-macos.md](getting-started/install-macos.md) |
 | Install on Windows | [getting-started/install-windows.md](getting-started/install-windows.md) |
 | Run my first query, in any language | [getting-started/first-query.md](getting-started/first-query.md) |
+| Talk to QuestDB 10 over its native protocol (QWP) | [getting-started/questdb-qwp.md](getting-started/questdb-qwp.md) |
 | Use it from Python | [languages/python.md](languages/python.md) |
 | Use it from Rust | [languages/rust.md](languages/rust.md) |
 | Use it from C# | [languages/csharp.md](languages/csharp.md) |
