@@ -201,6 +201,19 @@ The module carries no binary: the library comes from `install.sh`, a release dow
 the manifest, or is embedded with `-tags adbcbridge_embed`.
 Full page: [`docs/languages/go.md`](docs/languages/go.md).
 
+### TypeScript and JavaScript (Node.js)
+
+Through the Apache Arrow project's Node.js ADBC driver manager, no package of our own needed —
+[`docs/languages/typescript.md`](docs/languages/typescript.md):
+
+```typescript
+import { AdbcDatabase } from '@apache-arrow/adbc-driver-manager'   // npm i @apache-arrow/adbc-driver-manager apache-arrow
+
+const db = new AdbcDatabase({ driver: 'odbc', databaseOptions: { 'adbc.odbc.connection_string': 'Driver=…' } })
+const conn = await db.connect()
+const table = await conn.query('SELECT …')          // an apache-arrow Table
+```
+
 ### C, C++ and R
 
 The C ABI directly — `dlopen` + `AdbcDriverInit`, or the ADBC driver manager —
@@ -221,7 +234,7 @@ Everything below except the benchmark index lives under [`docs/`](docs/index.md)
 
 **Use it from** — [Python](docs/languages/python.md) · [Rust](docs/languages/rust.md) ·
 [.NET (C#)](docs/languages/csharp.md) · [Java](docs/languages/java.md) ·
-[Go](docs/languages/go.md) · [C and C++](docs/languages/c.md) · [R](docs/languages/r.md)
+[Go](docs/languages/go.md) · [TypeScript (Node.js)](docs/languages/typescript.md) · [C and C++](docs/languages/c.md) · [R](docs/languages/r.md)
 
 **How it works** — [Performance, with the conditions attached](docs/how-it-works/performance.md) ·
 [Native delegation](docs/how-it-works/delegation.md) ·
