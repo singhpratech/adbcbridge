@@ -234,6 +234,24 @@ jobs:
           python -m pip install -e python
           python -m pytest python/tests -q
 
+      # TypeScript, through the Node.js ADBC driver manager: the same library,
+      # loaded by path, with the SQLite ODBC driver behind it.
+      - name: Set up Node.js (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/typescript/package-lock.json
+      - name: Test from TypeScript (Linux)
+        if: runner.os == 'Linux'
+        env:
+          SQLITE_ODBC_DRIVER: /usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
+          ADBC_ODBC_DRIVER: ${{ github.workspace }}/build/libadbc_driver_odbc.so
+        run: |
+          npm ci --prefix tests/typescript
+          npm test --prefix tests/typescript
+
       # The Go binding (go/) drives the same library through arrow-adbc's cgo
       # driver manager; its tests skip themselves unless both variables are set.
       - name: Set up Go (Linux)
@@ -397,3 +415,16 @@ jobs:
           QUESTDB_URI: ws://127.0.0.1:9000
           ADBC_QUESTDB_DRIVER: ${{ github.workspace }}/build-questdb/libadbc_driver_questdb.so
         run: python -m pytest questdb/tests/test_qwp.py -v -p no:cacheprovider
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/typescript/package-lock.json
+      - name: TypeScript suite (QuestDB over QWP)
+        env:
+          QUESTDB_URI: ws://127.0.0.1:9000
+          ADBC_QUESTDB_DRIVER: ${{ github.workspace }}/build-questdb/libadbc_driver_questdb.so
+        run: |
+          npm ci --prefix tests/typescript
+          node --test --test-reporter=spec tests/typescript/questdb.test.ts

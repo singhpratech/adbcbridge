@@ -25,3 +25,4 @@ go/internal/native/*/*.dylib
 go/internal/native/*/*.dll
 csharp/**/bin/
 csharp/**/obj/
+node_modules/

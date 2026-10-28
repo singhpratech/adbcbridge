@@ -121,6 +121,7 @@ planned.
 | Use it from C# | [languages/csharp.md](languages/csharp.md) |
 | Use it from Java | [languages/java.md](languages/java.md) |
 | Use it from Go | [languages/go.md](languages/go.md) |
+| Use it from TypeScript or JavaScript (Node.js) | [languages/typescript.md](languages/typescript.md) |
 | Use it from C | [languages/c.md](languages/c.md) |
 | Look up a driver option (`adbc.odbc.*`) | [reference/options.md](reference/options.md) |
 | Write an ODBC connection string | [reference/connection-strings.md](reference/connection-strings.md) |
