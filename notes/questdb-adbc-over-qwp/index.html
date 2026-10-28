@@ -138,8 +138,9 @@ differently.</p>
    <code>DECIMAL(40,5)</code> stream and decode as <code>decimal64(18,3)</code>, <code>decimal128(38,2)</code> and
    <code>decimal256(76,5)</code>. The wire protocol has kinds for the DECIMAL64, DECIMAL128 and DECIMAL256
    storage classes only; the server refuses the three smaller classes instead of widening them to
-   the DECIMAL64 kind, which they fit with the same scale. That widening is the fix, and it is
-   headed for questdb/questdb as a pull request.</li>
+   the DECIMAL64 kind, which they fit with the same scale. That widening is the fix:
+   <a href="https://github.com/questdb/questdb/pull/8111">questdb/questdb#8111</a>, opened 2026-10-28 with a test
+   across the three classes (34 of 34 in the egress type suite on master).</li>
 <li><strong>An all-NULL multi-dimensional array column comes out flat.</strong> This is the <strong>wire format</strong>, and
    the client handles it as well as it can: a <code>DOUBLE[][]</code> column whose every value in a batch is
    NULL arrives as <code>list&lt;double&gt;</code>, because the protocol carries an array's dimensions per value,
