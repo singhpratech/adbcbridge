@@ -127,6 +127,28 @@ const DATA = {"counts": {"linux": 53, "macos": 45, "windows": 48}, "entries": [{
 const CHIP = {pass:'✓ pass', read:'✓ read', platform:'platform', detail:'note'};
 const OSNAMES = {linux:'Linux', macos:'macOS arm64', windows:'Windows x64'};
 const NOTES = {
+ "questdb": [
+  {
+   "title": "QuestDB over QWP - an ADBC driver on QuestDB's own wire protocol, measured against the ODBC route",
+   "url": "/notes/questdb-adbc-over-qwp/"
+  },
+  {
+   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
+   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
+  },
+  {
+   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
+   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
+  },
+  {
+   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
+   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
+  },
+  {
+   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
+   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
+  }
+ ],
  "duckdb": [
   {
    "title": "Five defects from the sweep, sent upstream as fixes instead of reports",
@@ -281,24 +303,6 @@ const NOTES = {
   {
    "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
    "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
-  },
-  {
-   "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
-   "url": "/notes/psqlodbc-two-fixes-and-two-traps/"
-  }
- ],
- "questdb": [
-  {
-   "title": "psqlodbc hands a timestamptz over in session time, and the offset is gone",
-   "url": "/notes/psqlodbc-timestamptz-session-time-zone/"
-  },
-  {
-   "title": "Where the native PostgreSQL and MySQL ADBC drivers stop on wire-compatible databases",
-   "url": "/notes/native-adbc-drivers-on-wire-compatible-databases/"
-  },
-  {
-   "title": "Where PostgreSQL-wire servers part company with PostgreSQL",
-   "url": "/notes/postgresql-wire-servers-and-psqlodbc/"
   },
   {
    "title": "Two psqlodbc bugs that lost rows and narrowed integers, and two traps",
