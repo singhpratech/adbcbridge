@@ -50,7 +50,7 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-10-27</div><h1>QuestDB over QWP - an ADBC driver on QuestDB&#x27;s own wire protocol, measured against the ODBC route</h1><p class="meta">QuestDB asked for ADBC over QWP rather than the PostgreSQL wire. adbcBridge now ships adbc_driver_questdb, built on QuestDB&#x27;s C client - 2M rows into Arrow in 0.125 s against 1.47 s over psqlodbc - plus two findings in the client&#x27;s Arrow egress.</p><p>On 2026-10-27 QuestDB answered a request for ADBC support
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-10-27</div><h1>QuestDB over QWP - an ADBC driver on QuestDB&#x27;s own wire protocol, measured against the ODBC route</h1><p class="meta">QuestDB asked for ADBC over QWP rather than the PostgreSQL wire. adbcBridge now ships adbc_driver_questdb, built on QuestDB&#x27;s C client - 2M rows into Arrow in 0.125 s against 1.47 s over psqlodbc - plus two findings: one in the server&#x27;s QWP egress, one in the wire format.</p><p>On 2026-10-27 QuestDB answered a request for ADBC support
 (<a href="https://github.com/questdb/roadmap/issues/126">questdb/roadmap#126</a>) on its community forum:
 since QuestDB 10.0 the preferred protocol is QWP, QuestDB's own columnar wire protocol over
 WebSocket; the PostgreSQL wire stays for compatibility; and if ADBC comes, it should come over QWP.</p>
@@ -125,20 +125,28 @@ adbc_driver_manager 1.12.0.</p>
 <p>The QWP read is about twelve times the ODBC route's throughput. That is the protocol doing the
 work: QWP sends columns, typed and compressed, and the client adopts the buffers into Arrow where it
 can; the PostgreSQL wire sends rows as text that psqlodbc parses and adbcBridge re-columnarises.</p>
-<h2>Two findings in the client's Arrow egress</h2>
-<p>Both met while writing the type test, both with a reproduction in the driver's test suite, both
-recorded in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">UPSTREAM.md</a>
-and headed for c-questdb-client as a pull request:</p>
+<h2>Two findings on the way, and where each belongs</h2>
+<p>Both turned up while writing the type test, both have a reproduction in the driver's test suite,
+both are recorded in <a href="https://github.com/singhpratech/adbcbridge/blob/main/docs/UPSTREAM.md">UPSTREAM.md</a>.
+The first report of them, on the forum, put both on the C client; reading the code places them
+differently.</p>
 <ol>
-<li><strong><code>DECIMAL</code> with precision 9 or less is refused.</strong> <code>SELECT</code> of a <code>DECIMAL(8,2)</code>, <code>DECIMAL(4,1)</code>
-   or <code>DECIMAL(2,0)</code> column through <code>qwp_reader_cursor_next_arrow_batch</code> fails with
-   <code>QWP egress: unsupported column type DECIMAL(8,2)</code>, while <code>DECIMAL(18,3)</code>, <code>DECIMAL(19,2)</code> and
-   <code>DECIMAL(40,5)</code> decode as <code>decimal64(18,3)</code>, <code>decimal128(38,2)</code> and <code>decimal256(76,5)</code>. The
-   native batch API reads the small storage classes fine; the gap is in the Arrow export.</li>
-<li><strong>An all-NULL multi-dimensional array column comes out flat.</strong> A <code>DOUBLE[][]</code> column whose
-   every value in the batch is NULL is exported as <code>list&lt;double&gt;</code>; with one non-NULL value present
-   it is <code>list&lt;list&lt;double&gt;&gt;</code>. Harmless for the values, but two batches of one result can disagree
-   on the schema.</li>
+<li><strong><code>DECIMAL</code> with precision 9 or less cannot be read over QWP.</strong> This is the <strong>server</strong>: a
+   <code>SELECT</code> of a <code>DECIMAL(8,2)</code>, <code>DECIMAL(4,1)</code> or <code>DECIMAL(2,0)</code> column fails with
+   <code>java.lang.UnsupportedOperationException: QWP egress: unsupported column type DECIMAL(8,2)</code>,
+   thrown by QuestDB's <code>QwpColumnTypeMapper</code>, while <code>DECIMAL(18,3)</code>, <code>DECIMAL(19,2)</code> and
+   <code>DECIMAL(40,5)</code> stream and decode as <code>decimal64(18,3)</code>, <code>decimal128(38,2)</code> and
+   <code>decimal256(76,5)</code>. The wire protocol has kinds for the DECIMAL64, DECIMAL128 and DECIMAL256
+   storage classes only; the server refuses the three smaller classes instead of widening them to
+   the DECIMAL64 kind, which they fit with the same scale. That widening is the fix, and it is
+   headed for questdb/questdb as a pull request.</li>
+<li><strong>An all-NULL multi-dimensional array column comes out flat.</strong> This is the <strong>wire format</strong>, and
+   the client handles it as well as it can: a <code>DOUBLE[][]</code> column whose every value in a batch is
+   NULL arrives as <code>list&lt;double&gt;</code>, because the protocol carries an array's dimensions per value,
+   not in the column header, so an all-NULL batch has no dimension count to go on. The client
+   marks the field <code>questdb.array_dim_tentative=true</code> and upgrades the schema once a value
+   arrives; a consumer that pins the first batch's schema, as most ADBC consumers do, sees a
+   schema change mid-stream. A dimension count in the column header would close it.</li>
 </ol>
 <p>Two smaller observations for anyone mapping types: <code>CHAR</code> arrives as a <code>uint16</code> UTF-16 code unit,
 and QuestDB's <code>BYTE</code>, <code>SHORT</code>, <code>CHAR</code> and <code>BOOLEAN</code> have no NULL, so they read back as 0 or false.
