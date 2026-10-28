@@ -60,7 +60,7 @@
 #endif
 
 #define ADBC_ODBC_DRIVER_NAME "ADBC ODBC Driver"
-#define ADBC_ODBC_DRIVER_VERSION "0.1.3"
+#define ADBC_ODBC_DRIVER_VERSION "0.1.4"
 
 // Driver-specific options
 #define ADBC_ODBC_OPTION_DSN "dsn"
