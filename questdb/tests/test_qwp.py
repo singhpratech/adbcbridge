@@ -142,7 +142,8 @@ def test_all_scalar_types(cur):
     cur.execute("SELECT * FROM adbc_qwp_types ORDER BY des")
     tbl = cur.fetch_arrow_table()
     assert tbl.num_rows == 2
-    row = {name: tbl.column(name)[0].as_py() for name in tbl.column_names}
+    # ts_ns: read the raw nanoseconds; as_py() on a ns timestamp needs pandas.
+    row = {name: (tbl.column(name)[0].value if name == "ts_ns" else tbl.column(name)[0].as_py()) for name in tbl.column_names}
     nulls = {name: tbl.column(name)[1].as_py() for name in tbl.column_names}
     assert row["b"] is True
     assert row["y"] == 7 and row["s"] == 300 and row["i"] == 70000 and row["l"] == 5000000000
@@ -150,7 +151,7 @@ def test_all_scalar_types(cur):
     assert row["str"] == "str" and row["vc"] == "vc" and row["sym"] == "sym"
     assert row["c"] == ord("q")  # CHAR arrives as a UTF-16 code unit (uint16)
     assert row["ts"].replace(tzinfo=None) == datetime.datetime(2024, 2, 29, 8, 45, 10, 123456)
-    assert row["ts_ns"].to_pydatetime(warn=False).replace(tzinfo=None) == datetime.datetime(2024, 2, 29, 8, 45, 10, 123456)
+    assert row["ts_ns"] == 1709196310123456789  # 2024-02-29T08:45:10.123456789Z
     assert row["dt"].replace(tzinfo=None) == datetime.datetime(2024, 2, 29)
     assert str(row["u"]) == "11111111-2222-3333-4444-555555555555"
     assert row["ip"] == 0xC0A80114
