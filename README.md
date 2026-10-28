@@ -20,7 +20,7 @@ Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
 released 2026-09-17 — `pip install "omniload[adbcbridge]"`, then
 `omniload ingest --sql-backend adbcbridge`. Requested, reviewed and merged by its maintainers the
 same day, and carried by every release since. It is a declared extra of the published package
-(`adbcbridge>=0.1.3,<0.2`), and of omniload's own `full` and `test` extras. [How it was built and tested](https://adbcbridge.org/notes/omniload-adbcbridge-backend/) ·
+(`adbcbridge>=0.1.4,<0.2`), and of omniload's own `full` and `test` extras. [How it was built and tested](https://adbcbridge.org/notes/omniload-adbcbridge-backend/) ·
 [omniload's handbook page](https://omniload.readthedocs.io/getting-started/sql-backends.html).
 
 **Written up by ArcadeDB:** *[ArcadeDB in the Apache Arrow Ecosystem, Through Its PostgreSQL Wire
@@ -141,7 +141,7 @@ its way. Full page: [`docs/languages/python.md`](docs/languages/python.md).
 
 ```toml
 [dependencies]
-adbcbridge = "0.1.3"                                    # crates.io; the default `bundled` feature compiles the driver
+adbcbridge = "0.1.4"                                    # crates.io; the default `bundled` feature compiles the driver
 ```
 ```rust
 let mut driver = adbcbridge::load()?;               // compiles the driver from bundled sources
@@ -155,7 +155,7 @@ Full page: [`docs/languages/rust.md`](docs/languages/rust.md).
 ### C#
 
 ```sh
-dotnet add package AdbcBridge --version 0.1.3          # nuget.org; the .nupkg is on the release page too
+dotnet add package AdbcBridge --version 0.1.4          # nuget.org; the .nupkg is on the release page too
 ```
 ```csharp
 using AdbcConnection connection = Driver.Connect("Driver=SQLite3;Database=first.db;");
@@ -169,7 +169,7 @@ Full page: [`docs/languages/csharp.md`](docs/languages/csharp.md).
 ### Java
 
 ```xml
-<dependency><groupId>org.adbcbridge</groupId><artifactId>adbcbridge</artifactId><version>0.1.3</version></dependency>
+<dependency><groupId>org.adbcbridge</groupId><artifactId>adbcbridge</artifactId><version>0.1.4</version></dependency>
 ```
 ```java
 try (RootAllocator allocator = new RootAllocator();
@@ -273,11 +273,11 @@ One driver library, five packages that find and load it. Four of them — the wh
 crate, the nupkg and the jar — are built and attached to every
 [release](https://github.com/singhpratech/adbcbridge/releases) together with the bare
 libraries (the release workflow tests the crate; the bindings' own suites live under
-`tests/`); the Go module is fetched with `go get` from the tagged source (`go/v0.1.3`,
+`tests/`); the Go module is fetched with `go get` from the tagged source (`go/v0.1.4`,
 the sub-module tag). The wheel is on [PyPI](https://pypi.org/project/adbcbridge/),
 the crate on [crates.io](https://crates.io/crates/adbcbridge) and the nupkg on
 [nuget.org](https://www.nuget.org/packages/AdbcBridge) and the jar on
-[Maven Central](https://central.sonatype.com/artifact/org.adbcbridge/adbcbridge) (all 0.1.3).
+[Maven Central](https://central.sonatype.com/artifact/org.adbcbridge/adbcbridge) (all 0.1.4).
 
 | Language | Package | What it gives you | Where |
 |---|---|---|---|
@@ -296,8 +296,8 @@ place they looked.
 
 ## Status and roadmap
 
-Early (0.1.3). Working: everything under *What it does*, on Linux, macOS (arm64) and
-Windows (x64 and Win32 built and tested in CI on every push); 0.1.3 on PyPI, crates.io,
+Early (0.1.4). Working: everything under *What it does*, on Linux, macOS (arm64) and
+Windows (x64 and Win32 built and tested in CI on every push); 0.1.4 on PyPI, crates.io,
 nuget.org and Maven Central. The ADBC Driver
 Foundry validation suite passes on PostgreSQL apart from declared server limits
 ([`tests/validation/RESULTS.md`](tests/validation/RESULTS.md)). A second bridge,
