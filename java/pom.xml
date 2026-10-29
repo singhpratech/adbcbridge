@@ -69,7 +69,7 @@
     <!-- adbc-driver-jni 0.24.0 and Arrow 19 are built for Java 11; so is this library. -->
     <maven.compiler.release>11</maven.compiler.release>
     <!-- adbc-driver-jni bundles the native ADBC driver manager for linux/macos/windows. -->
-    <adbc.version>0.24.0</adbc.version>
+    <adbc.version>0.25.0</adbc.version>
     <!-- Must match the Arrow version ADBC ${adbc.version} was built against. -->
     <arrow.version>19.0.0</arrow.version>
     <junit.version>6.1.3</junit.version>
