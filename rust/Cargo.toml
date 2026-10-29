@@ -39,7 +39,7 @@ default = ["bundled"]
 bundled = ["dep:cc"]
 
 [dependencies]
-adbc_core = "0.24"
+adbc_core = "0.25"
 adbc_driver_manager = "0.24"
 
 [build-dependencies]
