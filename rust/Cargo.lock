@@ -13,12 +13,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "adbc_core"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d1448c5d1597ce04cf1228e9e096dc4dc0dc0d568080283824125c60b22c325"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+]
+
+[[package]]
 name = "adbc_driver_manager"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3aac8bb789ff1f493bcb5d423c65b7a1b21ba5516f5e60797b4e1c64b34a2b61"
 dependencies = [
- "adbc_core",
+ "adbc_core 0.24.0",
  "adbc_ffi",
  "arrow-array",
  "arrow-schema",
@@ -36,7 +46,7 @@ version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12cdef84c12e9e8858b300440c36ca94ba24fb2e188175251dc39bb44ba3584e"
 dependencies = [
- "adbc_core",
+ "adbc_core 0.24.0",
  "arrow-array",
  "arrow-schema",
 ]
@@ -45,7 +55,7 @@ dependencies = [
 name = "adbcbridge"
 version = "0.1.4"
 dependencies = [
- "adbc_core",
+ "adbc_core 0.25.0",
  "adbc_driver_manager",
  "cc",
 ]
