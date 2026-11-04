@@ -70,7 +70,11 @@ text and parse it yourself, which is what the compatibility entry does. Reported
 project on 2026-09-24, <a href="https://github.com/opensearch-project/sql-odbc/pull/105">#105</a>: the
 character source types go through <code>timestamp2stime()</code> before the output switch, and a string it
 cannot read returns <code>22018</code> instead of today's date. Swiddis approved and merged it as <code>0d67168</code>
-with no changes asked for, and closed #101. No release carries it yet; the matrix entry moves to
+with no changes asked for, and closed #101. Verified the same day on a Linux build of <code>8be890e</code>:
+<code>'hello'</code> and <code>'12.345'</code> now fail with <code>22018</code>, and <code>'2024-02-29 13:45:10.123'</code> arrives as that instant.
+The second path described above, the result-set type map with no <code>timestamp</code> entry, is not covered
+by it: a real <code>TIMESTAMP</code> column is still described as <code>SQL_WVARCHAR</code> and still comes back as today.
+That one-line entry is the follow-up. No release carries any of it yet; the matrix entry moves to
 "fixed in" that version when one does.</p>
 </div>
 <h2>A failed connect never returns</h2>
@@ -97,7 +101,9 @@ day as the other: <a href="https://github.com/opensearch-project/sql-odbc/pull/1
 that make <code>OPENSEARCHAPI_ConnectError</code> clear the connection error after reporting it, the way
 <code>EN_get_error()</code> already does for the environment, so the ODBC 2 one-shot contract holds and
 unixODBC's loop reaches <code>SQL_NO_DATA</code>. Merged as <code>8be890e</code> six seconds after #105, by the same
-maintainer; #102 closed with it.</p>
+maintainer; #102 closed with it. Verified on the same Linux build: the closed-port connect
+returns through unixODBC in two seconds with its <code>08001</code>, where 1.5.0.0 sat at 100 % CPU until
+killed, and <code>SQLErrorW</code> answers <code>SQL_NO_DATA</code> once the record has been reported.</p>
 </div>
 <p>There is a related trap behind it. The driver's ANSI <code>SQLDriverConnect</code> cannot connect at
 all: <code>CC_connect()</code> asks for the <code>SQL_ASCII</code> client encoding, which its own
@@ -129,6 +135,13 @@ count of 0 and a capacity, so on Linux that semaphore starts <em>full</em>: <cod
 empty queue, <code>std::queue::pop()</code> on an empty queue corrupts it, and the next <code>clear()</code>
 deletes a garbage pointer — the first <code>close()</code> segfaults. Passing <code>initial</code> fixes it. With
 those five fixed the driver works, and reads about 120k rows/s.</p>
+<div class="callout">
+<p><strong>Update, 2026-11-03: the POSIX branch compiles upstream now.</strong> The maintainer's own
+<a href="https://github.com/opensearch-project/sql-odbc/pull/110">#110</a>, merged the same day as the two fixes
+above, makes <code>-Werror</code> an option (<code>WARNINGS_AS_ERRORS</code>, off in the new <code>build_linux_release64.sh</code>),
+passes <code>initial</code> to <code>sem_init()</code>, and puts a Linux build into the project's CI. The three local
+patches this entry was built with are no longer needed.</p>
+</div>
 <p>One last thing to plan around: it is read-only twice over. The SQL plugin's grammar is
 <code>SELECT</code>, <code>SHOW</code> and <code>DESCRIBE</code> — no <code>CREATE TABLE</code>, no <code>INSERT</code> — and the driver answers
 <code>SQLBindParameter</code> with <code>OpenSearch does not support parameters</code>. Data goes in over the REST
