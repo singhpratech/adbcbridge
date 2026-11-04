@@ -127,6 +127,16 @@ const DATA = {"counts": {"linux": 53, "macos": 45, "windows": 48}, "entries": [{
 const CHIP = {pass:'✓ pass', read:'✓ read', platform:'platform', detail:'note'};
 const OSNAMES = {linux:'Linux', macos:'macOS arm64', windows:'Windows x64'};
 const NOTES = {
+ "opensearch": [
+  {
+   "title": "OpenSearch SQL ODBC takes both fixes in one evening, and its Linux build arrives on its own",
+   "url": "/notes/opensearch-sql-odbc-merge-day/"
+  },
+  {
+   "title": "Any text read as a timestamp comes back as today's date, under SQL_SUCCESS",
+   "url": "/notes/opensearch-sql-odbc-findings/"
+  }
+ ],
  "questdb": [
   {
    "title": "QuestDB over QWP - an ADBC driver on QuestDB's own wire protocol, measured against the ODBC route",
@@ -683,12 +693,6 @@ const NOTES = {
   {
    "title": "What MySQL Connector/ODBC does to a DATETIME(6), and six other findings",
    "url": "/notes/mysql-connector-odbc-findings/"
-  }
- ],
- "opensearch": [
-  {
-   "title": "Any text read as a timestamp comes back as today's date, under SQL_SUCCESS",
-   "url": "/notes/opensearch-sql-odbc-findings/"
   }
  ],
  "sqlite": [

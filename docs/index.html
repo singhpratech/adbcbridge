@@ -11865,6 +11865,11 @@ time allows, and a reproduction contributed by anyone is welcome.</p>
 <td><code>COMPATIBILITY.md</code>, macOS column</td>
 </tr>
 <tr>
+<td>OpenSearch SQL ODBC</td>
+<td>The <code>WITH_UNIXODBC</code> branch had never been compiled: <code>-Werror</code> on a 2023 code base, a vestigial <code>linux/kconfig.h</code> include, <code>RAPIDJSON_SRC</code> set only under <code>if(WIN32)</code>, an empty member-initialiser list and a <code>sem_timedwait(&amp;m_semaphore &amp; ts)</code> typo in <code>opensearch_semaphore.cpp</code>, and <code>sem_init()</code> given <code>capacity</code> where the other platforms pass <code>initial</code>, so the result queue's pop semaphore started full and the first <code>close()</code> segfaulted. <strong>Fixed upstream before it could be filed</strong>: the maintainer's own <a href="https://github.com/opensearch-project/sql-odbc/pull/110">#110</a> (merged 2026-11-03) covers every item and adds a Linux build to the project's CI; verified here by building <code>8be890e</code> with no local patch.</td>
+<td><code>COMPATIBILITY.md</code>, Linux row; note <em>opensearch-sql-odbc-findings</em></td>
+</tr>
+<tr>
 <td>openGauss (enmotech image, arm64)</td>
 <td>The MOT engine panics at start inside Docker Desktop's VM (<code>thread identifiers exhausted</code>), with or without <code>enable_numa = false</code>.</td>
 <td><code>COMPATIBILITY.md</code>, macOS column</td>
