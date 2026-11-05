@@ -40,7 +40,7 @@ bundled = ["dep:cc"]
 
 [dependencies]
 adbc_core = "0.24"
-adbc_driver_manager = "0.24"
+adbc_driver_manager = "0.25"
 
 [build-dependencies]
 cc = { version = "1.0.83", optional = true }
