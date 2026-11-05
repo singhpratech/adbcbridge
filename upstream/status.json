@@ -1,5 +1,5 @@
 {
- "as_of": "2026-11-04T23:44:15Z",
+ "as_of": "2026-11-05T23:40:43Z",
  "window_days": 7,
  "count": 40,
  "with_project_activity": 29,
@@ -1086,11 +1086,17 @@
      "at": "2026-11-04T22:29:30Z",
      "actor": "Swiddis",
      "url": "https://github.com/opensearch-project/sql-odbc/commit/20fc51d7fcad4881a9db62f4b278050fe6e43576"
+    },
+    {
+     "type": "commit",
+     "at": "2026-11-05T20:04:14Z",
+     "actor": "Swiddis",
+     "url": "https://github.com/opensearch-project/sql-odbc/commit/0d67168e7d32a2ff78db489c3d582e583982c97d"
     }
    ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": "2026-11-04T22:29:30Z",
+   "last_activity": "2026-11-05T20:04:14Z",
    "pulse": true
   },
   {
@@ -1122,11 +1128,17 @@
      "actor": "Swiddis",
      "reason": null,
      "commit": "https://github.com/opensearch-project/sql-odbc/commit/8be890ebcab316fbe476cfeaadbc4df0f425b90e"
+    },
+    {
+     "type": "commit",
+     "at": "2026-11-05T20:04:14Z",
+     "actor": "Swiddis",
+     "url": "https://github.com/opensearch-project/sql-odbc/commit/8be890ebcab316fbe476cfeaadbc4df0f425b90e"
     }
    ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": "2026-11-03T22:17:00Z",
+   "last_activity": "2026-11-05T20:04:14Z",
    "pulse": true
   },
   {
