@@ -117,6 +117,18 @@ Windows, so pass <code>-DCMAKE_CXX_FLAGS=-I&lt;tree&gt;/libraries/rapidjson/incl
 (<a href="https://github.com/opensearch-project/sql-odbc/pull/113">#113</a>) moves rapidjson to vcpkg on
 every platform.</p>
 <h2>What is left: the type map</h2>
+<div class="callout">
+<p><strong>Update, 2026-11-05: merged too.</strong> <a href="https://github.com/opensearch-project/sql-odbc/pull/115">#115</a>
+was approved and merged on 2026-11-04 as <code>20fc51d</code>, again with "Thanks" as the whole review.
+Verified here on a Linux build of that commit against OpenSearch 3.9.0: <code>SELECT TIMESTAMP
+'2024-02-29 13:45:10'</code> is now described as <code>SQL_TYPE_TIMESTAMP</code> (93) and read as that instant,
+where the <code>8be890e</code> build described it <code>SQL_WVARCHAR</code> and returned today's date; a date-mapped
+index column arrives through adbcBridge as <code>timestamp[us]</code> instead of <code>string</code>. Both halves of</p>
+<h1>101 are fixed on <code>main</code>. One thing changed for anyone building it: since</h1>
+<p><a href="https://github.com/opensearch-project/sql-odbc/pull/113">#113</a> the tree no longer carries
+rapidjson, so <code>find_package(RapidJSON CONFIG)</code> needs the headers from vcpkg or any prefix with a
+<code>RapidJSONConfig.cmake</code>, and the <code>GTest</code> package is wanted unless <code>-DBUILD_WITH_TESTS=OFF</code>.</p>
+</div>
 <h1>105 fixes the conversion of a character value. It does not touch the second path the August</h1>
 <p>note described: the result-set type map in <code>opensearch_parse_result.cpp</code> has no entry for the
 plugin's <code>timestamp</code> type name, so <code>GetSchemaInfo()</code> falls back to <code>SQL_WVARCHAR</code>. OpenSearch
