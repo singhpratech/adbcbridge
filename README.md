@@ -20,7 +20,8 @@ Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
 [adbcBridge integration page](https://questdb.com/docs/integrations/other/adbcbridge/) since 2026-11-06, under
 Other Tools and on the integrations overview. It leads with the native QWP driver
 (`adbc_driver_questdb`, QuestDB 10) and keeps the ODBC route for QuestDB 9 and older; written
-and sent from here ([questdb/documentation#564](https://github.com/questdb/documentation/pull/564)), reviewed and merged by QuestDB.
+and sent from here ([questdb/documentation#564](https://github.com/questdb/documentation/pull/564)), reviewed and merged by QuestDB,
+and announced the same day on [QuestDB's LinkedIn](https://www.linkedin.com/posts/questdb_questdb-activity-7524524689596121088-uO9b): “New entry in the #QuestDB third-party integrations list: adbcBridge, which provides ADBC drivers for QuestDB. … If you work in C#, Java, Go or TypeScript, or in a tool that takes any ADBC driver, this is how you get there.”
 [How the page came about](https://adbcbridge.org/notes/questdb-docs-adbcbridge/).
 
 **Integrated in [omniload](https://github.com/panodata/omniload):** the dlt-based loader ships an
