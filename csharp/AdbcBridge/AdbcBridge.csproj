@@ -45,7 +45,7 @@ SPDX-License-Identifier: Apache-2.0
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Apache.Arrow.Adbc" Version="0.24.0" />
+    <PackageReference Include="Apache.Arrow.Adbc" Version="1.0.0" />
   </ItemGroup>
 
   <ItemGroup>
