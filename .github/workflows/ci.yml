@@ -238,7 +238,7 @@ jobs:
       # loaded by path, with the SQLite ODBC driver behind it.
       - name: Set up Node.js (Linux)
         if: runner.os == 'Linux'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -416,7 +416,7 @@ jobs:
           ADBC_QUESTDB_DRIVER: ${{ github.workspace }}/build-questdb/libadbc_driver_questdb.so
         run: python -m pytest questdb/tests/test_qwp.py -v -p no:cacheprovider
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
