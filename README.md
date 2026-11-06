@@ -16,6 +16,13 @@ One plain-C11 shared library that turns every ODBC driver on your machine into a
 Arrow-native ADBC driver — columnar record batches out, bulk ingest in — from Python,
 Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
 
+**Documented by QuestDB:** QuestDB's own documentation carries an
+[adbcBridge integration page](https://questdb.com/docs/integrations/other/adbcbridge/) since 2026-11-06, under
+Other Tools and on the integrations overview. It leads with the native QWP driver
+(`adbc_driver_questdb`, QuestDB 10) and keeps the ODBC route for QuestDB 9 and older; written
+and sent from here ([questdb/documentation#564](https://github.com/questdb/documentation/pull/564)), reviewed and merged by QuestDB.
+[How the page came about](https://adbcbridge.org/notes/questdb-docs-adbcbridge/).
+
 **Integrated in [omniload](https://github.com/panodata/omniload):** the dlt-based loader ships an
 `adbcbridge` SQL backend since [v0.17.0](https://github.com/panodata/omniload/releases/tag/v0.17.0),
 released 2026-09-17 — `pip install "omniload[adbcbridge]"`, then
@@ -23,13 +30,6 @@ released 2026-09-17 — `pip install "omniload[adbcbridge]"`, then
 same day, and carried by every release since. It is a declared extra of the published package
 (`adbcbridge>=0.1.4,<0.2`), and of omniload's own `full` and `test` extras. [How it was built and tested](https://adbcbridge.org/notes/omniload-adbcbridge-backend/) ·
 [omniload's handbook page](https://omniload.readthedocs.io/getting-started/sql-backends.html).
-
-**Documented by QuestDB:** QuestDB's own documentation carries an
-[adbcBridge integration page](https://questdb.com/docs/integrations/other/adbcbridge/) since 2026-11-06, under
-Other Tools and on the integrations overview. It leads with the native QWP driver
-(`adbc_driver_questdb`, QuestDB 10) and keeps the ODBC route for QuestDB 9 and older; written
-and sent from here ([questdb/documentation#564](https://github.com/questdb/documentation/pull/564)), reviewed and merged by QuestDB.
-[How the page came about](https://adbcbridge.org/notes/questdb-docs-adbcbridge/).
 
 **Written up by ArcadeDB:** *[ArcadeDB in the Apache Arrow Ecosystem, Through Its PostgreSQL Wire
 Protocol](https://arcadedb.com/blog/arcadedb-apache-arrow-adbc-postgresql-wire/)* (2026-09-21) is
