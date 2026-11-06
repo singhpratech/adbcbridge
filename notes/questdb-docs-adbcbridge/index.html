@@ -82,6 +82,20 @@ when QuestDB's own clients cover those languages natively? The rewrite went up t
 native driver leads, the install block starts with the driver build and an ADBC driver manager,
 QuestDB's own Python and Rust clients are named as the direct route, and the ODBC bridge is the
 section for older servers. QuestDB merged it three days later, fixing one internal link on the way.</p>
+<h2>QuestDB's own announcement</h2>
+<p>The same afternoon QuestDB posted the page on <a href="https://www.linkedin.com/posts/questdb_questdb-activity-7524524689596121088-uO9b">its LinkedIn page</a>, in its own words:</p>
+<blockquote>
+<p>New entry in the #QuestDB third-party integrations list: adbcBridge, which provides ADBC
+drivers for QuestDB. Our own clients that hand you Arrow over QWP are C and C++, Rust, Python and
+Ruby. If you work in C#, Java, Go or TypeScript, or in a tool that takes any ADBC driver, this is
+how you get there. It comes in two flavours. On QuestDB 10 or newer, a native driver that speaks
+QWP and gives you Arrow batches for both reads and bulk ingest. On QuestDB 9 or older, an ODBC
+bridge over PGWire, which is also the one to pick when a single driver has to serve several
+databases.</p>
+</blockquote>
+<p>That is the positioning exactly as intended: QuestDB's own clients where they exist, adbcBridge
+for the languages and tools they do not cover, and the ODBC bridge when one driver has to serve
+many databases.</p>
 <h2>What this means for the matrix</h2>
 <p>Nothing changes in the measurements. The <a href="/matrix/#questdb">QuestDB row</a> stays the ODBC path as
 measured, the <a href="/notes/questdb-adbc-over-qwp/">QWP note</a> keeps the numbers for the native driver
