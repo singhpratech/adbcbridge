@@ -1,6 +1,7 @@
 # adbcBridge
 
 [![ADBC docs](https://img.shields.io/badge/Apache_Arrow_ADBC_docs-listed-0B7285)](https://arrow.apache.org/adbc/main/integrations.html)
+[![QuestDB docs](https://img.shields.io/badge/QuestDB_docs-integration_page-0B7285)](https://questdb.com/docs/integrations/other/adbcbridge/)
 [![CI](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/adbcbridge)](https://pypi.org/project/adbcbridge/)
 [![crates.io](https://img.shields.io/crates/v/adbcbridge)](https://crates.io/crates/adbcbridge)
@@ -22,6 +23,13 @@ released 2026-09-17 — `pip install "omniload[adbcbridge]"`, then
 same day, and carried by every release since. It is a declared extra of the published package
 (`adbcbridge>=0.1.4,<0.2`), and of omniload's own `full` and `test` extras. [How it was built and tested](https://adbcbridge.org/notes/omniload-adbcbridge-backend/) ·
 [omniload's handbook page](https://omniload.readthedocs.io/getting-started/sql-backends.html).
+
+**Documented by QuestDB:** QuestDB's own documentation carries an
+[adbcBridge integration page](https://questdb.com/docs/integrations/other/adbcbridge/) since 2026-11-06, under
+Other Tools and on the integrations overview. It leads with the native QWP driver
+(`adbc_driver_questdb`, QuestDB 10) and keeps the ODBC route for QuestDB 9 and older; written
+and sent from here ([questdb/documentation#564](https://github.com/questdb/documentation/pull/564)), reviewed and merged by QuestDB.
+[How the page came about](https://adbcbridge.org/notes/questdb-docs-adbcbridge/).
 
 **Written up by ArcadeDB:** *[ArcadeDB in the Apache Arrow Ecosystem, Through Its PostgreSQL Wire
 Protocol](https://arcadedb.com/blog/arcadedb-apache-arrow-adbc-postgresql-wire/)* (2026-09-21) is
