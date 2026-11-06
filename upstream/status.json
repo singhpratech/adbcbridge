@@ -1,8 +1,8 @@
 {
- "as_of": "2026-11-05T23:40:43Z",
+ "as_of": "2026-11-06T13:14:27Z",
  "window_days": 7,
- "count": 40,
- "with_project_activity": 29,
+ "count": 41,
+ "with_project_activity": 30,
  "fixed": 15,
  "items": [
   {
@@ -476,6 +476,64 @@
    "community_comments": 0,
    "last_activity": "2026-09-15T14:53:21Z",
    "pulse": false
+  },
+  {
+   "project": "QuestDB documentation",
+   "repo": "questdb/documentation",
+   "number": 564,
+   "url": "https://github.com/questdb/documentation/pull/564",
+   "title": "docs(integrations): add adbcBridge under Other Tools",
+   "reported": "2026-09-24",
+   "reporter": "singhpratech",
+   "what": "An integration page for adbcBridge under Other Tools (`integrations/other/adbcbridge`) plus a bullet on the integrations overview. Opened when the page covered the ODBC route over psqlodbc; after `adbc_driver_questdb` shipped in 0.1.4 the maintainer asked on 2026-11-03 for a rewrite leading with the native driver and naming QuestDB's own clients first, done the same day: build, connection options, Python and TypeScript examples through the ADBC driver managers, bulk ingest, the type summary (with the server-side DECIMAL limit that [questdb/questdb#8111](https://github.com/questdb/questdb/pull/8111) lifts), then the ODBC bridge as the section for QuestDB 9 and older. Every snippet run against QuestDB 10.1.0 before it went up. Contribution rather than a report.",
+   "kind": "pull request",
+   "state": "merged",
+   "closed_at": "2026-11-06T09:30:02Z",
+   "labels": [
+    "preview"
+   ],
+   "reactions": 0,
+   "maintainer_events": [
+    {
+     "type": "labeled",
+     "at": "2026-11-06T09:09:05Z",
+     "actor": "javier",
+     "label": "preview"
+    },
+    {
+     "type": "closed",
+     "at": "2026-11-06T09:30:02Z",
+     "actor": "javier",
+     "reason": null,
+     "commit": null
+    },
+    {
+     "type": "comment",
+     "at": "2026-11-06T09:31:33Z",
+     "actor": "javier",
+     "association": "collaborator",
+     "text": "It is now live at https://questdb.com/docs/integrations/other/adbcbridge/. Thanks!!",
+     "url": "https://github.com/questdb/documentation/pull/564#issuecomment-6681718208"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-11-06T09:32:44Z",
+     "actor": "javier",
+     "title": "docs(changelog): add adbcBridge, QWP idle writer release, and PKCE setting fix",
+     "url": "https://github.com/questdb/documentation/pull/621",
+     "state": "merged"
+    },
+    {
+     "type": "commit",
+     "at": "2026-11-06T09:34:45Z",
+     "actor": "javier",
+     "url": "https://github.com/questdb/documentation/commit/b1daf06455ff10f499f9142e0abded391b4a902b"
+    }
+   ],
+   "reporter_comments": 1,
+   "community_comments": 0,
+   "last_activity": "2026-11-06T09:34:45Z",
+   "pulse": true
   },
   {
    "project": "unixODBC",
