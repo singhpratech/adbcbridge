@@ -13,6 +13,9 @@ Use it when the server is QuestDB 10.0 or newer. For QuestDB 9 and older, or whe
 want one driver for every database, the ODBC bridge over psqlodbc still works
 (`docs/COMPATIBILITY.md`, row *questdb*).
 
+QuestDB's own documentation has a shorter version of this page, covering both routes:
+[Integrations › Other Tools › adbcBridge](https://questdb.com/docs/integrations/other/adbcbridge/).
+
 ## Build
 
 The driver is its own CMake project under `questdb/`, separate from the ODBC driver
