@@ -20,9 +20,10 @@ Rust, Go, Java, C#, R and anything else that speaks the ADBC driver manager.
 [adbcBridge integration page](https://questdb.com/docs/integrations/other/adbcbridge/) since 2026-11-06, under
 Other Tools and on the integrations overview. It leads with the native QWP driver
 (`adbc_driver_questdb`, QuestDB 10) and keeps the ODBC route for QuestDB 9 and older; written
-and sent from here ([questdb/documentation#564](https://github.com/questdb/documentation/pull/564)), reviewed and merged by QuestDB,
-and announced the same day on [QuestDB's LinkedIn](https://www.linkedin.com/posts/questdb_questdb-activity-7524524689596121088-uO9b): “New entry in the #QuestDB third-party integrations list: adbcBridge, which provides ADBC drivers for QuestDB. … If you work in C#, Java, Go or TypeScript, or in a tool that takes any ADBC driver, this is how you get there.”
+and sent from here ([questdb/documentation#564](https://github.com/questdb/documentation/pull/564)), reviewed and merged by QuestDB.
 [How the page came about](https://adbcbridge.org/notes/questdb-docs-adbcbridge/).
+
+**Announced by QuestDB:** *[New entry in the QuestDB third-party integrations list: adbcBridge](https://www.linkedin.com/posts/questdb_questdb-activity-7524524689596121088-uO9b)* (LinkedIn, 2026-11-06) is their own account of what it is for, in their words: “Our own clients that hand you Arrow over QWP are C and C++, Rust, Python and Ruby. If you work in C#, Java, Go or TypeScript, or in a tool that takes any ADBC driver, this is how you get there. It comes in two flavours. On QuestDB 10 or newer, a native driver that speaks QWP and gives you Arrow batches for both reads and bulk ingest. On QuestDB 9 or older, an ODBC bridge over PGWire, which is also the one to pick when a single driver has to serve several databases.”
 
 **Integrated in [omniload](https://github.com/panodata/omniload):** the dlt-based loader ships an
 `adbcbridge` SQL backend since [v0.17.0](https://github.com/panodata/omniload/releases/tag/v0.17.0),
