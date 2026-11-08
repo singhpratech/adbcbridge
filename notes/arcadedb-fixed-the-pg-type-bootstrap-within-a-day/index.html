@@ -50,7 +50,10 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-09-06</div><h1>ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build</h1><p class="meta">The native PostgreSQL ADBC driver could not connect to ArcadeDB; a probe comment became a diagnosed issue, a fix and a merge within a day. Verified.</p><p>The <a href="/notes/native-adbc-drivers-on-wire-compatible-databases/">native-driver probe</a> of
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-09-06</div><h1>ArcadeDB fixed the pg_type bootstrap within a day, verified on the merged build</h1><p class="meta">The native PostgreSQL ADBC driver could not connect to ArcadeDB; a probe comment became a diagnosed issue, a fix and a merge within a day. Verified.</p><div class="callout">
+<p><strong>Update, 2026-11-07: in a release.</strong> #7179 and #7187, with the binary <code>COPY</code> work that followed, ship in ArcadeDB 26.10.1 (2026-10-05). Re-verified on the 26.11.1 release image: the Arrow PostgreSQL ADBC driver on its defaults passes the whole thorough read. <a href="/notes/arcadedb-26-11-1-release-retest/">The release retest</a>.</p>
+</div>
+<p>The <a href="/notes/native-adbc-drivers-on-wire-compatible-databases/">native-driver probe</a> of
 2026-09-05 found that the Apache Arrow PostgreSQL ADBC driver (1.12.0) could not open a
 connection to ArcadeDB's PostgreSQL-protocol plugin at all. This note records what happened
 next, because it happened fast, and because the first verification needed a correction.</p>
