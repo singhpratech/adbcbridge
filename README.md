@@ -36,8 +36,9 @@ their own account of the integration, and of the four protocol gaps this driver 
 PostgreSQL wire. All four are now fixed: one by a pull request from here
 ([#7815](https://github.com/ArcadeData/arcadedb/pull/7815)), and the last of them,
 [#8090](https://github.com/ArcadeData/arcadedb/issues/8090) — a timestamp stored as `NULL` under a
-successful `INSERT` — within a day of being filed, verified here on the 26.10.1 snapshot.
-[What the retest measured](https://adbcbridge.org/notes/arcadedb-timestamp-null-and-a-boolean-retest/).
+successful `INSERT` — within a day of being filed. All four ship in ArcadeDB 26.10.1 and were
+re-verified here on the 26.11.1 release (2026-11-07).
+[The release retest](https://adbcbridge.org/notes/arcadedb-26-11-1-release-retest/).
 
 Site and docs: <https://adbcbridge.org> · Launch write-up with the numbers:
 <https://theaivibe.org/blog/adbcbridge-apache-arrow-adbc-driver-for-any-odbc-database> ·
