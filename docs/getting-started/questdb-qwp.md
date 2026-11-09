@@ -151,9 +151,13 @@ QuestDB type in `xdbc_type_name`. There are no constraints to report.
   handles are single-threaded); a blocked fetch finishes its current batch first.
 - **Parameter schemas.** QuestDB does not describe parameters; bind with typed Arrow
   arrays, or cast in SQL (`$1::int`).
-- **Small decimals on read.** c-questdb-client 7.2.0's Arrow egress rejects `DECIMAL`
-  columns with precision 9 or less (`QWP egress: unsupported column type DECIMAL(8,2)`);
-  recorded in [UPSTREAM.md](../UPSTREAM.md).
+- **Small decimals on read, QuestDB 10.1.0.** The server's QWP egress on 10.1.0 refuses
+  `DECIMAL` columns with precision 9 or less (`QWP egress: unsupported column type
+  DECIMAL(8,2)`); wider decimals read fine. QuestDB fixed it on master on 2026-11-06
+  ([questdb/questdb#8134](https://github.com/questdb/questdb/pull/8134); the narrow classes
+  now travel as DECIMAL64 at the column's scale), verified here on the nightly image on
+  2026-11-09 through this driver. The first release after 10.1.0 carries it; recorded in
+  [UPSTREAM.md](../UPSTREAM.md).
 - **Enterprise-only features** (durable acknowledgements, multi-endpoint failover, OIDC)
   are reachable through `adbc.questdb.conf` but not tested here.
 
