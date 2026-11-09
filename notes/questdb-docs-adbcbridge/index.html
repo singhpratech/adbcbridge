@@ -50,7 +50,12 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-11-06</div><h1>adbcBridge has a page in QuestDB&#x27;s documentation</h1><p class="meta">QuestDB merged the integration page on 2026-11-06. It leads with the native QWP driver, keeps the ODBC route for QuestDB 9 and older, and comes with a bullet on the integrations overview. How it was written, reviewed and rewritten once the driver changed.</p><p>QuestDB's documentation now has an adbcBridge page:
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-11-06</div><h1>adbcBridge has a page in QuestDB&#x27;s documentation</h1><p class="meta">QuestDB merged the integration page on 2026-11-06. It leads with the native QWP driver, keeps the ODBC route for QuestDB 9 and older, and comes with a bullet on the integrations overview. How it was written, reviewed and rewritten once the driver changed.</p><div class="callout">
+<p><strong>Update, 2026-11-09: the DECIMAL limit named on the page is fixed on QuestDB's master</strong>
+(<a href="https://github.com/questdb/questdb/pull/8134">questdb/questdb#8134</a>, merged 2026-11-06), verified here on the nightly
+image on 2026-11-09. The page's type summary gets its promised follow-up when a release carries it.</p>
+</div>
+<p>QuestDB's documentation now has an adbcBridge page:
 <a href="https://questdb.com/docs/integrations/other/adbcbridge/">Integrations › Other Tools › adbcBridge</a>, with a bullet on the
 <a href="https://questdb.com/docs/integrations/overview/">integrations overview</a>. It was written here, sent as
 <a href="https://github.com/questdb/documentation/pull/564">questdb/documentation#564</a>, reviewed by QuestDB and merged on 2026-11-06.</p>
@@ -63,9 +68,11 @@ own voice and structure:</p>
   <code>username</code>, <code>password</code>, <code>adbc.questdb.token</code>), a Python example through
   <code>adbc_driver_manager.dbapi</code> and a TypeScript one through <code>@apache-arrow/adbc-driver-manager</code>,
   bulk ingest from an Arrow table, and what comes back: every QuestDB type as its Arrow
-  counterpart, transactions reported as not implemented, and the one server-side limit that still
-  stands, a <code>SELECT</code> of a <code>DECIMAL</code> column with precision 9 or less, which
-  <a href="https://github.com/questdb/questdb/pull/8111">questdb/questdb#8111</a> lifts.</li>
+  counterpart, transactions reported as not implemented, and the one server-side limit on 10.1.0,
+  a <code>SELECT</code> of a <code>DECIMAL</code> column with precision 9 or less, which QuestDB lifted on master on
+  2026-11-06 (<a href="https://github.com/questdb/questdb/pull/8134">questdb/questdb#8134</a>, superseding our
+  <a href="https://github.com/questdb/questdb/pull/8111">#8111</a>); the page's type summary gets a follow-up once a
+  release carries it.</li>
 <li><strong>The ODBC route for QuestDB 9 and older.</strong> One section: install from PyPI, crates.io, NuGet or
   Go, connect through psqlodbc with <code>autocommit=True</code>, and why that flag matters there (QuestDB
   has no <code>SAVEPOINT</code>, which psqlodbc sends inside a transaction).</li>

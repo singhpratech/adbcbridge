@@ -1828,9 +1828,13 @@ QuestDB type in <code>xdbc_type_name</code>. There are no constraints to report.
   handles are single-threaded); a blocked fetch finishes its current batch first.</li>
 <li><strong>Parameter schemas.</strong> QuestDB does not describe parameters; bind with typed Arrow
   arrays, or cast in SQL (<code>$1::int</code>).</li>
-<li><strong>Small decimals on read.</strong> c-questdb-client 7.2.0's Arrow egress rejects <code>DECIMAL</code>
-  columns with precision 9 or less (<code>QWP egress: unsupported column type DECIMAL(8,2)</code>);
-  recorded in <a href="#upstream">UPSTREAM.md</a>.</li>
+<li><strong>Small decimals on read, QuestDB 10.1.0.</strong> The server's QWP egress on 10.1.0 refuses
+  <code>DECIMAL</code> columns with precision 9 or less (<code>QWP egress: unsupported column type
+  DECIMAL(8,2)</code>); wider decimals read fine. QuestDB fixed it on master on 2026-11-06
+  (<a href="https://github.com/questdb/questdb/pull/8134">questdb/questdb#8134</a>; the narrow classes
+  now travel as DECIMAL64 at the column's scale), verified here on the nightly image on
+  2026-11-09 through this driver. The first release after 10.1.0 carries it; recorded in
+  <a href="#upstream">UPSTREAM.md</a>.</li>
 <li><strong>Enterprise-only features</strong> (durable acknowledgements, multi-endpoint failover, OIDC)
   are reachable through <code>adbc.questdb.conf</code> but not tested here.</li>
 </ul>
@@ -11513,7 +11517,7 @@ before it is filed.</p>
 <td>2026-09-24</td>
 <td>QuestDB documentation</td>
 <td><a href="https://github.com/questdb/documentation/pull/564">questdb/documentation#564</a></td>
-<td>An integration page for adbcBridge under Other Tools (<code>integrations/other/adbcbridge</code>) plus a bullet on the integrations overview. Opened when the page covered the ODBC route over psqlodbc; after <code>adbc_driver_questdb</code> shipped in 0.1.4 the maintainer asked on 2026-11-03 for a rewrite leading with the native driver and naming QuestDB's own clients first, done the same day: build, connection options, Python and TypeScript examples through the ADBC driver managers, bulk ingest, the type summary (with the server-side DECIMAL limit that <a href="https://github.com/questdb/questdb/pull/8111">questdb/questdb#8111</a> lifts), then the ODBC bridge as the section for QuestDB 9 and older. Every snippet run against QuestDB 10.1.0 before it went up. Contribution rather than a report.</td>
+<td>An integration page for adbcBridge under Other Tools (<code>integrations/other/adbcbridge</code>) plus a bullet on the integrations overview. Opened when the page covered the ODBC route over psqlodbc; after <code>adbc_driver_questdb</code> shipped in 0.1.4 the maintainer asked on 2026-11-03 for a rewrite leading with the native driver and naming QuestDB's own clients first, done the same day: build, connection options, Python and TypeScript examples through the ADBC driver managers, bulk ingest, the type summary (with the server-side DECIMAL limit on 10.1.0, lifted on master by <a href="https://github.com/questdb/questdb/pull/8134">questdb/questdb#8134</a>; the promised follow-up to that sentence is <a href="https://github.com/questdb/documentation/pull/626">#626</a>), then the ODBC bridge as the section for QuestDB 9 and older. Every snippet run against QuestDB 10.1.0 before it went up. Contribution rather than a report.</td>
 <td><strong>merged 2026-11-06</strong> — reviewed and merged by the maintainer with one link fix of their own; live at <a href="https://questdb.com/docs/integrations/other/adbcbridge/">questdb.com/docs/integrations/other/adbcbridge</a> and listed on the <a href="https://questdb.com/docs/integrations/overview/">integrations overview</a>; announced by QuestDB on <a href="https://www.linkedin.com/posts/questdb_questdb-activity-7524524689596121088-uO9b">LinkedIn</a> the same day ("If you work in C#, Java, Go or TypeScript, or in a tool that takes any ADBC driver, this is how you get there")</td>
 </tr>
 <tr>
@@ -11737,8 +11741,8 @@ before it is filed.</p>
 <td>2026-10-28</td>
 <td>QuestDB</td>
 <td><a href="https://github.com/questdb/questdb/pull/8111">questdb/questdb#8111</a> (fix PR, ours)</td>
-<td>Over QWP, a <code>SELECT</code> of a <code>DECIMAL</code> column with precision 9 or less failed with <code>QWP egress: unsupported column type DECIMAL(8,2)</code>: the wire has kinds for the DECIMAL64/128/256 storage classes only and the server's <code>QwpColumnTypeMapper</code> refused DECIMAL8/16/32 instead of widening them. The PR sends them as the DECIMAL64 kind with the column's scale (per-row widening with each class's NULL sentinel; the 8-byte columnar fast path hands them to the per-row loop) and adds <code>testDecimal8To32TravelAsDecimal64</code>. Found 2026-10-27 building <code>adbc_driver_questdb</code>.</td>
-<td><strong>open</strong> — 34/34 in <code>QwpEgressTypesExhaustiveTest</code> locally on master with JDK 25</td>
+<td>Over QWP, a <code>SELECT</code> of a <code>DECIMAL</code> column with precision 9 or less failed with <code>QWP egress: unsupported column type DECIMAL(8,2)</code>: the wire has kinds for the DECIMAL64/128/256 storage classes only and the server's <code>QwpColumnTypeMapper</code> refused DECIMAL8/16/32 instead of widening them. The PR sends them as the DECIMAL64 kind with the column's scale (per-row widening with each class's NULL sentinel; the 8-byte columnar fast path hands them to the per-row loop) and adds <code>testDecimal8To32TravelAsDecimal64</code>. Found 2026-10-27 building <code>adbc_driver_questdb</code>; also reported on the QuestDB community forum, which is the report QuestDB's own fix cites.</td>
+<td><strong>fixed on master by QuestDB</strong> — <a href="https://github.com/questdb/questdb/pull/8134">questdb/questdb#8134</a> (Steven Sklar, merged 2026-11-06, citing the adbcBridge forum report and closing <a href="https://github.com/questdb/questdb/issues/7828">#7828</a>) takes the same route: the three narrow classes travel as DECIMAL64 with the column's scale. Verified here on 2026-11-09 against the <code>questdb/questdb:nightly</code> image (10.1.1-SNAPSHOT, commit 2bb61a06): <code>DECIMAL(2,0)</code>, <code>(4,1)</code>, <code>(8,2)</code> and <code>(9,3)</code> columns, values, negatives and NULLs, all read through <code>adbc_driver_questdb</code>; the same probe on 10.1.0 still fails. Our #8111 is closed in its favour; the follow-up to the QuestDB docs page's type summary is <a href="https://github.com/questdb/documentation/pull/626">questdb/documentation#626</a>. Awaits the first release after 10.1.0</td>
 </tr>
 </tbody>
 </table></div>
