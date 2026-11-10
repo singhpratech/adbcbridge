@@ -1,9 +1,9 @@
 {
- "as_of": "2026-11-10T16:50:14Z",
+ "as_of": "2026-11-10T23:27:36Z",
  "window_days": 7,
  "count": 43,
  "with_project_activity": 33,
- "fixed": 15,
+ "fixed": 16,
  "items": [
   {
    "project": "ArcadeDB",
@@ -534,11 +534,17 @@
      "at": "2026-11-10T16:36:42Z",
      "actor": "javier",
      "url": "https://github.com/questdb/documentation/commit/052579355161ee56c2b6865b0bdb0804d2aec4ac"
+    },
+    {
+     "type": "commit",
+     "at": "2026-11-10T20:03:04Z",
+     "actor": "incrediblevichu",
+     "url": "https://github.com/questdb/documentation/commit/09d3590fcc3303bfc3114cf39b08598665af81f9"
     }
    ],
    "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-11-10T16:36:42Z",
+   "last_activity": "2026-11-10T20:03:04Z",
    "pulse": true
   },
   {
@@ -1905,10 +1911,9 @@
    "reporter": "singhpratech",
    "what": "psqlodbc 16 (the build Debian and Ubuntu package) cannot open a connection to ArcadeDB 26.10.1, 26.10.2 or 26.11.1: its connect-time setup `SET DateStyle = 'ISO';SET extra_float_digits = 2;show transaction_isolation` is one simple-query message holding three statements, which PostgreSQL answers with three results; ArcadeDB runs a simple query as one statement and, since its `SET` parser became strict in [#8392](https://github.com/ArcadeData/arcadedb/issues/8392) (26.10.1), refuses the whole string with SQLSTATE 42601 where 26.9.1 answered `Setting ignored` and `CommandComplete SET`. Checked on the wire with no driver in between on all four releases. psqlodbc 18 asks `SHOW DateStyle;` first and is not affected; adbcBridge's default delegation hands the connection to the Arrow PostgreSQL ADBC driver and is not affected either. Found on the 2026-11-07 release retest ([note](https://adbcbridge.org/notes/arcadedb-26-11-1-release-retest/))",
    "kind": "issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "fixed",
+   "closed_at": "2026-11-10T22:28:04Z",
    "labels": [
-    "in progress",
     "bug",
     "postgresql-wire",
     "severity:major"
@@ -1951,7 +1956,7 @@
      "actor": "lvca",
      "title": "fix(#11483): run every statement of a multi-statement simple query, in one implicit transaction",
      "url": "https://github.com/ArcadeData/arcadedb/pull/11485",
-     "state": "open"
+     "state": "merged"
     },
     {
      "type": "commit",
@@ -1970,11 +1975,38 @@
      "at": "2026-11-10T05:11:11Z",
      "actor": "lvca",
      "url": "https://github.com/ArcadeData/arcadedb/commit/5b7496f563778bba55316058cff809e247e082ae"
+    },
+    {
+     "type": "commit",
+     "at": "2026-11-10T22:28:03Z",
+     "actor": "lvca",
+     "url": "https://github.com/ArcadeData/arcadedb/commit/601600ee3ca5cf4331680278181e133fa95174f6"
+    },
+    {
+     "type": "closed",
+     "at": "2026-11-10T22:28:05Z",
+     "actor": "lvca",
+     "reason": null,
+     "commit": null
+    },
+    {
+     "type": "comment",
+     "at": "2026-11-10T22:28:28Z",
+     "actor": "lvca",
+     "association": "member",
+     "text": "Fixed in #11485, available from v26.12.1. **Cause:** the PostgreSQL protocol lets a client send several statements, separated by `;`, in one simple query (psqlodbc 16 does this at connect time: `SET DateStyle = 'ISO';SET extra_float_digits = 2;show transaction_isolation`). ArcadeDB ran the whole text as a single statement, so the parser refused it as a syntax error. **Fix:** ArcadeDB now behaves l…",
+     "url": "https://github.com/ArcadeData/arcadedb/issues/11483#issuecomment-6781016550"
+    },
+    {
+     "type": "unlabeled",
+     "at": "2026-11-10T22:28:30Z",
+     "actor": "lvca",
+     "label": "in progress"
     }
    ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": "2026-11-10T05:11:11Z",
+   "last_activity": "2026-11-10T22:28:30Z",
    "pulse": true
   },
   {
@@ -2026,11 +2058,17 @@
      "at": "2026-11-10T16:36:43Z",
      "actor": "javier",
      "url": "https://github.com/questdb/questdb/commit/052579355161ee56c2b6865b0bdb0804d2aec4ac"
+    },
+    {
+     "type": "commit",
+     "at": "2026-11-10T20:03:04Z",
+     "actor": "incrediblevichu",
+     "url": "https://github.com/questdb/questdb/commit/09d3590fcc3303bfc3114cf39b08598665af81f9"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-11-10T16:36:43Z",
+   "last_activity": "2026-11-10T20:03:04Z",
    "pulse": true
   }
  ]
