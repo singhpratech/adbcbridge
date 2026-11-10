@@ -11573,7 +11573,7 @@ before it is filed.</p>
 <td>Apache Doris</td>
 <td><a href="https://github.com/apache/doris/issues/67301">apache/doris#67301</a></td>
 <td>Server-side prepared <code>INSERT</code> refuses a string parameter sent with MySQL type <code>BLOB</code> — what MySQL Connector/ODBC sends for every <code>SQL_C_WCHAR</code> parameter — so a Unicode ODBC client cannot insert through prepared statements: <code>NullPointerException</code> in the FE on 2.1.0 (stack trace attached), <code>AnalysisException: Unsupported MySQL type: BLOB</code> on 4.1.3. Filed with the program and both versions' output.</td>
-<td>fix PR open — <a href="https://github.com/apache/doris/pull/67306">apache/doris#67306</a> by a Doris contributor, "closes #67301"; conflicts resolved at a maintainer's request on 2026-09-11</td>
+<td><strong>fix on master</strong>, per the Doris contributor: <a href="https://github.com/apache/doris/pull/69314">apache/doris#69314</a> (merged 2026-10-20) maps all four BLOB type codes to a binary literal and <a href="https://github.com/apache/doris/pull/69805">#69805</a> (merged 2026-11-03) keeps non-UTF-8 string parameters byte exact, so the contributor's earlier fix PR <a href="https://github.com/apache/doris/pull/67306">#67306</a> was closed as superseded on 2026-11-10. Not yet re-run here on a Doris build; the issue stays open until it is</td>
 </tr>
 <tr>
 <td>2026-08-29</td>
