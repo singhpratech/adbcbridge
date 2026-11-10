@@ -374,7 +374,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       questdb:
-        image: questdb/questdb:10.1.0
+        image: questdb/questdb:10.2.0
         ports:
           - 9000:9000
     steps:

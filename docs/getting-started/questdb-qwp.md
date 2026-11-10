@@ -151,13 +151,12 @@ QuestDB type in `xdbc_type_name`. There are no constraints to report.
   handles are single-threaded); a blocked fetch finishes its current batch first.
 - **Parameter schemas.** QuestDB does not describe parameters; bind with typed Arrow
   arrays, or cast in SQL (`$1::int`).
-- **Small decimals on read, QuestDB 10.1.0.** The server's QWP egress on 10.1.0 refuses
+- **Small decimals on read need QuestDB 10.2.** The server's QWP egress on 10.1.0 refuses
   `DECIMAL` columns with precision 9 or less (`QWP egress: unsupported column type
-  DECIMAL(8,2)`); wider decimals read fine. QuestDB fixed it on master on 2026-11-06
-  ([questdb/questdb#8134](https://github.com/questdb/questdb/pull/8134); the narrow classes
-  now travel as DECIMAL64 at the column's scale), verified here on the nightly image on
-  2026-11-09 through this driver. The first release after 10.1.0 carries it; recorded in
-  [UPSTREAM.md](../UPSTREAM.md).
+  DECIMAL(8,2)`); wider decimals read fine. QuestDB 10.2.0 (2026-11-10) reads them: the
+  narrow classes travel as DECIMAL64 at the column's scale
+  ([questdb/questdb#8134](https://github.com/questdb/questdb/pull/8134)), verified here on
+  the release image through this driver; recorded in [UPSTREAM.md](../UPSTREAM.md).
 - **Enterprise-only features** (durable acknowledgements, multi-endpoint failover, OIDC)
   are reachable through `adbc.questdb.conf` but not tested here.
 
@@ -169,7 +168,7 @@ all four modes, catalog, errors, timeouts); `questdb/tests/c/test_qwp_driver.c` 
 smoke test. Both are wired into CI (`questdb` job) against the `questdb/questdb` image.
 
 ```bash
-docker run -d -p 9000:9000 questdb/questdb:10.1.0
+docker run -d -p 9000:9000 questdb/questdb:10.2.0
 QUESTDB_URI=ws://127.0.0.1:9000 ./build-questdb/adbc_questdb_test_driver build-questdb/libadbc_driver_questdb.so
 QUESTDB_URI=ws://127.0.0.1:9000 ADBC_QUESTDB_DRIVER=$PWD/build-questdb/libadbc_driver_questdb.so \
   python -m pytest questdb/tests/test_qwp.py
