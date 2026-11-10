@@ -1828,13 +1828,12 @@ QuestDB type in <code>xdbc_type_name</code>. There are no constraints to report.
   handles are single-threaded); a blocked fetch finishes its current batch first.</li>
 <li><strong>Parameter schemas.</strong> QuestDB does not describe parameters; bind with typed Arrow
   arrays, or cast in SQL (<code>$1::int</code>).</li>
-<li><strong>Small decimals on read, QuestDB 10.1.0.</strong> The server's QWP egress on 10.1.0 refuses
+<li><strong>Small decimals on read need QuestDB 10.2.</strong> The server's QWP egress on 10.1.0 refuses
   <code>DECIMAL</code> columns with precision 9 or less (<code>QWP egress: unsupported column type
-  DECIMAL(8,2)</code>); wider decimals read fine. QuestDB fixed it on master on 2026-11-06
-  (<a href="https://github.com/questdb/questdb/pull/8134">questdb/questdb#8134</a>; the narrow classes
-  now travel as DECIMAL64 at the column's scale), verified here on the nightly image on
-  2026-11-09 through this driver. The first release after 10.1.0 carries it; recorded in
-  <a href="#upstream">UPSTREAM.md</a>.</li>
+  DECIMAL(8,2)</code>); wider decimals read fine. QuestDB 10.2.0 (2026-11-10) reads them: the
+  narrow classes travel as DECIMAL64 at the column's scale
+  (<a href="https://github.com/questdb/questdb/pull/8134">questdb/questdb#8134</a>), verified here on
+  the release image through this driver; recorded in <a href="#upstream">UPSTREAM.md</a>.</li>
 <li><strong>Enterprise-only features</strong> (durable acknowledgements, multi-endpoint failover, OIDC)
   are reachable through <code>adbc.questdb.conf</code> but not tested here.</li>
 </ul>
@@ -1843,7 +1842,7 @@ QuestDB type in <code>xdbc_type_name</code>. There are no constraints to report.
 live server (connect, every column type, bind parameters, <code>executemany</code>, bulk ingest in
 all four modes, catalog, errors, timeouts); <code>questdb/tests/c/test_qwp_driver.c</code> is the C
 smoke test. Both are wired into CI (<code>questdb</code> job) against the <code>questdb/questdb</code> image.</p>
-<pre><code class="language-bash">docker run -d -p 9000:9000 questdb/questdb:10.1.0
+<pre><code class="language-bash">docker run -d -p 9000:9000 questdb/questdb:10.2.0
 QUESTDB_URI=ws://127.0.0.1:9000 ./build-questdb/adbc_questdb_test_driver build-questdb/libadbc_driver_questdb.so
 QUESTDB_URI=ws://127.0.0.1:9000 ADBC_QUESTDB_DRIVER=$PWD/build-questdb/libadbc_driver_questdb.so \
   python -m pytest questdb/tests/test_qwp.py
@@ -11742,7 +11741,7 @@ before it is filed.</p>
 <td>QuestDB</td>
 <td><a href="https://github.com/questdb/questdb/pull/8111">questdb/questdb#8111</a> (fix PR, ours)</td>
 <td>Over QWP, a <code>SELECT</code> of a <code>DECIMAL</code> column with precision 9 or less failed with <code>QWP egress: unsupported column type DECIMAL(8,2)</code>: the wire has kinds for the DECIMAL64/128/256 storage classes only and the server's <code>QwpColumnTypeMapper</code> refused DECIMAL8/16/32 instead of widening them. The PR sends them as the DECIMAL64 kind with the column's scale (per-row widening with each class's NULL sentinel; the 8-byte columnar fast path hands them to the per-row loop) and adds <code>testDecimal8To32TravelAsDecimal64</code>. Found 2026-10-27 building <code>adbc_driver_questdb</code>; also reported on the QuestDB community forum, which is the report QuestDB's own fix cites.</td>
-<td><strong>fixed on master by QuestDB</strong> — <a href="https://github.com/questdb/questdb/pull/8134">questdb/questdb#8134</a> (Steven Sklar, merged 2026-11-06, citing the adbcBridge forum report and closing <a href="https://github.com/questdb/questdb/issues/7828">#7828</a>) takes the same route: the three narrow classes travel as DECIMAL64 with the column's scale. Verified here on 2026-11-09 against the <code>questdb/questdb:nightly</code> image (10.1.1-SNAPSHOT, commit 2bb61a06): <code>DECIMAL(2,0)</code>, <code>(4,1)</code>, <code>(8,2)</code> and <code>(9,3)</code> columns, values, negatives and NULLs, all read through <code>adbc_driver_questdb</code>; the same probe on 10.1.0 still fails. Our #8111 is closed in its favour; the follow-up to the QuestDB docs page's type summary is <a href="https://github.com/questdb/documentation/pull/626">questdb/documentation#626</a>. Awaits the first release after 10.1.0</td>
+<td><strong>fixed on master by QuestDB</strong> — <a href="https://github.com/questdb/questdb/pull/8134">questdb/questdb#8134</a> (Steven Sklar, merged 2026-11-06, citing the adbcBridge forum report and closing <a href="https://github.com/questdb/questdb/issues/7828">#7828</a>) takes the same route: the three narrow classes travel as DECIMAL64 with the column's scale. Verified here on 2026-11-09 against the <code>questdb/questdb:nightly</code> image (10.1.1-SNAPSHOT, commit 2bb61a06): <code>DECIMAL(2,0)</code>, <code>(4,1)</code>, <code>(8,2)</code> and <code>(9,3)</code> columns, values, negatives and NULLs, all read through <code>adbc_driver_questdb</code>; the same probe on 10.1.0 still fails. Our #8111 is closed in its favour; the follow-up to the QuestDB docs page's type summary is <a href="https://github.com/questdb/documentation/pull/626">questdb/documentation#626</a>. <strong>Fixed in QuestDB 10.2.0</strong> (released 2026-11-10), re-verified on the release image the same day: the probe reads every narrow width and the driver's 18-case suite passes</td>
 </tr>
 </tbody>
 </table></div>
