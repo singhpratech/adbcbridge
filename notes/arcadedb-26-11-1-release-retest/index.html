@@ -50,7 +50,13 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-11-07</div><h1>ArcadeDB 26.11.1: four fixes confirmed in a release, and the connect string psqlodbc 16 lost</h1><p class="meta">The four ArcadeDB PostgreSQL-wire fixes from September, re-verified on the 26.10.1, 26.10.2 and 26.11.1 release images; a fifth defect that was never filed turned out fixed too; and psqlodbc 16&#x27;s one-string connect sequence, accepted by 26.9.1, is refused by every release since.</p><p>Four ArcadeDB findings from September were fixed on <code>main</code> within days and verified here on
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-11-07</div><h1>ArcadeDB 26.11.1: four fixes confirmed in a release, and the connect string psqlodbc 16 lost</h1><p class="meta">The four ArcadeDB PostgreSQL-wire fixes from September, re-verified on the 26.10.1, 26.10.2 and 26.11.1 release images; a fifth defect that was never filed turned out fixed too; and psqlodbc 16&#x27;s one-string connect sequence, accepted by 26.9.1, is refused by every release since.</p><div class="callout">
+<p><strong>Update, 2026-11-10: the psqlodbc 16 lockout is reported, with a fix.</strong> The report is
+<a href="https://github.com/ArcadeData/arcadedb/issues/11483">ArcadeData/arcadedb#11483</a> and the fix is
+<a href="https://github.com/ArcadeData/arcadedb/pull/11484">#11484</a>: a simple Query message is divided on its top-level <code>;</code>,
+each statement is answered in turn inside one implicit transaction block, and one ReadyForQuery ends the message. <a href="/notes/arcadedb-multi-statement-simple-query-fix/">The fix, in a note of its own</a>.</p>
+</div>
+<p>Four ArcadeDB findings from September were fixed on <code>main</code> within days and verified here on
 snapshot builds, with the release line left open: "ships in 26.10.1". ArcadeDB has released
 three times since, 26.10.1 on 2026-10-05, 26.10.2 on 2026-10-15 and 26.11.1 on 2026-11-04,
 so on 2026-11-07 the same probes ran again on the release images, pulled from Docker Hub

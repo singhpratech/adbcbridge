@@ -99,4 +99,5 @@
   <url><loc>https://adbcbridge.org/notes/opensearch-sql-odbc-merge-day/</loc><lastmod>2026-11-03</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://adbcbridge.org/notes/questdb-docs-adbcbridge/</loc><lastmod>2026-11-06</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://adbcbridge.org/notes/arcadedb-26-11-1-release-retest/</loc><lastmod>2026-11-07</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://adbcbridge.org/notes/arcadedb-multi-statement-simple-query-fix/</loc><lastmod>2026-11-10</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>
 </urlset>
