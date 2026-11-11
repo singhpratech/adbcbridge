@@ -1,9 +1,9 @@
 {
- "as_of": "2026-11-10T23:27:36Z",
+ "as_of": "2026-11-11T12:55:24Z",
  "window_days": 7,
- "count": 43,
- "with_project_activity": 33,
- "fixed": 16,
+ "count": 44,
+ "with_project_activity": 34,
+ "fixed": 17,
  "items": [
   {
    "project": "ArcadeDB",
@@ -2004,7 +2004,7 @@
      "label": "in progress"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-11-10T22:28:30Z",
    "pulse": true
@@ -2012,9 +2012,41 @@
   {
    "project": "ArcadeDB",
    "repo": "ArcadeData/arcadedb",
+   "number": 11485,
+   "url": "https://github.com/ArcadeData/arcadedb/pull/11485",
+   "title": "fix(#11483): run every statement of a multi-statement simple query, in one implicit transaction",
+   "reported": "2026-11-07",
+   "reporter": "lvca",
+   "what": "psqlodbc 16 (the build Debian and Ubuntu package) cannot open a connection to ArcadeDB 26.10.1, 26.10.2 or 26.11.1: its connect-time setup `SET DateStyle = 'ISO';SET extra_float_digits = 2;show transaction_isolation` is one simple-query message holding three statements, which PostgreSQL answers with three results; ArcadeDB runs a simple query as one statement and, since its `SET` parser became strict in [#8392](https://github.com/ArcadeData/arcadedb/issues/8392) (26.10.1), refuses the whole string with SQLSTATE 42601 where 26.9.1 answered `Setting ignored` and `CommandComplete SET`. Checked on the wire with no driver in between on all four releases. psqlodbc 18 asks `SHOW DateStyle;` first and is not affected; adbcBridge's default delegation hands the connection to the Arrow PostgreSQL ADBC driver and is not affected either. Found on the 2026-11-07 release retest ([note](https://adbcbridge.org/notes/arcadedb-26-11-1-release-retest/))",
+   "kind": "pull request",
+   "state": "fixed",
+   "closed_at": "2026-11-10T22:28:02Z",
+   "labels": [
+    "bug",
+    "postgresql-wire"
+   ],
+   "reactions": 0,
+   "maintainer_events": [
+    {
+     "type": "pull_request",
+     "at": "2026-11-10T16:27:17Z",
+     "actor": "singhpratech",
+     "title": "fix(#11483): a multi-statement simple query sent to an HA follower rolls back its writes",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/11484",
+     "state": "open"
+    }
+   ],
+   "reporter_comments": 1,
+   "community_comments": 0,
+   "last_activity": "2026-11-10T22:28:02Z",
+   "pulse": true
+  },
+  {
+   "project": "ArcadeDB",
+   "repo": "ArcadeData/arcadedb",
    "number": 11484,
    "url": "https://github.com/ArcadeData/arcadedb/pull/11484",
-   "title": "fix(#11483): a simple Query message holding several statements answers each in turn",
+   "title": "fix(#11483): a multi-statement simple query sent to an HA follower rolls back its writes",
    "reported": "2026-11-07",
    "reporter": "singhpratech",
    "what": "psqlodbc 16 (the build Debian and Ubuntu package) cannot open a connection to ArcadeDB 26.10.1, 26.10.2 or 26.11.1: its connect-time setup `SET DateStyle = 'ISO';SET extra_float_digits = 2;show transaction_isolation` is one simple-query message holding three statements, which PostgreSQL answers with three results; ArcadeDB runs a simple query as one statement and, since its `SET` parser became strict in [#8392](https://github.com/ArcadeData/arcadedb/issues/8392) (26.10.1), refuses the whole string with SQLSTATE 42601 where 26.9.1 answered `Setting ignored` and `CommandComplete SET`. Checked on the wire with no driver in between on all four releases. psqlodbc 18 asks `SHOW DateStyle;` first and is not affected; adbcBridge's default delegation hands the connection to the Arrow PostgreSQL ADBC driver and is not affected either. Found on the 2026-11-07 release retest ([note](https://adbcbridge.org/notes/arcadedb-26-11-1-release-retest/))",
@@ -2033,7 +2065,7 @@
      "url": "https://github.com/ArcadeData/arcadedb/pull/11484#issuecomment-6765498110"
     }
    ],
-   "reporter_comments": 2,
+   "reporter_comments": 3,
    "community_comments": 0,
    "last_activity": "2026-11-10T10:54:55Z",
    "pulse": true
