@@ -50,7 +50,16 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-11-07</div><h1>ArcadeDB - one Query message, several statements, and the fix sent upstream so psqlodbc 16 connects again</h1><p class="meta">psqlodbc 16 opens every connection with three statements in one simple-query message. ArcadeDB ran the text as one statement, so the driver could not connect to 26.10.1 or later. The report and the fix pull request went upstream on 2026-11-10.</p><p>The <a href="/notes/arcadedb-26-11-1-release-retest/">26.11.1 release retest</a> confirmed four fixes and turned up one new
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-11-07</div><h1>ArcadeDB - one Query message, several statements, and the fix sent upstream so psqlodbc 16 connects again</h1><p class="meta">psqlodbc 16 opens every connection with three statements in one simple-query message. ArcadeDB ran the text as one statement, so the driver could not connect to 26.10.1 or later. The report and the fix pull request went upstream on 2026-11-10.</p><div class="callout">
+<p><strong>Update, 2026-11-11: fixed on main, ships in ArcadeDB 26.12.1.</strong> The maintainer merged a fix of his own the same
+evening, <a href="https://github.com/ArcadeData/arcadedb/pull/11485">ArcadeData/arcadedb#11485</a>. It takes the same shape as
+the one described below, built on the module's own lexer: each statement of the message runs in turn and gets its own
+result, the statements share one implicit transaction, and one <code>ReadyForQuery</code> ends the message. It also refuses a
+prepared statement holding several statements with PostgreSQL's own message. Verified here on the <code>26.12.1-SNAPSHOT</code>
+image built from that merge commit (601600ee): psqlodbc 16 connects with a plain connection string, the three-statement
+setup is answered <code>SET</code>, <code>SET</code>, one row, and the September probes pass through the driver and through adbcBridge.</p>
+</div>
+<p>The <a href="/notes/arcadedb-26-11-1-release-retest/">26.11.1 release retest</a> confirmed four fixes and turned up one new
 finding: psqlodbc 16, the build Debian and Ubuntu ship as <code>odbc-postgresql</code>, cannot open a connection to ArcadeDB
 26.10.1, 26.10.2 or 26.11.1. On 2026-11-10 it went upstream as a report,
 <a href="https://github.com/ArcadeData/arcadedb/issues/11483">ArcadeData/arcadedb#11483</a>, and as a fix,
