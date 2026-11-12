@@ -59,6 +59,13 @@ prepared statement holding several statements with PostgreSQL's own message. Ver
 image built from that merge commit (601600ee): psqlodbc 16 connects with a plain connection string, the three-statement
 setup is answered <code>SET</code>, <code>SET</code>, one row, and the September probes pass through the driver and through adbcBridge.</p>
 </div>
+<div class="callout">
+<p><strong>Update, 2026-11-12: the follow-up fix from here is merged too.</strong> One case was left on main after #11485: a
+multi-statement message that failed on a follower of a three-node cluster kept its write on every server, because the
+follower forwarded each write to the leader, where it committed on its own. The pull request described in this note,
+<a href="https://github.com/ArcadeData/arcadedb/pull/11484">#11484</a>, was reduced to that case, one line that marks the implicit
+transaction the way <code>BEGIN</code> does plus a three-node test, and merged on 2026-11-11. Both changes ship in ArcadeDB 26.12.1.</p>
+</div>
 <p>The <a href="/notes/arcadedb-26-11-1-release-retest/">26.11.1 release retest</a> confirmed four fixes and turned up one new
 finding: psqlodbc 16, the build Debian and Ubuntu ship as <code>odbc-postgresql</code>, cannot open a connection to ArcadeDB
 26.10.1, 26.10.2 or 26.11.1. On 2026-11-10 it went upstream as a report,
