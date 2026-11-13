@@ -50,7 +50,15 @@ article a,.correct a,.meta a{padding:3px 0}footer a{padding:4px 0}
 <div class="wrap">
 <nav><a class="brand" href="/" title="adbcBridge home"><img src="/brand-mark-224.png" width="224" height="98" alt="adbcBridge mark: rows of data crossing a bridge into columns"> adbcBridge</a><button class="navmenu" type="button" aria-expanded="false" aria-controls="sitelinks">Menu</button><span class="sitenav" id="sitelinks"><a href="/">Home</a><a href="/docs/">Docs</a><a href="/matrix/">Matrix</a><a href="/db/">Databases</a><a href="/notes/" class="on">Notes</a><a href="https://github.com/singhpratech/adbcbridge">GitHub</a></span></nav>
 <main id="main">
-<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-11-03</div><h1>OpenSearch SQL ODBC takes both fixes in one evening, and its Linux build arrives on its own</h1><p class="meta">The two fix pull requests from the August findings were merged on 2026-11-03, verified here on the merge commit; the maintainer&#x27;s own change made the never-compiled POSIX branch build the same day; one gap remains and has its own pull request.</p><p>The two findings from August (<a href="/notes/opensearch-sql-odbc-findings/">the note</a>) each went
+<article><p class="back"><a href="/notes/">← All notes</a></p><div class="eyebrow">Notes · 2026-11-03</div><h1>OpenSearch SQL ODBC takes both fixes in one evening, and its Linux build arrives on its own</h1><p class="meta">The two fix pull requests from the August findings were merged on 2026-11-03, verified here on the merge commit; the maintainer&#x27;s own change made the never-compiled POSIX branch build the same day; one gap remains and has its own pull request.</p><div class="callout">
+<p><strong>Update, 2026-11-12: in a release.</strong> sql-odbc
+<a href="https://github.com/opensearch-project/sql-odbc/releases/tag/1.7.0.0">1.7.0.0</a>, the project's first release since
+2023, carries all three fixes: #104, #105 and the follow-up #115. Verified here on a Linux build of the release tag
+against OpenSearch 3.9: text that is not a datetime answers <code>22018</code>, a <code>TIMESTAMP</code> column is described as 93 and
+reaches adbcBridge as <code>timestamp[us]</code>, and a refused connect returns through unixODBC in two seconds with one
+<code>08001</code> record.</p>
+</div>
+<p>The two findings from August (<a href="/notes/opensearch-sql-odbc-findings/">the note</a>) each went
 upstream as a pull request on 2026-09-24. On 2026-11-03, within six seconds of each other,
 the maintainer approved and merged both, with "Thanks!" as the whole review:</p>
 <ul>

@@ -76,8 +76,8 @@ The second path described above, the result-set type map with no <code>timestamp
 by it: a real <code>TIMESTAMP</code> column is still described as <code>SQL_WVARCHAR</code> and still comes back as today.
 That entry went up as <a href="https://github.com/opensearch-project/sql-odbc/pull/115">#115</a> and was merged
 on 2026-11-04; verified on a build of <code>20fc51d</code>, a <code>TIMESTAMP</code> column is described as 93 and read as
-its instant. No release carries any of it yet; the matrix entry moves to "fixed in" that version
-when one does.</p>
+its instant. All of it ships in sql-odbc <a href="https://github.com/opensearch-project/sql-odbc/releases/tag/1.7.0.0">1.7.0.0</a>
+(2026-11-12), verified here on a Linux build of the release tag.</p>
 </div>
 <h2>A failed connect never returns</h2>
 <p>The second one costs a process. Point the driver at a closed port, or at a plaintext cluster
