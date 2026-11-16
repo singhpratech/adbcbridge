@@ -1,9 +1,9 @@
 {
- "as_of": "2026-11-13T23:37:56Z",
+ "as_of": "2026-11-16T15:57:36Z",
  "window_days": 7,
  "count": 44,
- "with_project_activity": 34,
- "fixed": 18,
+ "with_project_activity": 35,
+ "fixed": 19,
  "items": [
   {
    "project": "ArcadeDB",
@@ -882,15 +882,31 @@
    "reporter": "singhpratech",
    "what": "Two parameter-binding defects on 1.5.5.20260810, each with a standalone C program: `SQL_NULL_DATA` is ignored whenever a value buffer is bound and an empty string is sent instead (silently `''` into `String`, the epoch into `DateTime64`, a server parse error for numeric, date, decimal and bool; `SQL_DEFAULT_PARAM` the same; a NULL value pointer works); and parameter arrays — the driver's own `SQLExecute` + `SQLMoreResults`-per-set protocol from #324 — stop after set 1 because `SQLMoreResults` executes it and answers `SQL_NO_DATA`, so a 5-set array lands 2 rows with no diagnostic.",
    "kind": "issue",
-   "state": "open",
-   "closed_at": null,
+   "state": "fixed",
+   "closed_at": "2026-11-16T13:01:29Z",
    "labels": [],
    "reactions": 0,
-   "maintainer_events": [],
+   "maintainer_events": [
+    {
+     "type": "comment",
+     "at": "2026-11-16T13:01:28Z",
+     "actor": "ccoltx",
+     "association": "collaborator",
+     "text": "Both parts are fixed: `SQL_NULL_DATA` with a bound value buffer in #586, and parameter arrays in `SQLExecute` in #588. The fixes will be in the next release.",
+     "url": "https://github.com/ClickHouse/clickhouse-odbc/issues/582#issuecomment-6917141075"
+    },
+    {
+     "type": "closed",
+     "at": "2026-11-16T13:01:30Z",
+     "actor": "ccoltx",
+     "reason": null,
+     "commit": null
+    }
+   ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": null,
-   "pulse": false
+   "last_activity": "2026-11-16T13:01:30Z",
+   "pulse": true
   },
   {
    "project": "clickhouse-odbc",
