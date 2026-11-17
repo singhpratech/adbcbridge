@@ -117,7 +117,21 @@ on <code>master</code>. Neither is in a release yet — the latest tag is still 
 advice below holds for the shipped driver, and both lines become "fixed in &lt;release&gt;"
 when a tag carries them.</p>
 </div>
-<p>On the released driver, treat parameter arrays as unusable here: the compatibility matrix
+<div class="callout">
+<p><strong>Update, 2026-11-17: fixed in clickhouse-odbc 1.6.0.</strong> The release of 2026-11-16
+(<code>v1.6.0.20261116</code>) carries #586 and #588, and its notes credit both to this report. The
+maintainers closed #582 the same day.</p>
+<p>Verified on the Linux release binary against ClickHouse 26.10.4.207. The NULL reproducer
+stores NULL in all six cases, where 1.5.5 on the same server still shows five problems. The
+five-set array lands five rows from a single <code>SQLExecute</code>, with
+<code>SQL_ATTR_PARAMS_PROCESSED_PTR</code> at 5 and every status <code>SQL_PARAM_SUCCESS</code>, where 1.5.5 lands
+two. <code>SQLRowCount</code> answers −1 after an <code>INSERT</code> and after a <code>DELETE</code>, so #585 is in the
+release as well.</p>
+<p>The ClickHouse entry of the compatibility matrix passes unchanged on 1.6.0. adbcBridge keeps
+binding NULL with a NULL value pointer and batching rows into a multi-row <code>INSERT</code>, because
+both work on 1.5.5 and 1.6.0 alike. The advice below is for anyone still on 1.5.5.</p>
+</div>
+<p>On the 1.5.5 driver, treat parameter arrays as unusable here: the compatibility matrix
 turns them off for this driver and batches rows into a multi-row <code>INSERT</code> instead.</p>
 <h2>No affected-row count, since 2021</h2>
 <p><code>SQLRowCount</code> answers 0 for every write. Not −1, which ODBC defines as "not available" — 0,
@@ -144,8 +158,8 @@ request's CI build against ClickHouse 26.7.5.10: −1 after a literal <code>INSE
 <p><strong>What it means through adbcBridge.</strong> After an <code>INSERT</code>, <code>UPDATE</code> or <code>DELETE</code> executed as a
 statement, the affected-row count is −1, the ADBC "unknown", instead of a 0 that looked like
 a fact. The bulk-ingest count is unchanged: it comes from the rows adbcBridge sent, not from
-the driver. It ships in the first clickhouse-odbc release after 1.5.5; until then the
-compatibility row says 0 for the release and −1 for master. The exact count stays on the
+the driver. It shipped in clickhouse-odbc 1.6.0 on 2026-11-16: the compatibility row says 0 for 1.5.5
+and −1 from 1.6.0. The exact count stays on the
 table for when <code>async_insert</code> is off.</p>
 <h2>One HTTP request per execute, and what that costs</h2>
 <p>The driver talks to the server over HTTP, one request per execute. With one row per
