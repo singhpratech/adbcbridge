@@ -1,5 +1,5 @@
 {
- "as_of": "2026-11-16T15:57:36Z",
+ "as_of": "2026-11-17T01:01:15Z",
  "window_days": 7,
  "count": 44,
  "with_project_activity": 35,
@@ -891,7 +891,7 @@
      "type": "comment",
      "at": "2026-11-16T13:01:28Z",
      "actor": "ccoltx",
-     "association": "collaborator",
+     "association": "contributor",
      "text": "Both parts are fixed: `SQL_NULL_DATA` with a bound value buffer in #586, and parameter arrays in `SQLExecute` in #588. The fixes will be in the next release.",
      "url": "https://github.com/ClickHouse/clickhouse-odbc/issues/582#issuecomment-6917141075"
     },
@@ -903,7 +903,7 @@
      "commit": null
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-11-16T13:01:30Z",
    "pulse": true
