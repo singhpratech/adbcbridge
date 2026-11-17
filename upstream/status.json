@@ -1,8 +1,8 @@
 {
- "as_of": "2026-11-17T01:01:15Z",
+ "as_of": "2026-11-17T21:40:30Z",
  "window_days": 7,
- "count": 44,
- "with_project_activity": 35,
+ "count": 48,
+ "with_project_activity": 37,
  "fixed": 19,
  "items": [
   {
@@ -332,6 +332,144 @@
    "reporter_comments": 2,
    "community_comments": 0,
    "last_activity": "2026-09-07T17:13:46Z",
+   "pulse": false
+  },
+  {
+   "project": "OpenSearch documentation",
+   "repo": "opensearch-project/documentation-website",
+   "number": 13491,
+   "url": "https://github.com/opensearch-project/documentation-website/pull/13491",
+   "title": "Add Linux to the ODBC driver page",
+   "reported": "2026-11-13",
+   "reporter": "singhpratech",
+   "what": "Documentation contribution: Linux on the SQL ODBC driver page (the operating-system table and an install section with the build script, `odbcinst.ini`, `odbc.ini` and an `isql` check), now that sql-odbc 1.7.0.0 builds and is tested on Linux. Issue [#13490](https://github.com/opensearch-project/documentation-website/issues/13490)",
+   "kind": "pull request",
+   "state": "open",
+   "closed_at": null,
+   "labels": [
+    "Tech review",
+    "backport 3.10"
+   ],
+   "reactions": 0,
+   "maintainer_events": [
+    {
+     "type": "labeled",
+     "at": "2026-11-13T00:51:30Z",
+     "actor": "github-actions[bot]",
+     "label": "Tech review"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-13T13:17:33Z",
+     "actor": "kolchfa-aws",
+     "label": "backport 3.9"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-16T21:46:18Z",
+     "actor": "kolchfa-aws",
+     "label": "backport 3.10"
+    },
+    {
+     "type": "unlabeled",
+     "at": "2026-11-16T21:46:21Z",
+     "actor": "kolchfa-aws",
+     "label": "backport 3.9"
+    }
+   ],
+   "reporter_comments": 1,
+   "community_comments": 0,
+   "last_activity": "2026-11-16T21:46:21Z",
+   "pulse": true
+  },
+  {
+   "project": "OpenSearch website",
+   "repo": "opensearch-project/project-website",
+   "number": 4276,
+   "url": "https://github.com/opensearch-project/project-website/pull/4276",
+   "title": "Add adbcBridge to community projects",
+   "reported": "2026-11-13",
+   "reporter": "singhpratech",
+   "what": "Listing: adbcBridge as a community project on opensearch.org",
+   "kind": "pull request",
+   "state": "open",
+   "closed_at": null,
+   "labels": [],
+   "reactions": 1,
+   "maintainer_events": [],
+   "reporter_comments": 0,
+   "community_comments": 0,
+   "last_activity": null,
+   "pulse": false
+  },
+  {
+   "project": "ClickHouse documentation",
+   "repo": "ClickHouse/ClickHouse",
+   "number": 132188,
+   "url": "https://github.com/ClickHouse/ClickHouse/pull/132188",
+   "title": "Docs: add adbcBridge to the third-party client libraries",
+   "reported": "2026-11-17",
+   "reporter": "singhpratech",
+   "what": "Listing: adbcBridge under Python on the third-party client libraries page",
+   "kind": "pull request",
+   "state": "open",
+   "closed_at": null,
+   "labels": [
+    "comp-documentation",
+    "pr-documentation",
+    "can be tested",
+    "external"
+   ],
+   "reactions": 0,
+   "maintainer_events": [
+    {
+     "type": "labeled",
+     "at": "2026-11-17T02:07:20Z",
+     "actor": "clickhouse-gh[bot]",
+     "label": "comp-documentation"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-17T02:30:14Z",
+     "actor": "clickhouse-gh[bot]",
+     "label": "external"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-17T19:15:11Z",
+     "actor": "Blargian",
+     "label": "can be tested"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-17T19:16:48Z",
+     "actor": "clickhouse-gh[bot]",
+     "label": "pr-documentation"
+    }
+   ],
+   "reporter_comments": 0,
+   "community_comments": 0,
+   "last_activity": "2026-11-17T19:16:48Z",
+   "pulse": true
+  },
+  {
+   "project": "clickhouse-odbc documentation",
+   "repo": "ClickHouse/clickhouse-odbc",
+   "number": 617,
+   "url": "https://github.com/ClickHouse/clickhouse-odbc/pull/617",
+   "title": "Docs: add Linux installation to the ODBC driver page",
+   "reported": "2026-11-17",
+   "reporter": "singhpratech",
+   "what": "Documentation contribution: an \"Installation on Linux\" section for the ODBC driver page (release archive, `odbcinst.ini`, `odbc.ini`, `isql` check), run as written on Ubuntu with the 1.6.0 archive. First opened as ClickHouse/ClickHouse#132189 and moved at the docs maintainer's request, because the driver repository is the source the ClickHouse docs are synced from",
+   "kind": "pull request",
+   "state": "open",
+   "closed_at": null,
+   "labels": [],
+   "reactions": 1,
+   "maintainer_events": [],
+   "reporter_comments": 0,
+   "community_comments": 0,
+   "last_activity": null,
    "pulse": false
   },
   {
