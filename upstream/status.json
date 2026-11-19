@@ -1,5 +1,5 @@
 {
- "as_of": "2026-11-19T15:50:42Z",
+ "as_of": "2026-11-19T15:58:05Z",
  "window_days": 7,
  "count": 49,
  "with_project_activity": 38,
@@ -392,7 +392,7 @@
      "url": "https://github.com/opensearch-project/documentation-website/pull/13491#issuecomment-7011633539"
     }
    ],
-   "reporter_comments": 2,
+   "reporter_comments": 3,
    "community_comments": 0,
    "last_activity": "2026-11-19T14:14:33Z",
    "pulse": true
@@ -540,7 +540,7 @@
      "label": "pr-synced-to-cloud"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-11-19T14:33:00Z",
    "pulse": true
