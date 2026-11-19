@@ -2,6 +2,7 @@
 
 [![ADBC docs](https://img.shields.io/badge/Apache_Arrow_ADBC_docs-listed-0B7285)](https://arrow.apache.org/adbc/main/integrations.html)
 [![QuestDB docs](https://img.shields.io/badge/QuestDB_docs-integration_page-0B7285)](https://questdb.com/docs/integrations/other/adbcbridge/)
+[![ClickHouse docs](https://img.shields.io/badge/ClickHouse_docs-client_libraries-0B7285)](https://clickhouse.com/docs/integrations/language-clients/third-party/client-libraries)
 [![CI](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/adbcbridge)](https://pypi.org/project/adbcbridge/)
 [![crates.io](https://img.shields.io/crates/v/adbcbridge)](https://crates.io/crates/adbcbridge)
@@ -21,6 +22,15 @@ since 2026-11-06, written and sent from here ([questdb/documentation#564](https:
 reviewed and merged by QuestDB, and announced the same day on their LinkedIn:
 *[New entry in the QuestDB third-party integrations list: adbcBridge](https://www.linkedin.com/posts/questdb_questdb-activity-7524524689596121088-uO9b)*, in their words: “Our own clients that hand you Arrow over QWP are C and C++, Rust, Python and Ruby. If you work in C#, Java, Go or TypeScript, or in a tool that takes any ADBC driver, this is how you get there. It comes in two flavours. On QuestDB 10 or newer, a native driver that speaks QWP and gives you Arrow batches for both reads and bulk ingest. On QuestDB 9 or older, an ODBC bridge over PGWire, which is also the one to pick when a single driver has to serve several databases.”
 [How the page came about](https://adbcbridge.org/notes/questdb-docs-adbcbridge/).
+
+**In ClickHouse's documentation:** adbcBridge is listed among the
+[third-party client libraries](https://clickhouse.com/docs/integrations/language-clients/third-party/client-libraries) under Python,
+Go, Rust, Java and C# since 2026-11-18, from two docs pull requests sent from here and merged by
+ClickHouse ([ClickHouse/ClickHouse#132188](https://github.com/ClickHouse/ClickHouse/pull/132188),
+[#132835](https://github.com/ClickHouse/ClickHouse/pull/132835)). It stands next to ClickHouse's own
+ADBC driver as one more way in: the route through clickhouse-odbc, whose 1.6.0 release carries two
+fixes from here ([#586](https://github.com/ClickHouse/clickhouse-odbc/pull/586),
+[#588](https://github.com/ClickHouse/clickhouse-odbc/pull/588)).
 
 **Integrated in [omniload](https://github.com/panodata/omniload):** the dlt-based loader ships an
 `adbcbridge` SQL backend since [v0.17.0](https://github.com/panodata/omniload/releases/tag/v0.17.0),
