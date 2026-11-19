@@ -108,9 +108,11 @@ Two variations matter:
   PostgreSQL-wire server (PostgreSQL, CockroachDB, YugabyteDB, TimescaleDB,
   QuestDB, …), so a quirk keyed on its name would fire on real PostgreSQL too.
   For those, `OdbcDetectQuirks` issues one small identity query (`version()`, or
-  a semantic probe) and keys on the answer. This is why the PostgreSQL
-  array-ingest form is enabled only when `version()` is a genuine PostgreSQL
-  banner with no fork marker.
+  a semantic probe) and keys on the answer. Where the question is
+  what a server can do rather than who it is, prefer a capability probe to a
+  name: the PostgreSQL array-ingest form is offered to every server with a
+  PostgreSQL banner and used only when the server's answers to two probe
+  statements are PostgreSQL's.
 - **When a name matches several `SQL_DRIVER_NAME` spellings** (Firebird's OdbcFb
   reports different names on Linux and Windows), match all of them; when a quirk
   is Windows-only (a `narrow_sql` fix for an ANSI-only driver), guard it with

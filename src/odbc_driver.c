@@ -1018,15 +1018,24 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // not take the statement (a fork without SET TIME ZONE) is left as it is.
     if (conn->db->utc_session) OdbcServerExecQuiet(conn->hdbc, "SET TIME ZONE 'UTC'");
     // Bulk ingest may send one array parameter per column instead of K*ncols bound cells
-    // (reader_opts.pg_array_ingest).  PostgreSQL itself is the only server here that
-    // form is claimed for: it is PostgreSQL's multi-argument unnest, PostgreSQL's array
-    // literal syntax and PostgreSQL's assignment casts all at once, and a server that
-    // merely speaks the wire protocol owes us none of them.  So: version() must be a
-    // PostgreSQL banner ("postgresql <n>...") and must not carry a fork's own marker.
-    // TimescaleDB and Citus are extensions on stock PostgreSQL and name themselves
-    // nowhere in version(), which is right -- the server underneath is PostgreSQL.
-    // Anything else -- CockroachDB, CrateDB, GreptimeDB, Databend, a server not tried
-    // here at all -- fails the test and keeps the multi-row INSERT path.
+    // (reader_opts.pg_array_ingest).  The form is PostgreSQL's multi-argument unnest,
+    // PostgreSQL's array literal syntax and PostgreSQL's assignment casts all at once,
+    // and what decides whether a server gets it is a capability test, not its name:
+    // every server that answers version() with a PostgreSQL banner ("postgresql <n>...")
+    // is a candidate here, and ArrayIngestServerOk asks it on its first bulk ingest to
+    // expand the form exactly as PostgreSQL does.  A server that answers anything else,
+    // or refuses the statement, keeps the multi-row INSERT path for the connection.  So
+    // a fork that expands the form like PostgreSQL (Apache Cloudberry) takes it, and one
+    // that does not is not harmed by having been asked.  A server without a PostgreSQL
+    // banner -- CockroachDB, CrateDB, GreptimeDB, Databend, one not tried here at all --
+    // is not asked and keeps the multi-row INSERT path.
+    //
+    // The banner is still a hint for the quirks further down that are claimed for
+    // PostgreSQL itself only (stock_postgres): a PostgreSQL banner that carries no
+    // fork's own marker.  TimescaleDB and Citus are extensions on stock PostgreSQL and
+    // name themselves nowhere in version(), which is right -- the server underneath is
+    // PostgreSQL.
+    bool stock_postgres = false;
     if (strncmp(version, "postgresql ", 11) == 0) {
       static const char* const kForks[] = {
           "-yb-",        // YugabyteDB ("postgresql 11.2-yb-2.20.1.3-b0 on ...")
@@ -1043,11 +1052,11 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
           "greptime",    // GreptimeDB
           "ydb",         // YDB, which otherwise answers with a plain PostgreSQL banner
       };
-      bool fork = false;
+      stock_postgres = true;
       for (size_t i = 0; i < sizeof(kForks) / sizeof(*kForks); i++) {
-        if (strstr(version, kForks[i])) fork = true;
+        if (strstr(version, kForks[i])) stock_postgres = false;
       }
-      conn->reader_opts.pg_array_ingest = !fork;
+      conn->reader_opts.pg_array_ingest = true;
     }
     if (strstr(version, "questdb")) {
       // QuestDB speaks the PostgreSQL wire protocol over its own time-series engine and
@@ -1099,9 +1108,10 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
         // GreptimeDB's mandatory TIME INDEX column is added below; the ingested columns
         // are left exactly as they were.
         conn->reader_opts.ddl_extra_column = "adbc_pk SERIAL PRIMARY KEY";
-        // Its version() banner is a plain PostgreSQL's, so the array-ingest test above
-        // passed it; it is not PostgreSQL and does not get the form.
-        conn->reader_opts.pg_array_ingest = false;
+        // Its version() banner is a plain PostgreSQL's; it is not PostgreSQL, so none
+        // of what is claimed for PostgreSQL itself below applies.  (Array ingest is not
+        // decided here: the capability probe asks the server.)
+        stock_postgres = false;
         // YDB lists its tables in pg_catalog.pg_class but leaves pg_catalog.pg_attribute
         // empty, so psqlodbc's SQLColumns -- which joins the two -- answers SQL_SUCCESS
         // with a zero-row result set and every table looks like it has no columns.  Same
@@ -1119,10 +1129,11 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     OdbcServerScalarString(conn->hdbc, "SELECT current_setting('spanner.ddl_transaction_mode', true)",
                            ddl_mode, sizeof(ddl_mode));
     if (ddl_mode[0] != '\0') {
-      // PGAdapter's version() is its own claim ("postgresql 14.1"), which the
-      // array-ingest test above cannot tell from a real PostgreSQL's; Spanner is not
-      // PostgreSQL and does not get the form.
-      conn->reader_opts.pg_array_ingest = false;
+      // PGAdapter's version() is its own claim ("postgresql 14.1"), which cannot be
+      // told from a real PostgreSQL's; Spanner is not PostgreSQL, so none of what is
+      // claimed for PostgreSQL itself below applies.  (Array ingest is not decided
+      // here: the capability probe asks the server.)
+      stock_postgres = false;
       // Spanner has no TIMESTAMP WITHOUT TIME ZONE -- its one timestamp type is
       // timestamptz -- and psqlodbc executes a parameter array by inlining the values
       // into one string, where a SQL_TYPE_TIMESTAMP parameter becomes
@@ -1152,12 +1163,12 @@ static void OdbcDetectQuirks(struct OdbcConnection* conn) {
     // has schemas at all spells it the same way.  One that does not simply fails the
     // query, and the option then reports NOT_FOUND.
     conn->current_schema_query = "SELECT current_schema()";
-    // By this point pg_array_ingest says exactly "this is PostgreSQL itself": a
+    // By this point stock_postgres says exactly "this is PostgreSQL itself": a
     // PostgreSQL banner with no fork's marker, and neither YDB nor Spanner.  What
     // follows is only claimed for that server, whose typmods psqlodbc reads its
     // temporal scales from; a server that merely speaks the wire protocol may send
     // different ones (or none), and keeps the behaviour it had.
-    if (conn->reader_opts.pg_array_ingest) {
+    if (stock_postgres) {
       // psqlodbc reports TIMESTAMP(0) as scale 0 / size 19 -- the column's own type
       // modifier -- so a whole-second column is believed rather than read as [us].
       conn->reader_opts.timestamp_scale_zero_trusted = true;

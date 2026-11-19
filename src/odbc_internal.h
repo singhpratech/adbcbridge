@@ -564,13 +564,14 @@ struct OdbcReaderOptions {
   // Server quirk: bulk ingest may send a whole batch as one array parameter per column
   // and let the server expand it --
   //   INSERT INTO t ("a", "b") SELECT * FROM unnest(?::bigint[], ?::text[])
-  // -- instead of K*ncols separately bound cells.  Set only for PostgreSQL itself, from
-  // the psqlodbc block of OdbcDetectQuirks: several servers speak the PostgreSQL wire
+  // -- instead of K*ncols separately bound cells.  Set for every server that answers
+  // version() with a PostgreSQL banner, from the psqlodbc block of OdbcDetectQuirks, and
+  // that only makes the server a candidate: several servers speak the PostgreSQL wire
   // protocol without being PostgreSQL, and multi-argument unnest with those casts is not
-  // theirs to promise.  Before the form is used on a connection it is also *verified*
-  // there, by a single statement whose answer pins down NULLs, empty strings and
-  // separator quoting (ArrayIngestServerOk); anything that answers differently keeps the
-  // multi-row INSERT path.
+  // theirs to promise.  Before the form is used on a connection it is *verified* there,
+  // by two statements whose answers pin down NULLs, empty strings, separator quoting and
+  // the padding of unequal arrays (ArrayIngestServerOk); anything that answers
+  // differently keeps the multi-row INSERT path.
   bool pg_array_ingest;
   // Driver quirk: spell an unbounded Arrow string column as the driver's widest VARCHAR
   // in generated ingest DDL, rather than as its SQL_LONGVARCHAR type.
