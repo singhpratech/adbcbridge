@@ -410,12 +410,14 @@ Driving 53 databases across three operating systems turns up defects that belong
 to other projects. Each is reported upstream with a reproduction that needs no
 adbcBridge in the stack, and the whole record — filed reports and findings
 documented but not yet filed — is kept in
-[`docs/UPSTREAM.md`](../UPSTREAM.md). Filed as of 2026-09-04: 27 reports across fifteen
+[`docs/UPSTREAM.md`](../UPSTREAM.md). Filed as of 2026-11-19: 36 reports across seventeen
 projects — unixODBC, OpenLink Virtuoso, Dremio / Arrow Flight SQL ODBC, Firebird
 ODBC, taos-odbc, Apache Doris, clickhouse-odbc, MySQL Connector/ODBC, Apache
-Ignite, OpenSearch SQL ODBC, QuestDB, CrateDB, psqlodbc, Materialize and
-SingleStore Connector/ODBC. Three have already been fixed by their maintainers
-(CrateDB, psqlodbc #207 and #208), and unixODBC shipped a mitigation.
+Ignite, OpenSearch SQL ODBC, QuestDB, CrateDB, psqlodbc, Materialize,
+SingleStore Connector/ODBC, ArcadeDB and DuckDB ODBC. Eighteen are fixed upstream,
+in a release or on the project's main branch (clickhouse-odbc, OpenSearch SQL ODBC,
+CrateDB, psqlodbc, Materialize, SingleStore Connector/ODBC, ArcadeDB, DuckDB ODBC
+and QuestDB among them), and unixODBC shipped a mitigation.
 
 ### How can I contribute?
 
