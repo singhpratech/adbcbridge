@@ -1,7 +1,7 @@
 {
- "as_of": "2026-11-19T15:58:05Z",
+ "as_of": "2026-11-19T19:46:02Z",
  "window_days": 7,
- "count": 49,
+ "count": 50,
  "with_project_activity": 38,
  "fixed": 19,
  "items": [
@@ -390,11 +390,19 @@
      "association": "member",
      "text": "1. I don’t remember we have a Linux build for odbc driver, is it new? 2. Bare in mind this change here is archive only, the live website will not update on merge, need to confirm on 1 because when I release 1.7.0.0 the other day I don’t see Linux @Swiddis",
      "url": "https://github.com/opensearch-project/documentation-website/pull/13491#issuecomment-7011633539"
+    },
+    {
+     "type": "comment",
+     "at": "2026-11-19T17:06:18Z",
+     "actor": "peterzhuamazon",
+     "association": "member",
+     "text": "@singhpratech I am currently on phone so sorry can’t check the changes properly. But to the first point if Linux pkg not available for download then it should not be in download page (not sure where you put it), maybe in documentation-website instead. To second point, once this pr is merged (if so) then I would need to contact LF to manually update on the live instance. The live code is not built …",
+     "url": "https://github.com/opensearch-project/documentation-website/pull/13491#issuecomment-7016214277"
     }
    ],
-   "reporter_comments": 3,
+   "reporter_comments": 4,
    "community_comments": 0,
-   "last_activity": "2026-11-19T14:14:33Z",
+   "last_activity": "2026-11-19T17:06:18Z",
    "pulse": true
   },
   {
@@ -908,6 +916,26 @@
    "maintainer_events": [],
    "reporter_comments": 0,
    "community_comments": 0,
+   "last_activity": null,
+   "pulse": false
+  },
+  {
+   "project": "Dremio / Arrow Flight SQL ODBC",
+   "repo": "dremio/flightsql-odbc",
+   "number": 22,
+   "url": "https://github.com/dremio/flightsql-odbc/pull/22",
+   "title": "Fix SQLColumns crash for fields without key-value metadata",
+   "reported": "2026-11-19",
+   "reporter": "singhpratech",
+   "what": "Fix PR: `SQLColumns` crashes on the first `SQLFetch` for any table whose fields carry no key-value metadata (every sqlflite table, most InfluxDB 3 system tables) — `field->metadata()` is a null pointer and `Transform_inner` calls `Get` on it. The fix falls back to an empty metadata map, as the result-set code already does, with two unit tests; reproduced on 0.9.7.479 against sqlflite the same day.",
+   "kind": "pull request",
+   "state": "open",
+   "closed_at": null,
+   "labels": [],
+   "reactions": 0,
+   "maintainer_events": [],
+   "reporter_comments": 0,
+   "community_comments": 1,
    "last_activity": null,
    "pulse": false
   },
