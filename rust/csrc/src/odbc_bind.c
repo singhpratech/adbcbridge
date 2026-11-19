@@ -1951,8 +1951,9 @@ static AdbcStatusCode MultiRowExecuteBatch(struct MultiRowInsert* mr,
 // does *not* fix (an INSERT writes twice the WAL a COPY does, whatever shape it takes).
 //
 // Everything here is gated three ways.  reader_opts.pg_array_ingest says the server
-// identified itself as PostgreSQL (OdbcDetectQuirks); ArrayIngestServerOk asks that
-// server to prove it expands the form the way PostgreSQL does, once per connection; and
+// answered version() with a PostgreSQL banner, fork or not (OdbcDetectQuirks);
+// ArrayIngestServerOk asks that server to prove it expands the form the way PostgreSQL
+// does, once per connection, and its answer is what decides; and
 // ArrayIngestElemType refuses any Arrow type this path cannot spell exactly, which
 // leaves the whole ingest on the multi-row INSERT path.  A value that turns out not to
 // be spellable (a string with an embedded NUL, a date outside 0001..9999) stops the
@@ -2030,11 +2031,34 @@ static const char* ArrayIngestElemType(const struct ArrowSchemaView* sv) {
   }
 }
 
-// Does this server expand the form the way PostgreSQL does?  One statement, run once per
-// connection on its first bulk ingest, whose answer pins down positional pairing of the
-// two arrays, a NULL element, an empty element, a separator and a brace inside a quoted
-// element, an escaped quote and an escaped backslash -- everything the renderer below
-// relies on.  A server that answers anything else keeps the multi-row INSERT path.
+// One probe statement: true when the server answers it with exactly `expected`.
+static bool ArrayIngestProbe(struct OdbcConnection* conn, const char* sql,
+                             const char* expected) {
+  char answer[128] = {0};
+  SQLHSTMT hstmt = NULL;
+  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt))) return false;
+  bool ok = false;
+  if (SQL_SUCCEEDED(OdbcExecDirectUtf8(hstmt, sql)) && SQL_SUCCEEDED(SQLFetch(hstmt))) {
+    SQLLEN ind = 0;
+    if (SQL_SUCCEEDED(OdbcGetDataStrUtf8(hstmt, 1, answer, sizeof(answer), &ind, false)) &&
+        ind != SQL_NULL_DATA) {
+      ok = strcmp(answer, expected) == 0;
+    }
+  }
+  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
+  return ok;
+}
+
+// Does this server expand the form the way PostgreSQL does?  Two statements, run once
+// per connection on its first bulk ingest.  The first pins down positional pairing of
+// the two arrays, a NULL element, an empty element, a separator and a brace inside a
+// quoted element, an escaped quote and an escaped backslash -- everything the renderer
+// below relies on.  The second hands unnest two arrays of unequal length and requires
+// the NULL-padded rows PostgreSQL produces: the renderer never sends unequal arrays,
+// but a server that does not pad is a server whose unnest is not PostgreSQL's, and the
+// probe says so rather than assuming.  This is the whole decision for every server with
+// a PostgreSQL banner (OdbcDetectQuirks): one that answers anything else, or refuses
+// either statement, keeps the multi-row INSERT path.
 static bool ArrayIngestServerOk(struct OdbcConnection* conn) {
   static const char* kProbe =
       "SELECT count(*) || '|' || coalesce(sum(a)::text, '?') || '|' ||"
@@ -2042,20 +2066,13 @@ static bool ArrayIngestServerOk(struct OdbcConnection* conn) {
       " FROM unnest('{1,2,3,4,5}'::bigint[],"
       " '{\"a,b}\",\"\",NULL,\"x\\\"y\",\"p\\\\q\"}'::text[]) AS t(a, b)";
   static const char* kExpected = "5|15|[a,b}][]<null>[x\"y][p\\q]";
-  char answer[128] = {0};
-  SQLHSTMT hstmt = NULL;
-  if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, conn->hdbc, &hstmt))) return false;
-  bool ok = false;
-  if (SQL_SUCCEEDED(OdbcExecDirectUtf8(hstmt, kProbe)) &&
-      SQL_SUCCEEDED(SQLFetch(hstmt))) {
-    SQLLEN ind = 0;
-    if (SQL_SUCCEEDED(OdbcGetDataStrUtf8(hstmt, 1, answer, sizeof(answer), &ind, false)) &&
-        ind != SQL_NULL_DATA) {
-      ok = strcmp(answer, kExpected) == 0;
-    }
-  }
-  SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
-  return ok;
+  static const char* kUnequalProbe =
+      "SELECT count(*) || '|' ||"
+      " coalesce(string_agg(a::text || '=' || coalesce(b, '<null>'), ',' ORDER BY a), '?')"
+      " FROM unnest('{1,2,3}'::bigint[], '{a}'::text[]) AS t(a, b)";
+  static const char* kUnequalExpected = "3|1=a,2=<null>,3=<null>";
+  return ArrayIngestProbe(conn, kProbe, kExpected) &&
+         ArrayIngestProbe(conn, kUnequalProbe, kUnequalExpected);
 }
 
 static void ArrayIngestInit(struct ArrayIngest* ai, struct OdbcStatement* stmt, int64_t ncols) {

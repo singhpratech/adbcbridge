@@ -144,17 +144,21 @@ is unchanged). It is on by default and needs no option.
 It is deliberately narrow, because a wrongly quoted array literal is a data-corruption bug
 rather than a slow one:
 
-* **Only PostgreSQL.** psqlodbc drives every PostgreSQL-wire server, so the quirk is keyed
-  on what the server says it is, not on the driver: `version()` has to be a PostgreSQL
-  banner and must not carry a fork's marker. Checked against live servers: on for
-  PostgreSQL itself, TimescaleDB and Citus (both of which *are* PostgreSQL, with an
-  extension); off for CockroachDB, YugabyteDB, CrateDB, RisingWave, Materialize, openGauss
-  and Apache Cloudberry. QuestDB, ArcadeDB, YDB and Cloud Spanner via PGAdapter are
-  excluded by the same rule without having been tried. Before the form is used on a
-  connection the server is also asked to prove it: one statement whose answer pins down
-  NULL elements, empty elements, and `,`, `{`, `}`, `"` and `\` inside a quoted element.
-  (That check on its own is not enough — CockroachDB passes it — which is why the identity
-  test comes first and unknown servers default to off.)
+* **Only where the server proves it.** psqlodbc drives every PostgreSQL-wire server, so
+  nothing is keyed on the driver. A server is a candidate when `version()` is a PostgreSQL
+  banner, fork or not, and a capability probe then decides: on its first bulk ingest the
+  connection runs two statements whose answers pin down positional pairing, NULL elements,
+  empty elements, `,`, `{`, `}`, `"` and `\` inside a quoted element, and the NULL padding
+  PostgreSQL applies to arrays of unequal length. The form is used only if both answers
+  are PostgreSQL's; a different answer or a refused statement keeps the multi-row `INSERT`
+  for the connection. Checked against live servers: the probe passes on PostgreSQL,
+  TimescaleDB, Citus, YugabyteDB and Apache Cloudberry, which take the array form;
+  Materialize, QuestDB, RisingWave, ArcadeDB, YDB and Cloud Spanner via PGAdapter refuse
+  it and keep the multi-row path. CockroachDB, CrateDB and openGauss answer `version()`
+  with a banner of their own, so they are not asked. On the two forks that newly take the
+  form, a 200,000-row four-column ingest went from 3.34 s to 1.80 s on YugabyteDB 2026.1
+  and from 4.69 s to 0.35 s on Apache Cloudberry 2.1.0 (same host, same connection
+  settings, best of three).
 * **Only the types it can spell exactly**: the integers, `float16/32/64`, `decimal128/256`,
   `bool`, `date32`, `time32/64`, `timestamp` and the string types (including
   `large_string` and `string_view`). A batch with a binary, interval, list, struct, map,
