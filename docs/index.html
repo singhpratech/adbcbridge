@@ -11569,7 +11569,14 @@ before it is filed.</p>
 <td>Dremio / Arrow Flight SQL ODBC</td>
 <td><a href="https://github.com/dremio/warpdrive/issues/16">dremio/warpdrive#16</a></td>
 <td>The Apple Silicon build 0.9.7 is iODBC-width, undocumented, and aborts under unixODBC on any SQL error (three servers); <code>LogEnabled=true</code> makes <code>SQLAllocHandle(ENV)</code> fail with <code>IM004</code> (an uncaught exception in the logger); the pkg ships <code>arrow-odbc.ini.orig</code> but no <code>arrow-odbc.ini</code>; the docs contradict themselves on Apple Silicon support.</td>
-<td>open</td>
+<td>open — the logger failure no longer applies to current builds: logger start-up was removed from the driver in March 2025 (<a href="https://github.com/dremio/warpdrive/pull/13">dremio/warpdrive#13</a>), and the Linux 0.9.7.479 build allocates its environment with <code>LogEnabled=true</code> (re-checked 2026-11-19)</td>
+</tr>
+<tr>
+<td>2026-11-19</td>
+<td>Dremio / Arrow Flight SQL ODBC</td>
+<td><a href="https://github.com/dremio/flightsql-odbc/pull/22">dremio/flightsql-odbc#22</a></td>
+<td>Fix PR: <code>SQLColumns</code> crashes on the first <code>SQLFetch</code> for any table whose fields carry no key-value metadata (every sqlflite table, most InfluxDB 3 system tables) — <code>field-&gt;metadata()</code> is a null pointer and <code>Transform_inner</code> calls <code>Get</code> on it. The fix falls back to an empty metadata map, as the result-set code already does, with two unit tests; reproduced on 0.9.7.479 against sqlflite the same day.</td>
+<td><strong>open</strong></td>
 </tr>
 <tr>
 <td>2026-08-28</td>
@@ -11896,7 +11903,7 @@ time allows, and a reproduction contributed by anyone is welcome.</p>
 </tr>
 <tr>
 <td>Arrow Flight SQL ODBC 0.9.7 (Linux)</td>
-<td>The <code>SQLColumns</code> segfault has a root cause: <code>arrow::KeyValueMetadata::Get</code> on a null pointer from <code>GetColumns_Transformer::Transform</code>, for any table whose Flight SQL schema carries no per-field key-value metadata — every sqlflite table, InfluxDB 3's <code>system</code>/<code>information_schema</code> tables (its <code>iox</code> tables are fine), never Dremio 26; a request spanning one such table loses the good rows with it, and three <code>system</code> tables answer <code>SQL_SUCCESS</code> with zero rows for tables that have columns. <code>SQLGetFunctions</code> also reports <code>SQLStatistics</code> as supported while the call answers <code>HYC00</code>. One-call reproduction.</td>
+<td>The <code>SQLColumns</code> segfault has a root cause: <code>arrow::KeyValueMetadata::Get</code> on a null pointer from <code>GetColumns_Transformer::Transform</code>, for any table whose Flight SQL schema carries no per-field key-value metadata — every sqlflite table, InfluxDB 3's <code>system</code>/<code>information_schema</code> tables (its <code>iox</code> tables are fine), never Dremio 26; a request spanning one such table loses the good rows with it, and three <code>system</code> tables answer <code>SQL_SUCCESS</code> with zero rows for tables that have columns. <code>SQLGetFunctions</code> also reports <code>SQLStatistics</code> as supported while the call answers <code>HYC00</code>. One-call reproduction. The crash itself is now sent upstream as a fix, <a href="https://github.com/dremio/flightsql-odbc/pull/22">dremio/flightsql-odbc#22</a> (see Reported).</td>
 <td><code>tests/compat/README.md</code>, Flight SQL and InfluxDB sections</td>
 </tr>
 <tr>
@@ -12387,12 +12394,14 @@ response times and the support window are in <a href="#community-security">Secur
 to other projects. Each is reported upstream with a reproduction that needs no
 adbcBridge in the stack, and the whole record — filed reports and findings
 documented but not yet filed — is kept in
-<a href="#upstream"><code>docs/UPSTREAM.md</code></a>. Filed as of 2026-09-04: 27 reports across fifteen
+<a href="#upstream"><code>docs/UPSTREAM.md</code></a>. Filed as of 2026-11-19: 36 reports across seventeen
 projects — unixODBC, OpenLink Virtuoso, Dremio / Arrow Flight SQL ODBC, Firebird
 ODBC, taos-odbc, Apache Doris, clickhouse-odbc, MySQL Connector/ODBC, Apache
-Ignite, OpenSearch SQL ODBC, QuestDB, CrateDB, psqlodbc, Materialize and
-SingleStore Connector/ODBC. Three have already been fixed by their maintainers
-(CrateDB, psqlodbc #207 and #208), and unixODBC shipped a mitigation.</p>
+Ignite, OpenSearch SQL ODBC, QuestDB, CrateDB, psqlodbc, Materialize,
+SingleStore Connector/ODBC, ArcadeDB and DuckDB ODBC. Eighteen are fixed upstream,
+in a release or on the project's main branch (clickhouse-odbc, OpenSearch SQL ODBC,
+CrateDB, psqlodbc, Materialize, SingleStore Connector/ODBC, ArcadeDB, DuckDB ODBC
+and QuestDB among them), and unixODBC shipped a mitigation.</p>
 <h3 id="how-can-i-contribute">How can I contribute?</h3>
 <p>Bug reports, driver-specific quirk fixes, type-mapping improvements, docs and
 tests against uncovered drivers are all welcome. The build/test loop, coding
