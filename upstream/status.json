@@ -1,8 +1,8 @@
 {
- "as_of": "2026-11-19T01:28:12Z",
+ "as_of": "2026-11-19T15:50:42Z",
  "window_days": 7,
  "count": 49,
- "with_project_activity": 37,
+ "with_project_activity": 38,
  "fixed": 19,
  "items": [
   {
@@ -382,11 +382,19 @@
      "at": "2026-11-18T22:09:34Z",
      "actor": "kolchfa-aws",
      "label": "Awaiting response"
+    },
+    {
+     "type": "comment",
+     "at": "2026-11-19T14:14:33Z",
+     "actor": "peterzhuamazon",
+     "association": "member",
+     "text": "1. I don’t remember we have a Linux build for odbc driver, is it new? 2. Bare in mind this change here is archive only, the live website will not update on merge, need to confirm on 1 because when I release 1.7.0.0 the other day I don’t see Linux @Swiddis",
+     "url": "https://github.com/opensearch-project/documentation-website/pull/13491#issuecomment-7011633539"
     }
    ],
    "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-11-18T22:09:34Z",
+   "last_activity": "2026-11-19T14:14:33Z",
    "pulse": true
   },
   {
@@ -483,10 +491,14 @@
    "reporter": "singhpratech",
    "what": "Listing: adbcBridge under Go, Rust, Java and C# on the same page, a follow-up to the Python entry",
    "kind": "pull request",
-   "state": "open",
-   "closed_at": null,
+   "state": "merged",
+   "closed_at": "2026-11-19T14:22:33Z",
    "labels": [
-    "comp-documentation"
+    "comp-documentation",
+    "pr-documentation",
+    "can be tested",
+    "pr-synced-to-cloud",
+    "external"
    ],
    "reactions": 0,
    "maintainer_events": [
@@ -495,11 +507,42 @@
      "at": "2026-11-19T01:09:23Z",
      "actor": "clickhouse-gh[bot]",
      "label": "comp-documentation"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-19T02:30:37Z",
+     "actor": "clickhouse-gh[bot]",
+     "label": "external"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-19T10:09:10Z",
+     "actor": "Blargian",
+     "label": "can be tested"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-19T10:10:45Z",
+     "actor": "clickhouse-gh[bot]",
+     "label": "pr-documentation"
+    },
+    {
+     "type": "closed",
+     "at": "2026-11-19T14:22:33Z",
+     "actor": "Blargian",
+     "reason": null,
+     "commit": null
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-19T14:33:00Z",
+     "actor": "robot-clickhouse-ci-2",
+     "label": "pr-synced-to-cloud"
     }
    ],
    "reporter_comments": 0,
    "community_comments": 0,
-   "last_activity": "2026-11-19T01:09:23Z",
+   "last_activity": "2026-11-19T14:33:00Z",
    "pulse": true
   },
   {
