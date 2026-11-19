@@ -1,7 +1,7 @@
 {
- "as_of": "2026-11-18T15:45:54Z",
+ "as_of": "2026-11-19T00:25:11Z",
  "window_days": 7,
- "count": 48,
+ "count": 49,
  "with_project_activity": 37,
  "fixed": 19,
  "items": [
@@ -348,6 +348,7 @@
    "closed_at": null,
    "labels": [
     "Tech review",
+    "Awaiting response",
     "backport 3.10"
    ],
    "reactions": 0,
@@ -375,11 +376,17 @@
      "at": "2026-11-16T21:46:21Z",
      "actor": "kolchfa-aws",
      "label": "backport 3.9"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-18T22:09:34Z",
+     "actor": "kolchfa-aws",
+     "label": "Awaiting response"
     }
    ],
-   "reporter_comments": 1,
+   "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-11-16T21:46:21Z",
+   "last_activity": "2026-11-18T22:09:34Z",
    "pulse": true
   },
   {
@@ -461,10 +468,30 @@
      "label": "pr-synced-to-cloud"
     }
    ],
-   "reporter_comments": 0,
+   "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-11-18T06:20:03Z",
    "pulse": true
+  },
+  {
+   "project": "ClickHouse documentation",
+   "repo": "ClickHouse/ClickHouse",
+   "number": 132835,
+   "url": "https://github.com/ClickHouse/ClickHouse/pull/132835",
+   "title": "Docs: list adbcBridge under Go, Rust, Java and C# in the third-party client libraries",
+   "reported": "2026-11-19",
+   "reporter": "singhpratech",
+   "what": "Listing: adbcBridge under Go, Rust, Java and C# on the same page, a follow-up to the Python entry",
+   "kind": "pull request",
+   "state": "open",
+   "closed_at": null,
+   "labels": [],
+   "reactions": 0,
+   "maintainer_events": [],
+   "reporter_comments": 0,
+   "community_comments": 0,
+   "last_activity": null,
+   "pulse": false
   },
   {
    "project": "clickhouse-odbc documentation",
@@ -697,7 +724,7 @@
    "reporter_comments": 2,
    "community_comments": 0,
    "last_activity": "2026-11-10T20:03:04Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "unixODBC",
@@ -2213,7 +2240,7 @@
    "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-11-10T22:28:02Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "ArcadeDB",
@@ -2290,7 +2317,7 @@
    "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-11-10T20:03:04Z",
-   "pulse": true
+   "pulse": false
   }
  ]
 }
