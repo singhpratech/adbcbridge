@@ -6859,17 +6859,21 @@ is unchanged). It is on by default and needs no option.</p>
 <p>It is deliberately narrow, because a wrongly quoted array literal is a data-corruption bug
 rather than a slow one:</p>
 <ul>
-<li><strong>Only PostgreSQL.</strong> psqlodbc drives every PostgreSQL-wire server, so the quirk is keyed
-  on what the server says it is, not on the driver: <code>version()</code> has to be a PostgreSQL
-  banner and must not carry a fork's marker. Checked against live servers: on for
-  PostgreSQL itself, TimescaleDB and Citus (both of which <em>are</em> PostgreSQL, with an
-  extension); off for CockroachDB, YugabyteDB, CrateDB, RisingWave, Materialize, openGauss
-  and Apache Cloudberry. QuestDB, ArcadeDB, YDB and Cloud Spanner via PGAdapter are
-  excluded by the same rule without having been tried. Before the form is used on a
-  connection the server is also asked to prove it: one statement whose answer pins down
-  NULL elements, empty elements, and <code>,</code>, <code>{</code>, <code>}</code>, <code>"</code> and <code>\</code> inside a quoted element.
-  (That check on its own is not enough — CockroachDB passes it — which is why the identity
-  test comes first and unknown servers default to off.)</li>
+<li><strong>Only where the server proves it.</strong> psqlodbc drives every PostgreSQL-wire server, so
+  nothing is keyed on the driver. A server is a candidate when <code>version()</code> is a PostgreSQL
+  banner, fork or not, and a capability probe then decides: on its first bulk ingest the
+  connection runs two statements whose answers pin down positional pairing, NULL elements,
+  empty elements, <code>,</code>, <code>{</code>, <code>}</code>, <code>"</code> and <code>\</code> inside a quoted element, and the NULL padding
+  PostgreSQL applies to arrays of unequal length. The form is used only if both answers
+  are PostgreSQL's; a different answer or a refused statement keeps the multi-row <code>INSERT</code>
+  for the connection. Checked against live servers: the probe passes on PostgreSQL,
+  TimescaleDB, Citus, YugabyteDB and Apache Cloudberry, which take the array form;
+  Materialize, QuestDB, RisingWave, ArcadeDB, YDB and Cloud Spanner via PGAdapter refuse
+  it and keep the multi-row path. CockroachDB, CrateDB and openGauss answer <code>version()</code>
+  with a banner of their own, so they are not asked. On the two forks that newly take the
+  form, a 200,000-row four-column ingest went from 3.34 s to 1.80 s on YugabyteDB 2026.1
+  and from 4.69 s to 0.35 s on Apache Cloudberry 2.1.0 (same host, same connection
+  settings, best of three).</li>
 <li><strong>Only the types it can spell exactly</strong>: the integers, <code>float16/32/64</code>, <code>decimal128/256</code>,
   <code>bool</code>, <code>date32</code>, <code>time32/64</code>, <code>timestamp</code> and the string types (including
   <code>large_string</code> and <code>string_view</code>). A batch with a binary, interval, list, struct, map,
@@ -9069,10 +9073,10 @@ MySQL-wire warehouse matches <code>myodbc</code> and then a server probe narrows
 <td>psqlodbc hands a <code>timestamptz</code> over as the session's wall-clock time with no offset in its <code>SQL_C_CHAR</code> form, and sends a bound timestamp as a zone-less literal the server reads in the session zone, so zoned values are only right when the session zone is UTC; on a server set to another zone every read and ingest was shifted by that zone's offset (found 2026-09-15 on a macOS cluster whose <code>initdb</code> took the host zone). A server that does not take the statement is left as it is</td>
 </tr>
 <tr>
-<td><code>psqlodbc</code> + <code>version()</code> = <code>postgresql …</code> and no fork marker</td>
-<td>PostgreSQL (incl. TimescaleDB, Citus)</td>
+<td><code>psqlodbc</code> + <code>version()</code> = <code>postgresql …</code></td>
+<td>PostgreSQL (incl. TimescaleDB, Citus) and every fork that answers with a PostgreSQL banner</td>
 <td><code>pg_array_ingest=true</code></td>
-<td>Only real PostgreSQL is owed the multi-argument <code>unnest</code> array-ingest form — a policy, not a limit the servers impose: Cloudberry, probed directly, expands the form with array literals and bound <code>?::bigint[]</code> parameters alike and passes the proof query, and keeps the multi-row <code>INSERT</code> path because a fork owes none of this by contract; forks (Yugabyte, Cockroach, Greenplum/Cloudberry, openGauss, RisingWave, CrateDB, GreptimeDB, Materialize, YDB, …) are excluded by name</td>
+<td>Makes the server a candidate for the multi-argument <code>unnest</code> array-ingest form; a capability probe then decides, not the name. On its first bulk ingest the connection runs two statements (positional pairing, NULL and empty elements, quoting, and the NULL padding of unequal arrays) and uses the form only if both answers are PostgreSQL's; anything else, or a refused statement, keeps the multi-row <code>INSERT</code>. Verified live: the probe passes on PostgreSQL, TimescaleDB, Citus, YugabyteDB and Apache Cloudberry, and is refused by Materialize, QuestDB, RisingWave, ArcadeDB, YDB and Cloud Spanner (PGAdapter), which keep the multi-row path. Servers without a PostgreSQL banner (CockroachDB, CrateDB, openGauss, GreptimeDB) are not asked</td>
 </tr>
 <tr>
 <td><code>psqlodbc</code> + <code>version()</code> contains <code>questdb</code></td>
@@ -9089,13 +9093,13 @@ MySQL-wire warehouse matches <code>myodbc</code> and then a server probe narrows
 <tr>
 <td><code>psqlodbc</code> + <code>SHOW server_version</code> self-identifies</td>
 <td>YDB</td>
-<td><code>ddl_extra_column="adbc_pk SERIAL PRIMARY KEY"</code>, <code>pg_array_ingest=false</code>, <code>no_sql_columns</code></td>
+<td><code>ddl_extra_column="adbc_pk SERIAL PRIMARY KEY"</code>, <code>no_sql_columns</code></td>
 <td>Every table needs a PRIMARY KEY no ingested column can be; leaves <code>pg_attribute</code> empty so <code>SQLColumns</code> returns nothing</td>
 </tr>
 <tr>
 <td><code>psqlodbc</code> + <code>spanner.ddl_transaction_mode</code> setting exists</td>
 <td>Google Cloud Spanner (via PGAdapter)</td>
-<td><code>pg_array_ingest=false</code>, <code>no_timestamp_param_arrays</code>, <code>ddl_extra_column="\"adbc_ingest_key\" bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"</code>, <code>max_statement_params=950</code></td>
+<td><code>no_timestamp_param_arrays</code>, <code>ddl_extra_column="\"adbc_ingest_key\" bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"</code>, <code>max_statement_params=950</code></td>
 <td>Not PostgreSQL; has no <code>TIMESTAMP WITHOUT TIME ZONE</code>; needs a PRIMARY KEY; drops the connection above 950 params instead of failing prepare</td>
 </tr>
 <tr>
@@ -9473,7 +9477,7 @@ the one ANSI-only driver whose own narrow path is genuinely UTF-8.</p>
 <tr>
 <td><code>pg_array_ingest</code></td>
 <td>bool</td>
-<td>Send a whole batch as one array parameter per column via multi-argument <code>unnest</code> (real PostgreSQL only; verified once per connection before use).</td>
+<td>Send a whole batch as one array parameter per column via multi-argument <code>unnest</code> (a candidate on any server with a PostgreSQL <code>version()</code> banner; used only after the capability probe passes on the connection).</td>
 </tr>
 <tr>
 <td><code>max_statement_len</code></td>
@@ -10412,27 +10416,19 @@ driver setup (root-free) and run commands:
 <a href="https://github.com/singhpratech/adbcbridge/blob/main/tests/compat/README.md"><code>tests/compat/README.md</code></a>.</p>
 <h2 id="a-note-on-the-postgresql-wire-rows">A note on the PostgreSQL-wire rows</h2>
 <p>Fourteen entries below reach their server through psqlodbc, and most of them are not
-PostgreSQL. One behaviour is keyed on being PostgreSQL rather than on speaking its wire:
-bulk ingest sends a batch as one array parameter per column
+PostgreSQL. One behaviour depends on expanding a statement the way PostgreSQL does rather
+than on speaking its wire: bulk ingest sends a batch as one array parameter per column
 (<code>INSERT … SELECT * FROM unnest(?::bigint[], ?::text[], …)</code>) instead of K row-groups of
-bound cells. It is enabled only when <code>version()</code> is a PostgreSQL banner carrying no fork's
-marker, and the server is then asked to prove it expands the form the way PostgreSQL does
-before it is used. Verified against live servers: <strong>on</strong> for PostgreSQL, TimescaleDB and
-Citus (the last two being extensions on stock PostgreSQL) and <strong>off</strong> for CockroachDB,
-YugabyteDB, CrateDB, RisingWave, Materialize, openGauss and Apache Cloudberry — off meaning
-the fork test excluded them, not that the form was found wanting: Cloudberry, probed on its
-own, expands the multi-argument <code>unnest</code> from array literals and bound <code>?::bigint[]</code>
-parameters alike and passes the proof query, and keeps the multi-row <code>INSERT</code> path by
-construction. Off by
-construction, not tried live, for QuestDB and ArcadeDB (both name themselves in
-<code>version()</code>, which is also how their existing quirks are keyed) and for YDB and Cloud
-Spanner via PGAdapter (whose <code>version()</code> is indistinguishable from a real PostgreSQL's,
-so the code that identifies them for their other quirks switches this one off
-explicitly). Everything excluded keeps the multi-row <code>INSERT</code> path, which is what it had
+bound cells. Every server that answers <code>version()</code> with a PostgreSQL banner is a candidate,
+fork or not, and a capability probe decides: on its first bulk ingest the connection runs
+two statements (positional pairing, NULL and empty elements, quoting, and the NULL padding
+of unequal arrays) and uses the form only if both answers are PostgreSQL's. Verified
+against live servers: <strong>on</strong> for PostgreSQL, TimescaleDB, Citus, YugabyteDB and Apache
+Cloudberry, whose answers match; <strong>off</strong> for Materialize, QuestDB, RisingWave, ArcadeDB,
+YDB and Cloud Spanner via PGAdapter, which refuse the probe; and <strong>not asked</strong> for
+CockroachDB, CrateDB and openGauss, whose <code>version()</code> is a banner of their own. Every
+server that is off or not asked keeps the multi-row <code>INSERT</code> path, which is what it had
 before.</p>
-<p>Note that being excluded is not evidence the form would have failed: CockroachDB and
-YugabyteDB both answer the semantic check correctly. The rule is the brief's — default to
-off for anything not verified — not a claim that each excluded server is broken.</p>
 <h2 id="a-note-on-partitioned-reads">A note on partitioned reads</h2>
 <p><a href="#how-it-works-partitioned-reads"><code>ExecutePartitions</code></a> splits one query
 across N connections, which is where adbcBridge's read-path win against the native
@@ -10484,7 +10480,7 @@ table with neither gets one partition. The numbers are in
 <td>PostgreSQL 16</td>
 <td>psqlodbc 16</td>
 <td>PASS</td>
-<td><a href="#how-it-works-delegation">native delegation</a> to <code>adbc_driver_postgresql</code> when installed; bulk ingest sends one array parameter per column (<code>INSERT … SELECT * FROM unnest(?::t[], …)</code>) rather than K row-groups of cells — a server quirk keyed on <code>version()</code>, so no other PG-wire server here gets it; partitioned reads split on <code>ctid</code> (1.21x native at 1 M rows, 1.55x at 10 M), and a <strong>declaratively partitioned parent</strong> — which has no heap of its own and used to get one partition — now takes the key-range split, 1.36x native</td>
+<td><a href="#how-it-works-delegation">native delegation</a> to <code>adbc_driver_postgresql</code> when installed; bulk ingest sends one array parameter per column (<code>INSERT … SELECT * FROM unnest(?::t[], …)</code>) rather than K row-groups of cells — offered to every server with a PostgreSQL <code>version()</code> banner and used where a capability probe passes (see the note above); partitioned reads split on <code>ctid</code> (1.21x native at 1 M rows, 1.55x at 10 M), and a <strong>declaratively partitioned parent</strong> — which has no heap of its own and used to get one partition — now takes the key-range split, 1.36x native</td>
 </tr>
 <tr>
 <td>MariaDB 11</td>
@@ -10556,7 +10552,7 @@ table with neither gets one partition. The numbers are in
 <td>YugabyteDB 2026.1 (YSQL)</td>
 <td>psqlodbc 16 (PG wire)</td>
 <td>PASS</td>
-<td>no quirks; YSQL is PostgreSQL 15, and its internal row id is a system column so <code>GetObjects</code> is unaffected; <code>version()</code> carries <code>-YB-</code>, so the PostgreSQL array-ingest form stays off (verified); <strong>no <code>ctid</code></strong> (<code>0A000</code>), and its default <code>PRIMARY KEY (id)</code> is hash-partitioned, so partitioned reads split on <code>yb_hash_code()</code> — 2.6x over a single connection, and 2.2x better than a key range, which YugabyteDB would run as a <code>Seq Scan</code> with a <code>Storage Filter</code>. Against the native driver it reaches 1.18–1.22x at 4 M rows, i.e. on the 1.2x bar rather than over it, and 0.94x at 1 M: the server is the bottleneck there, not psqlodbc</td>
+<td>no quirks; YSQL is PostgreSQL 15, and its internal row id is a system column so <code>GetObjects</code> is unaffected; the <code>unnest</code> array-ingest form applies and is used: the capability probe passes, and a 200,000-row ingest went from 3.34 s to 1.80 s with it; <strong>no <code>ctid</code></strong> (<code>0A000</code>), and its default <code>PRIMARY KEY (id)</code> is hash-partitioned, so partitioned reads split on <code>yb_hash_code()</code> — 2.6x over a single connection, and 2.2x better than a key range, which YugabyteDB would run as a <code>Seq Scan</code> with a <code>Storage Filter</code>. Against the native driver it reaches 1.18–1.22x at 4 M rows, i.e. on the 1.2x bar rather than over it, and 0.94x at 1 M: the server is the bottleneck there, not psqlodbc</td>
 </tr>
 <tr>
 <td>TimescaleDB 2.29 (PostgreSQL 16)</td>
@@ -10718,7 +10714,7 @@ table with neither gets one partition. The numbers are in
 <td>Apache Cloudberry 2.1.0-incubating (Greenplum fork)</td>
 <td>psqlodbc 16 (PG wire)</td>
 <td>PASS</td>
-<td>no driver quirks and no tolerance flags: an MPP cluster of PostgreSQL 14 segments behind one coordinator, driven by the <code>postgres</code> entry's types unchanged (and, unlike CockroachDB, needing no <code>PRIMARY KEY</code>) — and since it reports <code>SQL_DBMS_NAME</code> "PostgreSQL" behind the same <code>psqlodbcw.so</code>, no driver-name quirk <em>could</em> be correct here without also firing on real PostgreSQL. Cloudberry is named once in the bridge and not as a workaround: <code>version()</code> carries <code>Apache Cloudberry</code>, a fork marker, so it is excluded from the <code>unnest</code> array-ingest form only PostgreSQL proper is claimed to owe (see the array-ingest note above) — conservative rather than necessary, since the form's own proof query passes and a 5,000-row <code>unnest</code> ingest lands on heap, append-optimized row and append-optimized column tables alike, about an order of magnitude faster server-side than the multi-row <code>INSERT</code> it keeps (~530k against ~33k rows/s, bare SQL on a shared host); no Apache-published <em>server</em> image exists -- <code>apache/incubator-cloudberry</code> holds only <code>cbdb-build-*</code>/<code>cbdb-test-*</code> CI toolchains and <code>apache/cloudberry-db</code> does not exist -- so the community <code>woblerr/cloudberry</code> image is used, and it needs <code>--shm-size=1g</code> or <code>gpinitsystem</code> fails; <code>extra</code> steps cover what the standard workload cannot tell apart from <code>postgres</code>: a <code>DISTRIBUTED BY</code> table whose bulk-ingested rows occupy more than one segment plus an aggregate merged on the coordinator, and append-optimized <strong>column-oriented</strong> storage (read from <code>pg_am</code> as <code>ao_column</code> -- Greenplum 6's <code>relstorage</code> is gone in the PostgreSQL 14-based 2.x); ingest 9.7k rows/s (9.8k with array binding), fetch 1.33M rows/s</td>
+<td>no driver quirks and no tolerance flags: an MPP cluster of PostgreSQL 14 segments behind one coordinator, driven by the <code>postgres</code> entry's types unchanged (and, unlike CockroachDB, needing no <code>PRIMARY KEY</code>) — and since it reports <code>SQL_DBMS_NAME</code> "PostgreSQL" behind the same <code>psqlodbcw.so</code>, no driver-name quirk <em>could</em> be correct here without also firing on real PostgreSQL. Cloudberry takes the <code>unnest</code> array-ingest form on the strength of the capability probe (see the array-ingest note above), not of its name: its answers match PostgreSQL's, a bulk ingest lands on heap, append-optimized row and append-optimized column tables alike, and a 200,000-row four-column ingest went from 4.69 s on the multi-row <code>INSERT</code> to 0.35 s; no Apache-published <em>server</em> image exists -- <code>apache/incubator-cloudberry</code> holds only <code>cbdb-build-*</code>/<code>cbdb-test-*</code> CI toolchains and <code>apache/cloudberry-db</code> does not exist -- so the community <code>woblerr/cloudberry</code> image is used, and it needs <code>--shm-size=1g</code> or <code>gpinitsystem</code> fails; <code>extra</code> steps cover what the standard workload cannot tell apart from <code>postgres</code>: a <code>DISTRIBUTED BY</code> table whose bulk-ingested rows occupy more than one segment plus an aggregate merged on the coordinator, and append-optimized <strong>column-oriented</strong> storage (read from <code>pg_am</code> as <code>ao_column</code> -- Greenplum 6's <code>relstorage</code> is gone in the PostgreSQL 14-based 2.x); ingest 9.7k rows/s (9.8k with array binding), fetch 1.33M rows/s</td>
 </tr>
 <tr>
 <td>YDB 23.4 (PostgreSQL wire)</td>
@@ -12522,9 +12518,11 @@ the values of the sets around them are dropped. Row-at-a-time only.</p>
   PostgreSQL-wire server (PostgreSQL, CockroachDB, YugabyteDB, TimescaleDB,
   QuestDB, …), so a quirk keyed on its name would fire on real PostgreSQL too.
   For those, <code>OdbcDetectQuirks</code> issues one small identity query (<code>version()</code>, or
-  a semantic probe) and keys on the answer. This is why the PostgreSQL
-  array-ingest form is enabled only when <code>version()</code> is a genuine PostgreSQL
-  banner with no fork marker.</li>
+  a semantic probe) and keys on the answer. Where the question is
+  what a server can do rather than who it is, prefer a capability probe to a
+  name: the PostgreSQL array-ingest form is offered to every server with a
+  PostgreSQL banner and used only when the server's answers to two probe
+  statements are PostgreSQL's.</li>
 <li><strong>When a name matches several <code>SQL_DRIVER_NAME</code> spellings</strong> (Firebird's OdbcFb
   reports different names on Linux and Windows), match all of them; when a quirk
   is Windows-only (a <code>narrow_sql</code> fix for an ANSI-only driver), guard it with
