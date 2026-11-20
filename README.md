@@ -3,6 +3,7 @@
 [![ADBC docs](https://img.shields.io/badge/Apache_Arrow_ADBC_docs-listed-0B7285)](https://arrow.apache.org/adbc/main/integrations.html)
 [![QuestDB docs](https://img.shields.io/badge/QuestDB_docs-integration_page-0B7285)](https://questdb.com/docs/integrations/other/adbcbridge/)
 [![ClickHouse docs](https://img.shields.io/badge/ClickHouse_docs-client_libraries-0B7285)](https://clickhouse.com/docs/integrations/language-clients/third-party/client-libraries)
+[![ArcadeDB docs](https://img.shields.io/badge/ArcadeDB_docs-compatible_tools-0B7285)](https://docs.arcadedb.com/arcadedb/tools/tools#adbcbridge)
 [![CI](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/singhpratech/adbcbridge/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/adbcbridge)](https://pypi.org/project/adbcbridge/)
 [![crates.io](https://img.shields.io/crates/v/adbcbridge)](https://crates.io/crates/adbcbridge)
@@ -31,6 +32,14 @@ ClickHouse ([ClickHouse/ClickHouse#132188](https://github.com/ClickHouse/ClickHo
 ADBC driver as one more way in: the route through clickhouse-odbc, whose 1.6.0 release carries two
 fixes from here ([#586](https://github.com/ClickHouse/clickhouse-odbc/pull/586),
 [#588](https://github.com/ClickHouse/clickhouse-odbc/pull/588)).
+
+**In ArcadeDB's documentation:** adbcBridge is listed among the
+[compatible tools](https://docs.arcadedb.com/arcadedb/tools/tools#adbcbridge) since 2026-11-20, and the
+[PostgreSQL protocol page](https://docs.arcadedb.com/arcadedb/how-to/connectivity/postgres) has an Apache Arrow
+(ADBC) section, from a docs pull request sent from here and merged by ArcadeDB
+([ArcadeData/arcadedb-docs#573](https://github.com/ArcadeData/arcadedb-docs/pull/573)). That section names the
+Apache Arrow ADBC PostgreSQL driver first: on ArcadeDB 26.10.1 to 26.11.1 adbcBridge reaches the server through
+its hand-off to that driver, and from 26.12.1 the route through psqlodbc works as well.
 
 **Integrated in [omniload](https://github.com/panodata/omniload):** the dlt-based loader ships an
 `adbcbridge` SQL backend since [v0.17.0](https://github.com/panodata/omniload/releases/tag/v0.17.0),
