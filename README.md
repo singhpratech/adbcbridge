@@ -38,8 +38,9 @@ fixes from here ([#586](https://github.com/ClickHouse/clickhouse-odbc/pull/586),
 [PostgreSQL protocol page](https://docs.arcadedb.com/arcadedb/how-to/connectivity/postgres) has an Apache Arrow
 (ADBC) section, from a docs pull request sent from here and merged by ArcadeDB
 ([ArcadeData/arcadedb-docs#573](https://github.com/ArcadeData/arcadedb-docs/pull/573)). That section names the
-Apache Arrow ADBC PostgreSQL driver first: on ArcadeDB 26.10.1 to 26.11.1 adbcBridge reaches the server through
-its hand-off to that driver, and from 26.12.1 the route through psqlodbc works as well.
+Apache Arrow ADBC PostgreSQL driver first: on ArcadeDB's current release adbcBridge reaches the server through
+its hand-off to that driver, and from the next release the route through psqlodbc works as well; the entry
+gives the release numbers.
 
 **Integrated in [omniload](https://github.com/panodata/omniload):** the dlt-based loader ships an
 `adbcbridge` SQL backend since [v0.17.0](https://github.com/panodata/omniload/releases/tag/v0.17.0),
