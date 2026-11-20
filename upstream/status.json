@@ -1,8 +1,8 @@
 {
- "as_of": "2026-11-20T02:08:25Z",
+ "as_of": "2026-11-20T05:05:30Z",
  "window_days": 7,
- "count": 50,
- "with_project_activity": 39,
+ "count": 51,
+ "with_project_activity": 40,
  "fixed": 19,
  "items": [
   {
@@ -398,11 +398,19 @@
      "association": "member",
      "text": "@singhpratech I am currently on phone so sorry can’t check the changes properly. But to the first point if Linux pkg not available for download then it should not be in download page (not sure where you put it), maybe in documentation-website instead. To second point, once this pr is merged (if so) then I would need to contact LF to manually update on the live instance. The live code is not built …",
      "url": "https://github.com/opensearch-project/documentation-website/pull/13491#issuecomment-7016214277"
+    },
+    {
+     "type": "comment",
+     "at": "2026-11-20T04:55:31Z",
+     "actor": "peterzhuamazon",
+     "association": "member",
+     "text": "Got it @singhpratech . Seems like my mistake of thinking this pr is in project website (I was pretty sure I saw something on my phone shows that), which require manual update. If it is documentation website then it will auto update after merge. Apologize for the confusion caused by my comment. @kolchfa-aws I am ok to go ahead with this as it helps documentation. thanks.",
+     "url": "https://github.com/opensearch-project/documentation-website/pull/13491#issuecomment-7030828741"
     }
    ],
    "reporter_comments": 4,
    "community_comments": 0,
-   "last_activity": "2026-11-19T17:06:18Z",
+   "last_activity": "2026-11-20T04:55:31Z",
    "pulse": true
   },
   {
@@ -487,6 +495,34 @@
    "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-11-18T06:20:03Z",
+   "pulse": true
+  },
+  {
+   "project": "ArcadeDB documentation",
+   "repo": "ArcadeData/arcadedb-docs",
+   "number": 573,
+   "url": "https://github.com/ArcadeData/arcadedb-docs/pull/573",
+   "title": "docs: Apache Arrow (ADBC) clients on the Postgres protocol page, adbcBridge under compatible tools",
+   "reported": "2026-11-19",
+   "reporter": "singhpratech",
+   "what": "Listing and documentation contribution: an adbcBridge entry under \"Compatible Tools\", and an \"Apache Arrow (ADBC)\" subsection on the PostgreSQL protocol page that names the Apache Arrow ADBC PostgreSQL driver first, with a Python example for each. The entry states what was measured: on ArcadeDB 26.10.1 to 26.11.1 adbcBridge reaches the server through its default hand-off to that driver, and from 26.12.1 the ODBC route through psqlodbc works as well. Both examples run as written on the 26.11.1 release image",
+   "kind": "pull request",
+   "state": "merged",
+   "closed_at": "2026-11-20T04:47:04Z",
+   "labels": [],
+   "reactions": 0,
+   "maintainer_events": [
+    {
+     "type": "closed",
+     "at": "2026-11-20T04:47:05Z",
+     "actor": "lvca",
+     "reason": null,
+     "commit": null
+    }
+   ],
+   "reporter_comments": 1,
+   "community_comments": 0,
+   "last_activity": "2026-11-20T04:47:05Z",
    "pulse": true
   },
   {
