@@ -1,5 +1,5 @@
 {
- "as_of": "2026-11-20T05:05:30Z",
+ "as_of": "2026-11-21T00:00:12Z",
  "window_days": 7,
  "count": 51,
  "with_project_activity": 40,
@@ -348,7 +348,7 @@
    "closed_at": null,
    "labels": [
     "Tech review",
-    "Awaiting response",
+    "Doc review",
     "backport 3.10"
    ],
    "reactions": 0,
@@ -406,11 +406,23 @@
      "association": "member",
      "text": "Got it @singhpratech . Seems like my mistake of thinking this pr is in project website (I was pretty sure I saw something on my phone shows that), which require manual update. If it is documentation website then it will auto update after merge. Apologize for the confusion caused by my comment. @kolchfa-aws I am ok to go ahead with this as it helps documentation. thanks.",
      "url": "https://github.com/opensearch-project/documentation-website/pull/13491#issuecomment-7030828741"
+    },
+    {
+     "type": "unlabeled",
+     "at": "2026-11-20T20:43:50Z",
+     "actor": "kolchfa-aws",
+     "label": "Awaiting response"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-20T20:43:50Z",
+     "actor": "kolchfa-aws",
+     "label": "Doc review"
     }
    ],
    "reporter_comments": 4,
    "community_comments": 0,
-   "last_activity": "2026-11-20T04:55:31Z",
+   "last_activity": "2026-11-20T20:43:50Z",
    "pulse": true
   },
   {
@@ -2327,12 +2339,26 @@
      "at": "2026-11-11T21:05:16Z",
      "actor": "robfrank",
      "url": "https://github.com/ArcadeData/arcadedb/commit/c4998a462bd77610bc1fcd5b3da77a64de72fb9d"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-11-20T17:23:16Z",
+     "actor": "robfrank",
+     "title": "test(postgresw): consolidate the issue-named postgresw tests into topic classes",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/12631",
+     "state": "merged"
+    },
+    {
+     "type": "commit",
+     "at": "2026-11-20T17:30:20Z",
+     "actor": "robfrank",
+     "url": "https://github.com/ArcadeData/arcadedb/commit/c8a3a1ad51a56740b0d49adeb16e6113f991b96b"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-11-11T21:05:16Z",
-   "pulse": false
+   "last_activity": "2026-11-20T17:30:20Z",
+   "pulse": true
   },
   {
    "project": "ArcadeDB",
