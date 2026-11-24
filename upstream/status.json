@@ -1,5 +1,5 @@
 {
- "as_of": "2026-11-22T14:40:22Z",
+ "as_of": "2026-11-24T17:52:58Z",
  "window_days": 7,
  "count": 51,
  "with_project_activity": 40,
@@ -347,8 +347,8 @@
    "state": "open",
    "closed_at": null,
    "labels": [
-    "Tech review",
     "Doc review",
+    "Awaiting response",
     "backport 3.10"
    ],
    "reactions": 0,
@@ -418,11 +418,23 @@
      "at": "2026-11-20T20:43:50Z",
      "actor": "kolchfa-aws",
      "label": "Doc review"
+    },
+    {
+     "type": "unlabeled",
+     "at": "2026-11-23T20:17:34Z",
+     "actor": "kolchfa-aws",
+     "label": "Tech review"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-23T20:17:34Z",
+     "actor": "kolchfa-aws",
+     "label": "Awaiting response"
     }
    ],
    "reporter_comments": 4,
    "community_comments": 0,
-   "last_activity": "2026-11-20T20:43:50Z",
+   "last_activity": "2026-11-23T20:17:34Z",
    "pulse": true
   },
   {
@@ -1221,7 +1233,7 @@
    "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-11-16T13:01:30Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "clickhouse-odbc",
@@ -2361,11 +2373,19 @@
      "at": "2026-11-20T17:30:20Z",
      "actor": "robfrank",
      "url": "https://github.com/ArcadeData/arcadedb/commit/c8a3a1ad51a56740b0d49adeb16e6113f991b96b"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-11-23T20:48:06Z",
+     "actor": "robfrank",
+     "title": "fix(#13222): CALL IN TRANSACTIONS is refused in a Postgres implicit block that already holds earlier statements' writes",
+     "url": "https://github.com/ArcadeData/arcadedb/pull/13258",
+     "state": "merged"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-11-20T17:30:20Z",
+   "last_activity": "2026-11-23T20:48:06Z",
    "pulse": true
   },
   {
