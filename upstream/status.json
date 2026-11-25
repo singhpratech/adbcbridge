@@ -1,5 +1,5 @@
 {
- "as_of": "2026-11-24T17:52:58Z",
+ "as_of": "2026-11-25T02:33:37Z",
  "window_days": 7,
  "count": 51,
  "with_project_activity": 40,
@@ -342,13 +342,12 @@
    "title": "Add Linux to the ODBC driver page",
    "reported": "2026-11-13",
    "reporter": "singhpratech",
-   "what": "Documentation contribution: Linux on the SQL ODBC driver page (the operating-system table and an install section with the build script, `odbcinst.ini`, `odbc.ini` and an `isql` check), now that sql-odbc 1.7.0.0 builds and is tested on Linux. Issue [#13490](https://github.com/opensearch-project/documentation-website/issues/13490)",
+   "what": "Documentation contribution: Linux on the SQL ODBC driver page (the operating-system table and an install section with the build script, `odbcinst.ini`, `odbc.ini` and an `iusql` check), now that sql-odbc 1.7.0.0 builds and is tested on Linux. During the doc review the logging section was rewritten from repeated-connection tests on Ubuntu and macOS: where the driver reads and stores the log directory. Issue [#13490](https://github.com/opensearch-project/documentation-website/issues/13490)",
    "kind": "pull request",
-   "state": "open",
-   "closed_at": null,
+   "state": "merged",
+   "closed_at": "2026-11-24T19:53:47Z",
    "labels": [
     "Doc review",
-    "Awaiting response",
     "backport 3.10"
    ],
    "reactions": 0,
@@ -430,11 +429,38 @@
      "at": "2026-11-23T20:17:34Z",
      "actor": "kolchfa-aws",
      "label": "Awaiting response"
+    },
+    {
+     "type": "closed",
+     "at": "2026-11-24T19:53:47Z",
+     "actor": "kolchfa-aws",
+     "reason": null,
+     "commit": null
+    },
+    {
+     "type": "unlabeled",
+     "at": "2026-11-24T19:54:05Z",
+     "actor": "kolchfa-aws",
+     "label": "Awaiting response"
+    },
+    {
+     "type": "pull_request",
+     "at": "2026-11-24T19:54:13Z",
+     "actor": "opensearch-ci-bot",
+     "title": "[Backport 3.10] Add Linux to the ODBC driver page",
+     "url": "https://github.com/opensearch-project/documentation-website/pull/13524",
+     "state": "merged"
+    },
+    {
+     "type": "commit",
+     "at": "2026-11-24T20:04:55Z",
+     "actor": "kolchfa-aws",
+     "url": "https://github.com/opensearch-project/documentation-website/commit/bb12c10c5e781c0f66d1aa761fe47ce76d009725"
     }
    ],
-   "reporter_comments": 4,
+   "reporter_comments": 5,
    "community_comments": 0,
-   "last_activity": "2026-11-23T20:17:34Z",
+   "last_activity": "2026-11-24T20:04:55Z",
    "pulse": true
   },
   {
