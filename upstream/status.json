@@ -1,8 +1,8 @@
 {
- "as_of": "2026-11-25T02:33:37Z",
+ "as_of": "2026-11-26T05:43:36Z",
  "window_days": 7,
- "count": 51,
- "with_project_activity": 40,
+ "count": 52,
+ "with_project_activity": 41,
  "fixed": 19,
  "items": [
   {
@@ -1032,6 +1032,42 @@
    "community_comments": 1,
    "last_activity": null,
    "pulse": false
+  },
+  {
+   "project": "OpenSearch SQL ODBC",
+   "repo": "opensearch-project/sql-odbc",
+   "number": 138,
+   "url": "https://github.com/opensearch-project/sql-odbc/pull/138",
+   "title": "Do not write C:\\ as the log directory on Linux and macOS",
+   "reported": "2026-11-25",
+   "reporter": "singhpratech",
+   "what": "Fix PR: on Linux and macOS the default log directory was `C:\\`, written into `[OpenSearch Unicode]` in `odbcinst.ini` on every connection without a `LogOutput`; where the user can write that file (root, a user-owned file through `ODBCSYSINI`, `~/Library/ODBC/odbcinst.ini`), the driver wrote no log files from the second connection on, and a `LogOutput` written into the section by hand lasted one connection. The fix keeps `C:\\` on Windows and leaves the stored value alone elsewhere. Found while answering the doc review of [opensearch-project/documentation-website#13491](https://github.com/opensearch-project/documentation-website/pull/13491), with repeated-connection tests on Ubuntu and macOS.",
+   "kind": "pull request",
+   "state": "merged",
+   "closed_at": "2026-11-26T02:30:56Z",
+   "labels": [],
+   "reactions": 0,
+   "maintainer_events": [
+    {
+     "type": "comment",
+     "at": "2026-11-26T02:30:49Z",
+     "actor": "Swiddis",
+     "association": "collaborator",
+     "text": "lgtm, build failures are unrelated warnings due to the gcc version updating in the linux CI. thanks!",
+     "url": "https://github.com/opensearch-project/sql-odbc/pull/138#issuecomment-7180872765"
+    },
+    {
+     "type": "closed",
+     "at": "2026-11-26T02:30:57Z",
+     "actor": "Swiddis",
+     "reason": null,
+     "commit": null
+    }
+   ],
+   "reporter_comments": 1,
+   "community_comments": 0,
+   "last_activity": "2026-11-26T02:30:57Z",
+   "pulse": true
   },
   {
    "project": "Firebird ODBC (OdbcFb)",
