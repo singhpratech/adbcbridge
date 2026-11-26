@@ -11586,6 +11586,13 @@ before it is filed.</p>
 <td><strong>open</strong></td>
 </tr>
 <tr>
+<td>2026-11-25</td>
+<td>OpenSearch SQL ODBC</td>
+<td><a href="https://github.com/opensearch-project/sql-odbc/pull/138">opensearch-project/sql-odbc#138</a></td>
+<td>Fix PR: on Linux and macOS the default log directory was <code>C:\</code>, written into <code>[OpenSearch Unicode]</code> in <code>odbcinst.ini</code> on every connection without a <code>LogOutput</code>; where the user can write that file (root, a user-owned file through <code>ODBCSYSINI</code>, <code>~/Library/ODBC/odbcinst.ini</code>), the driver wrote no log files from the second connection on, and a <code>LogOutput</code> written into the section by hand lasted one connection. The fix keeps <code>C:\</code> on Windows and leaves the stored value alone elsewhere. Found while answering the doc review of <a href="https://github.com/opensearch-project/documentation-website/pull/13491">opensearch-project/documentation-website#13491</a>, with repeated-connection tests on Ubuntu and macOS.</td>
+<td><strong>merged 2026-11-26</strong> by the driver maintainer, the day after it was opened; verified here on a Linux build of main the same day (240 connections across four <code>odbcinst.ini</code> layouts, as root and as a regular user); ships in the next sql-odbc release</td>
+</tr>
+<tr>
 <td>2026-08-28</td>
 <td>Firebird ODBC (OdbcFb)</td>
 <td><a href="https://github.com/FirebirdSQL/firebird-odbc-driver/issues/299">FirebirdSQL/firebird-odbc-driver#299</a></td>
