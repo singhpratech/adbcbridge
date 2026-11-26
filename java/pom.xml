@@ -71,7 +71,7 @@
     <!-- adbc-driver-jni bundles the native ADBC driver manager for linux/macos/windows. -->
     <adbc.version>0.25.0</adbc.version>
     <!-- Must match the Arrow version ADBC ${adbc.version} was built against. -->
-    <arrow.version>19.0.0</arrow.version>
+    <arrow.version>20.0.0</arrow.version>
     <junit.version>6.1.3</junit.version>
     <!--
       Directory of native drivers to bundle, laid out as <os>-<arch>/libadbc_driver_odbc.*
