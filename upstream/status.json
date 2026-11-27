@@ -1,5 +1,5 @@
 {
- "as_of": "2026-11-26T16:59:41Z",
+ "as_of": "2026-11-27T01:45:59Z",
  "window_days": 7,
  "count": 52,
  "with_project_activity": 41,
@@ -1273,7 +1273,10 @@
    "kind": "issue",
    "state": "fixed",
    "closed_at": "2026-11-16T13:01:29Z",
-   "labels": [],
+   "labels": [
+    "bug",
+    "queries"
+   ],
    "reactions": 0,
    "maintainer_events": [
     {
@@ -1290,12 +1293,24 @@
      "actor": "ccoltx",
      "reason": null,
      "commit": null
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-26T18:56:42Z",
+     "actor": "polyglotAI-bot",
+     "label": "bug"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-26T18:56:42Z",
+     "actor": "polyglotAI-bot",
+     "label": "queries"
     }
    ],
    "reporter_comments": 1,
    "community_comments": 0,
-   "last_activity": "2026-11-16T13:01:30Z",
-   "pulse": false
+   "last_activity": "2026-11-26T18:56:42Z",
+   "pulse": true
   },
   {
    "project": "clickhouse-odbc",
@@ -1354,12 +1369,18 @@
      "association": "contributor",
      "text": "Just realized that `written_rows` in `X-ClickHouse-Summary` also reports rows changed in the associated materialized views.",
      "url": "https://github.com/ClickHouse/clickhouse-odbc/issues/335#issuecomment-5687071526"
+    },
+    {
+     "type": "labeled",
+     "at": "2026-11-26T19:26:53Z",
+     "actor": "polyglotAI-bot",
+     "label": "api-diagnostics"
     }
    ],
    "reporter_comments": 2,
    "community_comments": 0,
-   "last_activity": "2026-09-15T19:42:12Z",
-   "pulse": false
+   "last_activity": "2026-11-26T19:26:53Z",
+   "pulse": true
   },
   {
    "project": "OpenLink Virtuoso",
