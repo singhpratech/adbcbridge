@@ -1,5 +1,5 @@
 {
- "as_of": "2026-11-27T16:45:41Z",
+ "as_of": "2026-11-28T01:28:59Z",
  "window_days": 7,
  "count": 52,
  "with_project_activity": 41,
@@ -665,7 +665,7 @@
    "reporter_comments": 1,
    "community_comments": 0,
    "last_activity": "2026-11-19T20:32:57Z",
-   "pulse": true
+   "pulse": false
   },
   {
    "project": "omniload",
